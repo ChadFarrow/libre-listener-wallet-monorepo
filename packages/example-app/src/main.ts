@@ -66,6 +66,7 @@ class BrowserWebSocketStreamProvider implements WebSocketStreamProvider {
 
 // 2. Browser IndexedDB storage implementation for LDK settings
 import { IndexedDBStorageProvider } from "@libre/listener-wallet";
+import * as drive from "./drive-backup";
 const storage = new IndexedDBStorageProvider();
 
 // 3. Logger helper to update UI terminal console
@@ -221,6 +222,25 @@ const importStateFile = document.getElementById("import-state-file") as HTMLInpu
 const importStateBtn = document.getElementById("import-state-btn") as HTMLButtonElement;
 const newWalletBtn = document.getElementById("new-wallet-btn") as HTMLButtonElement;
 const backupStatusEl = document.getElementById("backup-status") as HTMLSpanElement;
+const connectDriveBtn = document.getElementById("connect-drive-btn") as HTMLButtonElement;
+const backupDriveNowBtn = document.getElementById("backup-drive-now-btn") as HTMLButtonElement;
+const driveStatusEl = document.getElementById("drive-status") as HTMLSpanElement;
+const restoreDriveBtn = document.getElementById("restore-drive-btn") as HTMLButtonElement;
+
+let driveSyncTimer: any = null;
+let driveSyncing = false;
+function loadDriveSyncedVersion(): number {
+  const s = localStorage.getItem("libre_drive_synced_version");
+  const n = s === null ? NaN : parseInt(s, 10);
+  return Number.isNaN(n) ? -1 : n;
+}
+// Baked-in OAuth Client ID (set VITE_GOOGLE_CLIENT_ID in packages/example-app/.env.local).
+// Falls back to the paste field when not configured.
+const BAKED_CLIENT_ID =
+  ((import.meta as any).env?.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim() || "";
+function resolveClientId(): string {
+  return BAKED_CLIENT_ID;
+}
 
 let streamIntervalId: any = null;
 let totalSatsStreamed = 0;
@@ -1073,6 +1093,119 @@ copySeedBtn.addEventListener("click", async () => {
     appendLog("[SYSTEM] Seed copied to clipboard — store it somewhere safe.", "system");
   } catch (e) {
     appendLog(`[ERROR] Copy failed: ${e instanceof Error ? e.message : e}`, "error");
+  }
+});
+
+// --- Google Drive backup ---
+function updateDriveStatus(text?: string) {
+  if (text) {
+    driveStatusEl.textContent = text;
+  } else {
+    driveStatusEl.textContent = drive.isConnected() ? "connected ✓" : "not connected";
+  }
+}
+
+// Client ID is baked in via VITE_GOOGLE_CLIENT_ID (.env.local). If it's missing,
+// connect will report it rather than offering a paste field.
+updateDriveStatus();
+
+connectDriveBtn.addEventListener("click", async () => {
+  const clientId = resolveClientId();
+  if (!clientId) {
+    appendLog("[ERROR] No Google OAuth Client ID configured — set VITE_GOOGLE_CLIENT_ID in packages/example-app/.env.local.", "error");
+    return;
+  }
+  try {
+    updateDriveStatus("connecting…");
+    await drive.connect(clientId);
+    updateDriveStatus();
+    appendLog("[SYSTEM] Connected to Google Drive.", "system");
+  } catch (e) {
+    updateDriveStatus("not connected");
+    appendLog(`[ERROR] Google Drive connect failed: ${e instanceof Error ? e.message : e}`, "error");
+  }
+});
+
+async function uploadBackupToDrive(): Promise<void> {
+  if (!wallet || !isNodeRunning) {
+    appendLog("[ERROR] Start the node before backing up to Drive.", "error");
+    return;
+  }
+  if (!drive.isConnected()) {
+    appendLog("[ERROR] Connect Google Drive first.", "error");
+    return;
+  }
+  driveSyncing = true;
+  updateDriveStatus("syncing…");
+  try {
+    const version = wallet.getStateVersion();
+    await drive.uploadBackup(await wallet.exportState());
+    localStorage.setItem("libre_drive_synced_version", String(version));
+    updateDriveStatus(`synced ✓ (v${version})`);
+    appendLog(`[SYSTEM] Backup synced to Google Drive (v${version}).`, "system");
+  } catch (e) {
+    if (e instanceof drive.DriveReconnectError) {
+      updateDriveStatus("reconnect needed");
+      appendLog("[ERROR] Google Drive session expired — click Connect again.", "error");
+    } else {
+      updateDriveStatus("connected ✓");
+      appendLog(`[ERROR] Drive sync failed: ${e instanceof Error ? e.message : e}`, "error");
+    }
+  } finally {
+    driveSyncing = false;
+  }
+}
+
+backupDriveNowBtn.addEventListener("click", () => {
+  void uploadBackupToDrive();
+});
+
+// Auto-upload to Drive (debounced) whenever channel state advances past what's synced.
+setInterval(() => {
+  if (!wallet || !isNodeRunning || !drive.isConnected() || driveSyncing) return;
+  if (wallet.getStateVersion() > loadDriveSyncedVersion()) {
+    if (driveSyncTimer) clearTimeout(driveSyncTimer);
+    driveSyncTimer = setTimeout(() => {
+      driveSyncTimer = null;
+      void uploadBackupToDrive();
+    }, 5000);
+  }
+}, 2000);
+
+restoreDriveBtn.addEventListener("click", async () => {
+  const seed = seedInput.value.trim();
+  if (seed.length !== 64) {
+    appendLog("[ERROR] Enter your 64-char hex seed above to decrypt the Drive backup.", "error");
+    return;
+  }
+  try {
+    if (!drive.isConnected()) {
+      const clientId = resolveClientId();
+      if (!clientId) {
+        appendLog("[ERROR] No Google OAuth Client ID configured — set VITE_GOOGLE_CLIENT_ID in .env.local.", "error");
+        return;
+      }
+      await drive.connect(clientId);
+      updateDriveStatus();
+    }
+    const blob = await drive.downloadBackup();
+    if (!blob) {
+      appendLog("[SYSTEM] No backup found in your Google Drive.", "system");
+      return;
+    }
+    const importWallet = new LibreListenerWallet({
+      config: {
+        network: networkSelect.value as "mainnet" | "testnet" | "regtest" | "signet",
+        esploraUrl: esploraUrlInput.value.trim(),
+      },
+      storage,
+      socketProvider: new BrowserWebSocketStreamProvider(),
+      wasmUrl: "/liblightningjs.wasm",
+    });
+    await importWallet.importState(blob, seed);
+    appendLog("[SYSTEM] Backup restored from Google Drive. Click Start Node to boot the recovered wallet.", "system");
+  } catch (e) {
+    appendLog(`[ERROR] Restore from Drive failed: ${e instanceof Error ? e.message : e}`, "error");
   }
 });
 

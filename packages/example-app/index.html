@@ -33,11 +33,11 @@
           <h2>1. Node Controller</h2>
           <div class="form-group">
             <label>LDK Seed (Memory Only)</label>
-            <div class="input-action-row">
-              <input type="password" id="seed-input" value="0000000000000000000000000000000000000000000000000000000000000001" placeholder="Enter 32-byte hex seed" />
-              <button id="toggle-seed-btn" class="btn btn-secondary">Show</button>
-              <button id="copy-seed-btn" class="btn btn-secondary">Copy</button>
-              <button id="new-wallet-btn" class="btn btn-secondary">New Wallet</button>
+            <input type="password" id="seed-input" value="0000000000000000000000000000000000000000000000000000000000000001" placeholder="Enter 32-byte hex seed" />
+            <div class="button-row" style="margin-top: 8px;">
+              <button id="toggle-seed-btn" class="btn btn-secondary btn-sm">Show</button>
+              <button id="copy-seed-btn" class="btn btn-secondary btn-sm">Copy</button>
+              <button id="new-wallet-btn" class="btn btn-secondary btn-sm">New Wallet</button>
             </div>
             <p class="help-text text-warning">Your seed is your master backup — save it. It recovers your funds even without a backup file.</p>
           </div>
@@ -57,8 +57,9 @@
           </div>
 
           <div class="form-group">
-            <label>WebSocket Bridge URL (browser → LN node)</label>
+            <label>WebSocket Bridge URL</label>
             <input type="text" id="ws-bridge-url" value="ws://127.0.0.1:8081" />
+            <p class="help-text">Browser → LN node bridge (auto-set by Network).</p>
           </div>
 
           <div class="button-row">
@@ -85,15 +86,32 @@
             No wallet found in this browser. If you have a backup file, restore it below (you'll need your seed).
           </div>
           <p class="hint">Your funds live in this browser. Export an encrypted backup so a cleared browser can't lose them.</p>
-          <div class="status-row" style="margin-bottom: 10px;">
-            <span class="label">Backup status:</span>
+          <div class="status-line">
+            <span class="label">Backup status</span>
             <span id="backup-status" class="value">—</span>
           </div>
-          <button id="export-state-btn" class="btn btn-primary" disabled>Download Encrypted Backup</button>
-          <div style="margin-top: 12px;">
-            <label>Restore from backup (requires your seed above):</label>
-            <input type="file" id="import-state-file" accept="application/json" />
-            <button id="import-state-btn" class="btn btn-secondary">Restore</button>
+          <button id="export-state-btn" class="btn btn-primary" disabled style="margin-top: 12px; width: 100%;">Download Encrypted Backup</button>
+
+          <div class="form-group" style="margin-top: 20px;">
+            <label>Google Drive backup</label>
+            <div class="status-line" style="margin-top: 8px;">
+              <span class="label">Drive</span>
+              <span id="drive-status" class="value">not connected</span>
+            </div>
+            <div class="button-row" style="margin-top: 10px;">
+              <button id="connect-drive-btn" class="btn btn-secondary">Connect Drive</button>
+              <button id="backup-drive-now-btn" class="btn btn-secondary">Back up now</button>
+            </div>
+            <p class="help-text">Auto-syncs your encrypted backup to your Drive's private app folder while the app is open. Encrypted with your seed — Google can't read it.</p>
+          </div>
+
+          <div class="form-group" style="margin-top: 20px;">
+            <label>Restore from backup (uses your seed above)</label>
+            <input type="file" id="import-state-file" accept="application/json" style="margin-top: 8px;" />
+            <div class="button-row" style="margin-top: 10px;">
+              <button id="import-state-btn" class="btn btn-secondary">Restore from file</button>
+              <button id="restore-drive-btn" class="btn btn-secondary">Restore from Drive</button>
+            </div>
           </div>
         </section>
 

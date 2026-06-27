@@ -129,7 +129,9 @@ export class NwcManager {
     const secretBytes = generateSecretKey();
     const secret = bytesToHex(secretBytes);
     const clientPubkey = getPublicKey(secretBytes);
-    const relayUrl = options?.relayUrl || "wss://relay.damus.io";
+    // Alby's relay is purpose-built for NWC; general relays (e.g. relay.damus.io)
+    // rate-limit NWC traffic and drop pairings.
+    const relayUrl = options?.relayUrl || "wss://relay.getalby.com/v1";
     const spendingLimitSats = options?.spendingLimitSats || 0;
 
     const connection: NwcConnection = {
@@ -328,9 +330,11 @@ export class NwcManager {
           alias: "Libre Listener Wallet",
           color: "#3399ff",
           pubkey: bytesToHex(mgr.get_our_node_id()),
-          network: this.wallet["config"].network === "mainnet" ? "bitcoin" : this.wallet["config"].network,
+          // NIP-47 expects mainnet/testnet/signet/regtest (not "bitcoin").
+          network: this.wallet["config"].network,
           block_height: bestBlock.get_height(),
-          block_hash: bytesToHex(bestBlock.get_block_hash()),
+          // Block hashes are displayed big-endian; LDK returns internal little-endian.
+          block_hash: bytesToHex(Uint8Array.from(bestBlock.get_block_hash()).reverse()),
           methods: ["pay_invoice", "pay_keysend", "make_invoice", "get_balance", "get_info"]
         };
         await this.sendResultResponse(event, "get_info", result, relayUrl, rpcReq.id);

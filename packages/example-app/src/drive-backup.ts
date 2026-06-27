@@ -46,7 +46,7 @@ export async function loadGis(): Promise<void> {
   });
 }
 
-export async function connect(clientId: string): Promise<void> {
+export async function connect(clientId: string, opts: { silent?: boolean } = {}): Promise<void> {
   if (!clientId) throw new Error("Missing Google Client ID");
   await loadGis();
   const google = (window as any).google;
@@ -55,6 +55,9 @@ export async function connect(clientId: string): Promise<void> {
     const tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: DRIVE_SCOPE,
+      // 'none' attempts a silent token (no popup) using an existing Google session +
+      // prior consent — used for auto-connect on load; '' shows UI only if needed.
+      prompt: opts.silent ? "none" : "",
       callback: (resp: any) => {
         if (resp.error) {
           reject(new Error(`OAuth error: ${resp.error}`));
@@ -63,6 +66,7 @@ export async function connect(clientId: string): Promise<void> {
         accessToken = resp.access_token;
         resolve();
       },
+      error_callback: (err: any) => reject(new Error(err?.type || "OAuth token error")),
     });
     tokenClient.requestAccessToken();
   });

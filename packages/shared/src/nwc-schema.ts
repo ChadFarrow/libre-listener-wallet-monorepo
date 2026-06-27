@@ -16,7 +16,9 @@ export const payInvoiceParamsSchema = z.object({
 
 export const payKeysendParamsSchema = z.object({
   amount: z.union([z.number(), z.string().transform((v) => parseInt(v, 10))]),
-  pubkey: z.string().regex(/^[0-9a-fA-F]{64}$/, "Invalid public key hex"),
+  // Lightning node pubkey: 33-byte compressed key = 66 hex chars (02/03 prefix),
+  // NOT a 32-byte Nostr key. (This regex was wrongly 64 chars and rejected all keysends.)
+  pubkey: z.string().regex(/^0[23][0-9a-fA-F]{64}$/, "Invalid public key hex"),
   preimage: z.string().regex(/^[0-9a-fA-F]{64}$/, "Invalid preimage hex").optional(),
   tlv_records: z.array(z.object({
     type: z.number(),

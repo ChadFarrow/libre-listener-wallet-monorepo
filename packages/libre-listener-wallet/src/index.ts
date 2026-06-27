@@ -25,6 +25,8 @@ import {
   BestBlock,
   ChannelManager,
   NetworkGraph,
+  RapidGossipSync,
+  Result_u32GraphSyncErrorZ_OK,
   ProbabilisticScorer,
   ProbabilisticScoringDecayParameters,
   ProbabilisticScoringFeeParameters,
@@ -196,6 +198,9 @@ export class LibreListenerWallet {
   private syncIntervalId?: any;
   private peerTickIntervalId?: any;
   private eventTickIntervalId?: any;
+  private gossipIntervalId?: any;
+  private gossipSyncPromise?: Promise<void>;
+  private nodeAnnTickCount = 0;
   private nextDescriptorId: number = 1;
   private stateVersion: number = 0;
   private connectedPeers: Map<string, WebSocketDescriptor> = new Map(); // hex pubkey -> descriptor
@@ -518,6 +523,11 @@ export class LibreListenerWallet {
       if (this.peerManager) {
         this.peerManager.timer_tick_occurred();
         this.peerManager.process_events();
+        // Re-broadcast our node_announcement (~every 5 min) so the alias propagates
+        // once a channel is publicly announced. No-op until then.
+        if (this.config.alias && ++this.nodeAnnTickCount % 30 === 0) {
+          this.broadcastNodeAnnouncement();
+        }
       }
     }, 10000);
 
@@ -575,6 +585,7 @@ export class LibreListenerWallet {
           this.logger?.info(`[LDK Event] Channel pending!`);
         } else if (name === "Event_ChannelReady") {
           this.logger?.info(`[LDK Event] Channel ready!`);
+          this.broadcastNodeAnnouncement();
         } else if (name === "Event_PaymentClaimed") {
           this.logger?.info(`[LDK Event] Payment claimed!`);
         }
@@ -610,9 +621,114 @@ export class LibreListenerWallet {
 
     this.isRunning = true;
 
+    // Kick off Rapid Gossip Sync in the background so the network graph populates
+    // (enabling multi-hop routing) without blocking node startup, then refresh
+    // periodically. No-op unless rapidGossipSyncUrl is configured.
+    if (this.config.rapidGossipSyncUrl) {
+      this.syncGossip().catch((err) =>
+        this.logger?.error(`[RGS] Initial gossip sync failed: ${err instanceof Error ? err.message : err}`)
+      );
+      this.gossipIntervalId = setInterval(() => {
+        if (this.isRunning) {
+          this.syncGossip().catch((err) =>
+            this.logger?.error(`[RGS] Gossip refresh failed: ${err instanceof Error ? err.message : err}`)
+          );
+        }
+      }, 3600000); // hourly; RGS snapshots update ~daily
+    }
+
     // Initialize and start Nostr Wallet Connect listeners
     await this.nwc.init();
     await this.nwc.start();
+  }
+
+  /**
+   * Fetch a Rapid Gossip Sync snapshot from `rapidGossipSyncUrl` and apply it to the
+   * NetworkGraph so the router can find multi-hop routes. Incremental: tracks the last
+   * sync timestamp under the `rgs_timestamp` storage key. Safe to call repeatedly.
+   */
+  async syncGossip(): Promise<void> {
+    // De-duplicate concurrent calls (the background refresh + a manual call) so we never
+    // mutate the NetworkGraph from two places at once — LDK panics with a BorrowMutError.
+    if (this.gossipSyncPromise) return this.gossipSyncPromise;
+    this.gossipSyncPromise = this.doSyncGossip().finally(() => {
+      this.gossipSyncPromise = undefined;
+    });
+    return this.gossipSyncPromise;
+  }
+
+  private async doSyncGossip(): Promise<void> {
+    if (!this.config.rapidGossipSyncUrl || !this.networkGraph || !this.ldkLogger) return;
+    const lastTs = parseInt((await this.storage.getItem("rgs_timestamp")) || "0", 10) || 0;
+    const base = this.config.rapidGossipSyncUrl.replace(/\/$/, "");
+    const url = `${base}/${lastTs}`;
+    this.logger?.info(`[RGS] Fetching gossip snapshot from ${url}...`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`RGS fetch failed: ${res.status} ${res.statusText}`);
+    const snapshot = new Uint8Array(await res.arrayBuffer());
+    const rgs = RapidGossipSync.constructor_new(this.networkGraph, this.ldkLogger);
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const updateRes = rgs.update_network_graph_no_std(snapshot, Option_u64Z.constructor_some(nowSec));
+    if (!updateRes.is_ok()) {
+      const err = (updateRes as any).err?.toString?.() || "unknown error";
+      throw new Error(`RGS apply failed: ${err}`);
+    }
+    const newTs = (updateRes as Result_u32GraphSyncErrorZ_OK).res;
+    await this.storage.setItem("rgs_timestamp", String(newTs));
+    const readOnly = this.networkGraph.read_only();
+    const channelCount = readOnly.list_channels().length;
+    readOnly.free(); // ReadOnlyNetworkGraph holds a read lock that must be freed.
+    this.logger?.info(`[RGS] Gossip synced (ts=${newTs}); graph now has ${channelCount} channels.`);
+  }
+
+  getNetworkGraph(): NetworkGraph | undefined {
+    return this.networkGraph;
+  }
+
+  /**
+   * Create a BOLT11 invoice to receive a payment. Uses the ChannelManager creator, which
+   * automatically embeds route hints for our (possibly unannounced/private) channels — so a
+   * counterparty can pay us even though we're a private node not in the public graph. The
+   * preimage is persisted so the Event_PaymentClaimable handler can claim the payment.
+   */
+  async createInvoice(amountSats: number, description = "Libre Listener Wallet"): Promise<string> {
+    if (!this.channelManager) throw new Error("Wallet not started");
+    const amountMsat = BigInt(Math.round(amountSats)) * 1000n;
+    const preimage = getSecureRandomBytes(32);
+    const paymentHashBuf = await crypto.subtle.digest("SHA-256", preimage as any);
+    const paymentHashHex = bytesToHex(new Uint8Array(paymentHashBuf));
+    const invoiceRes = UtilMethods.constructor_create_invoice_from_channelmanager_with_payment_hash(
+      this.channelManager,
+      Option_u64Z.constructor_some(amountMsat),
+      description,
+      3600,
+      hexToBytes(paymentHashHex),
+      Option_u16Z.constructor_some(42)
+    );
+    if (!invoiceRes.is_ok()) throw new Error("Failed to create BOLT11 invoice");
+    const invoiceStr = (invoiceRes as Result_Bolt11InvoiceSignOrCreationErrorZ_OK).res.to_str();
+    await this.storage.setItem(`preimage_${paymentHashHex}`, bytesToHex(preimage));
+    this.logger?.info(`[Receive] Created BOLT11 invoice for ${amountSats} sats`);
+    return invoiceStr;
+  }
+
+  /**
+   * Broadcast a signed node_announcement carrying our alias (name) + color so peers
+   * show a name instead of "Unknown". Lightning only relays this once we have a public
+   * (announced) channel, so it's a no-op until then; the peer tick re-broadcasts
+   * periodically so the name propagates after the channel is announced (~6 confs).
+   */
+  private broadcastNodeAnnouncement(): void {
+    if (!this.config.alias || !this.peerManager) return;
+    const aliasBytes = new Uint8Array(32);
+    aliasBytes.set(new TextEncoder().encode(this.config.alias).slice(0, 32));
+    const rgb = new Uint8Array([0x7a, 0x5a, 0xf5]); // brand purple
+    try {
+      this.peerManager.broadcast_node_announcement(rgb, aliasBytes, []);
+      this.logger?.info(`[LDK] Broadcast node_announcement (alias "${this.config.alias}")`);
+    } catch (err) {
+      this.logger?.error(`broadcast_node_announcement failed: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   private async persistManagerState(): Promise<void> {
@@ -651,6 +767,11 @@ export class LibreListenerWallet {
     if (this.eventTickIntervalId) {
       clearInterval(this.eventTickIntervalId);
       this.eventTickIntervalId = undefined;
+    }
+
+    if (this.gossipIntervalId) {
+      clearInterval(this.gossipIntervalId);
+      this.gossipIntervalId = undefined;
     }
 
     // Disconnect peers

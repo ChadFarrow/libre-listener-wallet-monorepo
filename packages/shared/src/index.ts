@@ -6,6 +6,10 @@ export interface WalletConfig {
   // Required to accept channels from counterparties that only open public
   // channels (e.g. the Mutinynet faucet).
   announceChannels?: boolean;
+  // Optional node name broadcast in a node_announcement so peers display it
+  // instead of "Unknown". Only propagates once a public channel is announced.
+  // Max 32 bytes (UTF-8); longer names are truncated.
+  alias?: string;
 }
 
 export interface NWCRequest {

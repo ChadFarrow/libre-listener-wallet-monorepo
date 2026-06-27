@@ -347,3 +347,25 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
     });
   });
 });
+
+describe("NWC request schema — pay_keysend pubkey validation", () => {
+  // A Lightning node pubkey is a 33-byte compressed key = 66 hex chars (02/03 prefix),
+  // NOT a 32-byte (64-hex) Nostr key. Regression: the regex was {64} and rejected all keysends.
+  const lnPubkey = "028ea4e01d6f7e6d80d2d6902eda9304c4bcda78a6abfda3dee2de94ef46a302d5";
+
+  it("accepts a 66-char compressed Lightning pubkey", () => {
+    const res = nwcRequestSchema.safeParse({
+      method: "pay_keysend",
+      params: { pubkey: lnPubkey, amount: 5000 },
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects a 64-char (Nostr-style) pubkey for keysend", () => {
+    const res = nwcRequestSchema.safeParse({
+      method: "pay_keysend",
+      params: { pubkey: lnPubkey.slice(2), amount: 5000 },
+    });
+    expect(res.success).toBe(false);
+  });
+});

@@ -108,6 +108,9 @@ function applyLogFilter() {
 // 4. Wallet Lifecycle State
 let wallet: LibreListenerWallet | null = null;
 let isNodeRunning = false;
+// Set when the wallet is auto-started on page load, so the start handler knows to
+// also auto-connect the peer once the node is running.
+let autoConnectMode = false;
 
 // DOM Elements
 const startNodeBtn = document.getElementById("start-node-btn") as HTMLButtonElement;
@@ -118,6 +121,9 @@ const toggleSeedBtn = document.getElementById("toggle-seed-btn") as HTMLButtonEl
 const copySeedBtn = document.getElementById("copy-seed-btn") as HTMLButtonElement;
 const esploraUrlInput = document.getElementById("esplora-url-input") as HTMLInputElement;
 const networkSelect = document.getElementById("network-select") as HTMLSelectElement;
+const networkBadge = document.getElementById("network-badge") as HTMLSpanElement;
+function updateNetworkBadge() { networkBadge.textContent = networkSelect.value; }
+updateNetworkBadge();
 const wsBridgeUrlInput = document.getElementById("ws-bridge-url") as HTMLInputElement;
 const lspConnStrInput = document.getElementById("lsp-conn-str") as HTMLInputElement;
 const lspApiUrlInput = document.getElementById("lsp-api-url") as HTMLInputElement;
@@ -136,6 +142,15 @@ const NETWORK_PRESETS: Record<string, { esplora: string; bridge: string; peer: s
     bridge: "ws://127.0.0.1:8083",
     peer: "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b@45.79.52.207:9735",
   },
+  mainnet: {
+    esplora: "https://mempool.space/api",
+    // Point at your own LND/CLN node via a local websockify bridge (browser nodes
+    // can't dial out directly). Set these in .env.local (gitignored):
+    //   VITE_MAINNET_BRIDGE=ws://127.0.0.1:8085
+    //   VITE_MAINNET_PEER=<pubkey>@<host>:9735
+    bridge: ((import.meta as any).env?.VITE_MAINNET_BRIDGE as string)?.trim() || "",
+    peer: ((import.meta as any).env?.VITE_MAINNET_PEER as string)?.trim() || "",
+  },
 };
 
 networkSelect.addEventListener("change", () => {
@@ -145,6 +160,7 @@ networkSelect.addEventListener("change", () => {
   wsBridgeUrlInput.value = preset.bridge;
   lspConnStrInput.value = preset.peer;
   try { localStorage.setItem("libre_ui_network", networkSelect.value); } catch {}
+  updateNetworkBadge();
   appendLog(`[SYSTEM] Network set to ${networkSelect.value}; sync/bridge/peer fields updated.`, "system");
 });
 
@@ -156,6 +172,7 @@ networkSelect.addEventListener("change", () => {
     const savedNetwork = localStorage.getItem("libre_ui_network");
     if (savedNetwork && NETWORK_PRESETS[savedNetwork]) {
       networkSelect.value = savedNetwork;
+      updateNetworkBadge();
       const preset = NETWORK_PRESETS[savedNetwork];
       esploraUrlInput.value = preset.esplora;
       wsBridgeUrlInput.value = preset.bridge;
@@ -173,6 +190,15 @@ networkSelect.addEventListener("change", () => {
       restoreBanner.classList.remove("hidden");
     }
   } catch {}
+
+  // Auto-connect on page load: start the node (which then auto-connects the peer),
+  // and silently re-authorize Google Drive. No-op if there's no saved seed.
+  if (seedInput.value && /^[0-9a-fA-F]{64}$/.test(seedInput.value)) {
+    autoConnectMode = true;
+    appendLog("[SYSTEM] Auto-starting wallet…", "system");
+    startNodeBtn.click();
+  }
+  tryAutoConnectDrive();
 })();
 const peersCountVal = document.getElementById("peers-count") as HTMLSpanElement;
 
@@ -192,6 +218,7 @@ const lsps1InvoiceStr = document.getElementById("lsps1-invoice-str") as HTMLText
 const copyLsps1InvoiceBtn = document.getElementById("copy-lsps1-invoice-btn") as HTMLButtonElement;
 
 const clearLogsBtn = document.getElementById("clear-logs-btn") as HTMLButtonElement;
+const copyLogsBtn = document.getElementById("copy-logs-btn") as HTMLButtonElement;
 
 // V4V Elements
 const audioPlayer = document.getElementById("audio-player") as HTMLAudioElement;
@@ -204,6 +231,14 @@ const boostMessageInput = document.getElementById("boost-message") as HTMLInputE
 const boostSenderName = document.getElementById("boost-sender-name") as HTMLInputElement;
 const boostDestInput = document.getElementById("boost-dest") as HTMLInputElement;
 const sendBoostagramBtn = document.getElementById("send-boostagram-btn") as HTMLButtonElement;
+
+// Receive (create invoice) Elements
+const receiveAmountInput = document.getElementById("receive-amount") as HTMLInputElement;
+const receiveDescInput = document.getElementById("receive-desc") as HTMLInputElement;
+const createInvoiceBtn = document.getElementById("create-invoice-btn") as HTMLButtonElement;
+const receiveInvoiceContainer = document.getElementById("receive-invoice-container") as HTMLDivElement;
+const receiveInvoiceStr = document.getElementById("receive-invoice-str") as HTMLTextAreaElement;
+const copyReceiveInvoiceBtn = document.getElementById("copy-receive-invoice-btn") as HTMLButtonElement;
 
 // NWC Elements
 const createNwcBtn = document.getElementById("create-nwc-btn") as HTMLButtonElement;
@@ -269,6 +304,17 @@ clearLogsBtn.addEventListener("click", () => {
   appendLog("[SYSTEM] Console cleared.", "system");
 });
 
+copyLogsBtn.addEventListener("click", async () => {
+  // Copy every log line (regardless of the active filter) as plain text.
+  const lines = Array.from(terminalContent.querySelectorAll(".log-line")).map((el) => el.textContent || "");
+  try {
+    await navigator.clipboard.writeText(lines.join("\n"));
+    appendLog(`[SYSTEM] Copied ${lines.length} log lines to clipboard.`, "system");
+  } catch (e) {
+    appendLog(`[ERROR] Failed to copy logs: ${e instanceof Error ? e.message : e}`, "error");
+  }
+});
+
 logFilter.addEventListener("change", applyLogFilter);
 
 // 6. Start LDK Node
@@ -296,9 +342,21 @@ startNodeBtn.addEventListener("click", async () => {
       config: {
         network: selectedNetwork,
         esploraUrl,
+        // Rapid Gossip Sync populates the network graph so the router can find
+        // multi-hop routes (pay nodes you're not directly channeled to). Only
+        // mainnet/testnet have public RGS servers.
+        rapidGossipSyncUrl:
+          selectedNetwork === "mainnet"
+            ? "https://rapidsync.lightningdevkit.org/snapshot"
+            : selectedNetwork === "testnet"
+            ? "https://rapidsync.lightningdevkit.org/testnet/snapshot"
+            : undefined,
         // Public channels on real networks (e.g. accepting the Mutinynet faucet's
         // announced channel); private on regtest where our LND opens --private.
         announceChannels: selectedNetwork !== "regtest",
+        // Broadcast a node name so peers show it instead of "Unknown" (only
+        // propagates once a public channel is announced).
+        alias: "Libre Listener Wallet",
       },
       storage,
       socketProvider: new BrowserWebSocketStreamProvider(),
@@ -349,6 +407,7 @@ startNodeBtn.addEventListener("click", async () => {
     requestJitBtn.disabled = false;
     purchaseLsps1Btn.disabled = false;
     sendBoostagramBtn.disabled = false;
+    createInvoiceBtn.disabled = false;
     createNwcBtn.disabled = false;
     exportStateBtn.disabled = false;
     newWalletBtn.disabled = true;
@@ -360,6 +419,15 @@ startNodeBtn.addEventListener("click", async () => {
     if (mgr) {
       const nodeId = bytesToHex(mgr.get_our_node_id());
       nodeIdVal.innerText = nodeId;
+    }
+
+    // When auto-started on load, also auto-connect the configured peer.
+    if (autoConnectMode) {
+      autoConnectMode = false;
+      if (lspConnStrInput.value.trim().includes("@")) {
+        appendLog("[SYSTEM] Auto-connecting to peer…", "system");
+        connectLspBtn.click();
+      }
     }
   } catch (err: any) {
     appendLog(`[ERROR] Start failed: ${err.message}`, "error");
@@ -486,6 +554,29 @@ requestJitBtn.addEventListener("click", async () => {
 copyJitInvoiceBtn.addEventListener("click", () => {
   navigator.clipboard.writeText(jitInvoiceStr.value);
   appendLog("[SYSTEM] JIT Invoice copied to clipboard.", "system");
+});
+
+createInvoiceBtn.addEventListener("click", async () => {
+  if (!wallet || !isNodeRunning) return;
+  try {
+    createInvoiceBtn.disabled = true;
+    const amount = parseInt(receiveAmountInput.value, 10);
+    const desc = receiveDescInput.value.trim() || "Libre Listener Wallet";
+    appendLog(`[Receive] Creating BOLT11 invoice for ${amount} sats...`, "system");
+    const invoice = await wallet.createInvoice(amount, desc);
+    receiveInvoiceStr.value = invoice;
+    receiveInvoiceContainer.classList.remove("hidden");
+    appendLog(`[Receive] Invoice created — pay it from your channel peer to fund the wallet.`, "system");
+  } catch (err) {
+    appendLog(`[ERROR] Failed to create invoice: ${err instanceof Error ? err.message : err}`, "error");
+  } finally {
+    createInvoiceBtn.disabled = false;
+  }
+});
+
+copyReceiveInvoiceBtn.addEventListener("click", () => {
+  navigator.clipboard.writeText(receiveInvoiceStr.value);
+  appendLog("[SYSTEM] Invoice copied to clipboard.", "system");
 });
 
 // 10. Purchase LSPS1 Capacity
@@ -655,6 +746,7 @@ sendBoostagramBtn.addEventListener("click", async () => {
     appendLog(`[ERROR] Boostagram sending failed: ${err.message}`, "error");
   } finally {
     sendBoostagramBtn.disabled = false;
+    createInvoiceBtn.disabled = false;
   }
 });
 
@@ -668,7 +760,7 @@ createNwcBtn.addEventListener("click", async () => {
 
     const name = nwcConnNameInput.value.trim() || "Nostr Client App";
     const limit = parseInt(nwcSpendingLimitInput.value, 10) || 0;
-    const relayUrl = nwcRelayUrlInput.value.trim() || "wss://relay.damus.io";
+    const relayUrl = nwcRelayUrlInput.value.trim() || "wss://relay.getalby.com/v1";
 
     appendLog(`[NWC] Creating connection pairing: "${name}" with limit: ${limit} sats on relay ${relayUrl}...`, "system");
     const uri = await wallet.nwc.createConnection(name, {
@@ -1125,6 +1217,22 @@ connectDriveBtn.addEventListener("click", async () => {
     appendLog(`[ERROR] Google Drive connect failed: ${e instanceof Error ? e.message : e}`, "error");
   }
 });
+
+// Attempt a silent (no-popup) Google Drive re-auth on page load. Succeeds if the user
+// has an active Google session + prior consent; otherwise leaves the manual button.
+async function tryAutoConnectDrive(): Promise<void> {
+  const clientId = resolveClientId();
+  if (!clientId) return;
+  try {
+    updateDriveStatus("connecting…");
+    await drive.connect(clientId, { silent: true });
+    updateDriveStatus();
+    appendLog("[SYSTEM] Auto-connected to Google Drive.", "system");
+  } catch {
+    updateDriveStatus("not connected");
+    appendLog("[SYSTEM] Google Drive: silent reconnect unavailable — click Connect Drive.", "system");
+  }
+}
 
 async function uploadBackupToDrive(): Promise<void> {
   if (!wallet || !isNodeRunning) {

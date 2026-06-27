@@ -20,7 +20,7 @@
         <div class="header-main">
           <h1>🎙️ Libre Listener Client</h1>
           <div class="badge-row">
-            <span class="badge badge-network">regtest</span>
+            <span id="network-badge" class="badge badge-network">regtest</span>
             <span id="wallet-status-badge" class="badge badge-status stopped">Stopped</span>
           </div>
         </div>
@@ -47,6 +47,7 @@
             <select id="network-select">
               <option value="regtest">regtest (local docker)</option>
               <option value="signet">signet (Mutinynet)</option>
+              <option value="mainnet">mainnet (your LND)</option>
             </select>
             <p class="help-text">Switching network auto-fills the Esplora, bridge, and peer fields below.</p>
           </div>
@@ -187,6 +188,26 @@
           </div>
         </section>
 
+        <!-- Receive: create a BOLT11 invoice (payable by your channel peer via route hint) -->
+        <section class="card glass-card">
+          <h2>Receive (Create Invoice)</h2>
+          <p class="hint">Mints a BOLT11 invoice with a route hint for your private channel, so your channel peer can pay it even though this is a private node. Use it to move liquidity onto the wallet.</p>
+          <div class="form-group">
+            <label>Amount (Satoshi)</label>
+            <input type="number" id="receive-amount" value="3000" min="1" />
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <input type="text" id="receive-desc" value="Libre Listener Wallet" />
+          </div>
+          <button id="create-invoice-btn" class="btn btn-primary" disabled>Create Invoice</button>
+          <div id="receive-invoice-container" class="form-group hidden" style="margin-top: 12px;">
+            <label>BOLT11 Invoice (pay this from your node)</label>
+            <textarea id="receive-invoice-str" readonly rows="4"></textarea>
+            <button id="copy-receive-invoice-btn" class="btn btn-secondary btn-sm" style="margin-top: 8px;">Copy Invoice</button>
+          </div>
+        </section>
+
         <!-- Section 6: V4V Splits & Boostagram -->
         <section class="card glass-card">
           <h2>6. V4V Splits & Boostagram</h2>
@@ -239,7 +260,7 @@
           </div>
           <div class="form-group">
             <label>Nostr Relay URL</label>
-            <input type="text" id="nwc-relay-url" value="wss://relay.damus.io" />
+            <input type="text" id="nwc-relay-url" value="wss://relay.getalby.com/v1" />
           </div>
           <button id="create-nwc-btn" class="btn btn-glow" disabled>Create Pairing</button>
 
@@ -297,6 +318,7 @@
                 <option value="warn">Warnings</option>
                 <option value="error">Errors</option>
               </select>
+              <button id="copy-logs-btn" class="btn btn-secondary btn-sm">Copy All</button>
               <button id="clear-logs-btn" class="btn btn-secondary btn-sm">Clear</button>
             </div>
           </div>

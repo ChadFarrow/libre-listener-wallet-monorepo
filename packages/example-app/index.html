@@ -62,7 +62,19 @@
           </div>
         </section>
 
-        <!-- Section 2: LSP Connections -->
+        <!-- Section 2: Backup & Recovery -->
+        <section class="card glass-card">
+          <h2>Backup &amp; Recovery</h2>
+          <p class="hint">Your funds live in this browser. Export an encrypted backup so a cleared browser can't lose them.</p>
+          <button id="export-state-btn" class="btn btn-primary" disabled>Download Encrypted Backup</button>
+          <div style="margin-top: 12px;">
+            <label>Restore from backup (requires your seed above):</label>
+            <input type="file" id="import-state-file" accept="application/json" />
+            <button id="import-state-btn" class="btn btn-secondary">Restore</button>
+          </div>
+        </section>
+
+        <!-- Section 3: LSP Connections -->
         <section class="card glass-card">
           <h2>2. LSP Peer Connection</h2>
           <div class="form-group">

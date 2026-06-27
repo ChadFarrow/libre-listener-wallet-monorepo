@@ -88,6 +88,7 @@ import { EsploraSyncClient } from "./esplora-client";
 import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
 import { IndexedDBStorageProvider } from "./indexed-db-storage";
+import { serializeAndEncrypt, decryptAndParse, BackupPayload } from "./state-backup";
 
 export { IndexedDBStorageProvider };
 
@@ -340,6 +341,19 @@ export class LibreListenerWallet {
       const monitorsList = (monitorsReadRes as Result_CVec_C2Tuple_ThirtyTwoBytesChannelMonitorZZIOErrorZ_OK).res;
       channelMonitors = monitorsList.map(tuple => tuple.get_b());
       this.logger?.info(`Loaded ${channelMonitors.length} channel monitors from storage`);
+      // LDK v0.1 does NOT auto-register monitors during ChannelManager::read — they must
+      // be explicitly registered with ChainMonitor.watch_channel before the channel manager
+      // is loaded, otherwise Update_channel calls will fail with "no such monitor registered".
+      if (channelMonitors.length > 0) {
+        const chainWatch = this.chainMonitor.as_Watch();
+        // NOTE: monitors MUST be registered with the ChainMonitor BEFORE ChannelManager::read replays updates. The upstream LDK docs show registration AFTER read for the Rust API; do NOT "fix" the ordering to match — these JS bindings share monitor objects by reference and recovery breaks if read runs first.
+        for (const monitor of channelMonitors) {
+          const fundingTxoTuple = monitor.get_funding_txo();
+          const fundingTxo = fundingTxoTuple.get_a();
+          chainWatch.watch_channel(fundingTxo, monitor);
+        }
+        this.logger?.info(`Registered ${channelMonitors.length} channel monitors with ChainMonitor`);
+      }
     }
 
     // 8. Load or construct NetworkGraph & Scorer
@@ -569,6 +583,19 @@ export class LibreListenerWallet {
     await this.nwc.start();
   }
 
+  private async persistManagerState(): Promise<void> {
+    if (this.channelManager && this.networkGraph && this.scorer) {
+      try {
+        this.logger?.info("Saving manager/graph/scorer state to storage...");
+        await this.storage.setItem("channel_manager", bytesToHex(this.channelManager.write()));
+        await this.storage.setItem("network_graph", bytesToHex(this.networkGraph.write()));
+        await this.storage.setItem("scorer", bytesToHex(this.scorer.write()));
+      } catch (err) {
+        this.logger?.error(`Failed to save state: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+  }
+
   async stop(): Promise<void> {
     if (!this.isRunning) {
       this.logger?.warn("Wallet is not running");
@@ -601,21 +628,7 @@ export class LibreListenerWallet {
     this.connectedPeers.clear();
 
     // Persist final states
-    if (this.channelManager && this.networkGraph && this.scorer) {
-      try {
-        this.logger?.info("Saving final state to storage...");
-        const managerBytes = this.channelManager.write();
-        await this.storage.setItem("channel_manager", bytesToHex(managerBytes));
-
-        const graphBytes = this.networkGraph.write();
-        await this.storage.setItem("network_graph", bytesToHex(graphBytes));
-
-        const scorerBytes = this.scorer.write();
-        await this.storage.setItem("scorer", bytesToHex(scorerBytes));
-      } catch (err) {
-        this.logger?.error(`Failed to save state on shutdown: ${err instanceof Error ? err.message : err}`);
-      }
-    }
+    await this.persistManagerState();
 
     // Free pointers to prevent WASM leaks
     this.channelManager = undefined;
@@ -640,6 +653,60 @@ export class LibreListenerWallet {
 
   status(): "Stopped" | "Running" {
     return this.isRunning ? "Running" : "Stopped";
+  }
+
+  async exportState(): Promise<string> {
+    // Flush the latest in-memory manager/graph/scorer so the backup is current.
+    if (this.isRunning) {
+      await this.persistManagerState();
+    }
+    const seedHex = await this.storage.getItem("ldk_seed");
+    if (!seedHex) {
+      throw new Error("Cannot export: no wallet seed found in storage");
+    }
+
+    const entries: Record<string, string> = {};
+    // Direct (non-KVStore) keys written by the wallet itself.
+    const directKeys = ["ldk_seed", "channel_manager", "network_graph", "scorer", "ldk_keys_index"];
+    for (const k of directKeys) {
+      const v = await this.storage.getItem(k);
+      if (v !== null) entries[k] = v;
+    }
+    // KVStore-managed keys (channel monitors etc.) tracked in the index.
+    const indexStr = entries["ldk_keys_index"];
+    if (indexStr) {
+      let keyList: string[] = [];
+      try {
+        keyList = JSON.parse(indexStr);
+      } catch (err) {
+        throw new Error(`Cannot export: ldk_keys_index is malformed — ${(err as Error).message}`);
+      }
+      for (const k of keyList) {
+        const v = await this.storage.getItem(k);
+        if (v !== null) entries[k] = v;
+      }
+    }
+
+    const payload: BackupPayload = {
+      version: 1,
+      network: this.config.network,
+      exportedAt: Date.now(),
+      entries,
+    };
+    return serializeAndEncrypt(payload, seedHex);
+  }
+
+  async importState(envelope: string, seedHex: string): Promise<void> {
+    if (this.isRunning) {
+      throw new Error("Cannot import while running — create a fresh wallet and import before start()");
+    }
+    const payload = await decryptAndParse(envelope, seedHex);
+    if (payload.network !== this.config.network) {
+      throw new Error(`Backup network mismatch: backup is "${payload.network}" but wallet is configured for "${this.config.network}"`);
+    }
+    for (const [k, v] of Object.entries(payload.entries)) {
+      await this.storage.setItem(k, v);
+    }
   }
 
   // --- exposed properties & methods ---

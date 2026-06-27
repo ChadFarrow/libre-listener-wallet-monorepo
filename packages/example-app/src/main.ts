@@ -157,6 +157,11 @@ const copyNwcUriBtn = document.getElementById("copy-nwc-uri-btn") as HTMLButtonE
 const nwcQrImg = document.getElementById("nwc-qr-img") as HTMLImageElement;
 const nwcConnectionsList = document.getElementById("nwc-connections-list") as HTMLDivElement;
 
+// Backup & Recovery Elements
+const exportStateBtn = document.getElementById("export-state-btn") as HTMLButtonElement;
+const importStateFile = document.getElementById("import-state-file") as HTMLInputElement;
+const importStateBtn = document.getElementById("import-state-btn") as HTMLButtonElement;
+
 let streamIntervalId: any = null;
 let totalSatsStreamed = 0;
 
@@ -261,6 +266,7 @@ startNodeBtn.addEventListener("click", async () => {
     purchaseLsps1Btn.disabled = false;
     sendBoostagramBtn.disabled = false;
     createNwcBtn.disabled = false;
+    exportStateBtn.disabled = false;
     await updateNwcConnectionsList();
 
 
@@ -298,6 +304,7 @@ stopNodeBtn.addEventListener("click", async () => {
     purchaseLsps1Btn.disabled = true;
     sendBoostagramBtn.disabled = true;
     createNwcBtn.disabled = true;
+    exportStateBtn.disabled = true;
     nwcUriContainer.classList.add("hidden");
     nwcConnectionsList.innerHTML = '<div class="empty-list-text text-muted" style="font-size: 0.85rem;">No active pairings yet.</div>';
     nodeIdVal.innerText = "-";
@@ -866,6 +873,52 @@ simulateOfflinePushBtn.addEventListener("click", async () => {
     appendLog(`[ERROR] Simulation failed: ${err.message}`, "error");
   } finally {
     simulateOfflinePushBtn.disabled = false;
+  }
+});
+
+// Backup & Recovery Handlers
+exportStateBtn.addEventListener("click", async () => {
+  if (!wallet) {
+    appendLog("[ERROR] Start the node before exporting.", "error");
+    return;
+  }
+  try {
+    const blob = await wallet.exportState();
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `libre-wallet-backup-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    appendLog("[SYSTEM] Encrypted backup downloaded. Keep it and your seed safe.", "system");
+  } catch (e) {
+    appendLog(`[ERROR] Export failed: ${e instanceof Error ? e.message : e}`, "error");
+  }
+});
+
+importStateBtn.addEventListener("click", async () => {
+  const file = importStateFile.files?.[0];
+  if (!file) {
+    appendLog("[ERROR] Choose a backup file first.", "error");
+    return;
+  }
+  const seed = seedInput.value.trim();
+  if (seed.length !== 64) {
+    appendLog("[ERROR] Enter your 64-char hex seed above to decrypt the backup.", "error");
+    return;
+  }
+  try {
+    const blob = await file.text();
+    const importWallet = new LibreListenerWallet({
+      config: { network: "regtest", esploraUrl: esploraUrlInput.value.trim() },
+      storage,
+      socketProvider: new BrowserWebSocketStreamProvider(),
+      wasmUrl: "/liblightningjs.wasm",
+    });
+    await importWallet.importState(blob, seed);
+    appendLog("[SYSTEM] Backup restored to storage. Click Start Node to boot the recovered wallet.", "system");
+  } catch (e) {
+    appendLog(`[ERROR] Restore failed: ${e instanceof Error ? e.message : e}`, "error");
   }
 });
 

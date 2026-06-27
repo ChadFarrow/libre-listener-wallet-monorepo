@@ -105,9 +105,10 @@ export class StorageCache implements KVStoreInterface {
   }
 
   list(primary_namespace: string, secondary_namespace: string): Result_CVec_StrZIOErrorZ {
-    const prefix = primary_namespace 
+    // Build the namespace prefix. LDK enumerates with primary set (e.g. list("monitors", "")); the empty-primary branch is a defensive fallback with no current caller.
+    const prefix = primary_namespace
       ? (secondary_namespace ? `${primary_namespace}/${secondary_namespace}/` : `${primary_namespace}/`)
-      : "";
+      : (secondary_namespace ? `${secondary_namespace}/` : "");
 
     const matchedKeys: string[] = [];
     for (const storeKey of this.keys) {

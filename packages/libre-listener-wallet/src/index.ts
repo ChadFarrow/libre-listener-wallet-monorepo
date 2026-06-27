@@ -197,6 +197,7 @@ export class LibreListenerWallet {
   private peerTickIntervalId?: any;
   private eventTickIntervalId?: any;
   private nextDescriptorId: number = 1;
+  private stateVersion: number = 0;
   private connectedPeers: Map<string, WebSocketDescriptor> = new Map(); // hex pubkey -> descriptor
   private registryCache?: LspProvider[];
   private eventListeners: ((event: Event) => void)[] = [];
@@ -242,6 +243,9 @@ export class LibreListenerWallet {
     // 2. Load storage cache
     this.storageCache = new StorageCache(this.storage);
     await this.storageCache.load();
+
+    const storedVersion = await this.storage.getItem("state_version");
+    this.stateVersion = storedVersion ? parseInt(storedVersion, 10) || 0 : 0;
 
     const kvStore = KVStore.new_impl(this.storageCache);
 
@@ -430,6 +434,9 @@ export class LibreListenerWallet {
     const userConfig = UserConfig.constructor_default();
     userConfig.set_manually_accept_inbound_channels(true);
     userConfig.get_channel_handshake_config().set_negotiate_anchors_zero_fee_htlc_tx(true);
+    // Announced (public) channels must match the counterparty's preference. Default
+    // private; enable when accepting public channels (e.g. from the Mutinynet faucet).
+    userConfig.get_channel_handshake_config().set_announce_for_forwarding(this.config.announceChannels ?? false);
 
     const managerHex = await this.storage.getItem("channel_manager");
     if (managerHex) {
@@ -545,13 +552,22 @@ export class LibreListenerWallet {
             }
           });
         } else if (name === "Event_OpenChannelRequest") {
-          this.logger?.info("[LDK Event] OpenChannelRequest received. Accepting zero-conf...");
-          const res = this.channelManager!.accept_inbound_channel_from_trusted_peer_0conf(
-            (event as any).temporary_channel_id,
-            (event as any).counterparty_node_id,
+          const tempChanId = (event as any).temporary_channel_id;
+          const counterparty = (event as any).counterparty_node_id;
+          this.logger?.info("[LDK Event] OpenChannelRequest received. Trying zero-conf accept...");
+          let res = this.channelManager!.accept_inbound_channel_from_trusted_peer_0conf(
+            tempChanId,
+            counterparty,
             0n
           );
-          this.logger?.info(`[LDK Event] accept_inbound_channel_from_trusted_peer_0conf result: ${res.is_ok()}`);
+          if (!res.is_ok()) {
+            // Counterparty didn't offer zero-conf (e.g. the Mutinynet faucet opens a
+            // normal channel). Accept it as a standard channel; it becomes usable after
+            // the funding tx confirms.
+            this.logger?.info("[LDK Event] Zero-conf unavailable; accepting as a normal channel (awaits confirmation).");
+            res = this.channelManager!.accept_inbound_channel(tempChanId, counterparty, 0n);
+          }
+          this.logger?.info(`[LDK Event] accept_inbound_channel result: ${res.is_ok()}`);
         } else if (name === "Event_PendingHTLCsForwardable") {
           this.logger?.info("[LDK Event] PendingHTLCsForwardable received. Processing forwards...");
           this.channelManager!.process_pending_htlc_forwards();
@@ -570,6 +586,22 @@ export class LibreListenerWallet {
     this.eventTickIntervalId = setInterval(() => {
       if (this.channelManager) {
         this.channelManager.as_EventsProvider().process_pending_events(eventHandler);
+        // Persist the ChannelManager whenever LDK signals it changed (channel opened,
+        // payment sent/claimed, etc.), so channels survive an abrupt close — a browser
+        // tab/reload never calls stop(), and the monitor alone can't resume a channel.
+        if (this.channelManager.get_and_clear_needs_persistence()) {
+          this.storage
+            .setItem("channel_manager", bytesToHex(this.channelManager.write()))
+            .catch((err) =>
+              this.logger?.error(`Failed to persist channel_manager: ${err instanceof Error ? err.message : err}`)
+            );
+          this.stateVersion++;
+          this.storage
+            .setItem("state_version", String(this.stateVersion))
+            .catch((err) =>
+              this.logger?.error(`Failed to persist state_version: ${err instanceof Error ? err.message : err}`)
+            );
+        }
       }
       if (this.chainMonitor) {
         this.chainMonitor.as_EventsProvider().process_pending_events(eventHandler);
@@ -655,6 +687,10 @@ export class LibreListenerWallet {
     return this.isRunning ? "Running" : "Stopped";
   }
 
+  getStateVersion(): number {
+    return this.stateVersion;
+  }
+
   async exportState(): Promise<string> {
     // Flush the latest in-memory manager/graph/scorer so the backup is current.
     if (this.isRunning) {
@@ -667,7 +703,7 @@ export class LibreListenerWallet {
 
     const entries: Record<string, string> = {};
     // Direct (non-KVStore) keys written by the wallet itself.
-    const directKeys = ["ldk_seed", "channel_manager", "network_graph", "scorer", "ldk_keys_index"];
+    const directKeys = ["ldk_seed", "channel_manager", "network_graph", "scorer", "ldk_keys_index", "state_version"];
     for (const k of directKeys) {
       const v = await this.storage.getItem(k);
       if (v !== null) entries[k] = v;

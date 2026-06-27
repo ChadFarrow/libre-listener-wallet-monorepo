@@ -167,6 +167,8 @@ describe("Wallet recovery after storage wipe", () => {
 
     const channelsA = walletA.getChannelManager()!.list_channels().length;
     expect(channelsA).toBe(1);
+    // Opening + funding the channel changed state, so the version must have advanced.
+    expect(walletA.getStateVersion()).toBeGreaterThan(0);
 
     // --- Export, then wipe (drop walletA + dbA) ---
     const seedHex = dbA.get("ldk_seed")!;
@@ -181,6 +183,8 @@ describe("Wallet recovery after storage wipe", () => {
     await walletB.start();
     expect(bytesToHex(walletB.getChannelManager()!.get_our_node_id())).toBe(nodeId);
     expect(walletB.getChannelManager()!.list_channels().length).toBe(1);
+    // The restored wallet loaded the persisted state_version (non-zero).
+    expect(walletB.getStateVersion()).toBeGreaterThan(0);
 
     // Reconnect to the peer so the recovered channel re-establishes.
     await walletB.connectPeer(lsp.pubkey, "127.0.0.1", 9735);

@@ -2,6 +2,10 @@ export interface WalletConfig {
   network: "mainnet" | "testnet" | "regtest" | "signet";
   esploraUrl: string;
   rapidGossipSyncUrl?: string;
+  // Accept/open announced (public) channels. Default false (private node).
+  // Required to accept channels from counterparties that only open public
+  // channels (e.g. the Mutinynet faucet).
+  announceChannels?: boolean;
 }
 
 export interface NWCRequest {

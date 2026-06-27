@@ -65,4 +65,17 @@ export class IndexedDBStorageProvider implements SecureStorageProvider {
       req.onerror = () => reject(req.error);
     });
   }
+
+  // Erase all keys in the store — used to start a fresh wallet (clears seed,
+  // channel manager, channel monitors, and the LDK key index).
+  async clear(): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(this.storeName, "readwrite");
+      const store = tx.objectStore(this.storeName);
+      const req = store.clear();
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
 }

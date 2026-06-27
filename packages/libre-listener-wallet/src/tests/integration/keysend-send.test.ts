@@ -302,12 +302,20 @@ describe("LibreListenerWallet Keysend Boost (outbound) Integration", () => {
       await new Promise((r) => setTimeout(r, 500));
       try {
         const invoices = JSON.parse(runCmd(`${LNCLI} listinvoices`)).invoices || [];
-        received = invoices.find(
-          (inv: any) =>
-            inv.is_keysend &&
-            (inv.state === "SETTLED" || inv.settled === true) &&
-            Number(inv.amt_paid_sat) === BOOST_SATS
-        );
+        received = invoices.find((inv: any) => {
+          if (
+            !inv.is_keysend ||
+            !(inv.state === "SETTLED" || inv.settled === true) ||
+            Number(inv.amt_paid_sat) !== BOOST_SATS
+          ) {
+            return false;
+          }
+          // Match THIS test's payment by its feedGuid TLV, so we don't pick up a
+          // same-amount keysend left in LND by another test (e.g. recovery.test.ts).
+          const cr = inv.htlcs?.[0]?.custom_records || {};
+          const feedGuid = cr["7629175"] ? Buffer.from(cr["7629175"], "hex").toString("utf8") : "";
+          return feedGuid === FEED_GUID;
+        });
       } catch {
         /* retry */
       }

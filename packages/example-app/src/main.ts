@@ -20,7 +20,9 @@ if (import.meta.env.DEV) {
 class BrowserWebSocketStreamProvider implements WebSocketStreamProvider {
   async connect(address: string, port: number): Promise<WebSocketConnection> {
     // Bridge browser WebSocket to LND TCP port 9735 via websockify at 127.0.0.1:8081
-    const wsUrl = "ws://127.0.0.1:8081";
+    const wsUrl =
+      (document.getElementById("ws-bridge-url") as HTMLInputElement | null)?.value?.trim() ||
+      "ws://127.0.0.1:8081";
     appendLog(`[SYSTEM] Connecting WebSocket bridge to ${wsUrl} (LND peer at ${address}:${port})...`, "system");
     
     const socket = new WebSocket(wsUrl);
@@ -112,12 +114,67 @@ const stopNodeBtn = document.getElementById("stop-node-btn") as HTMLButtonElemen
 const walletStatusBadge = document.getElementById("wallet-status-badge") as HTMLSpanElement;
 const seedInput = document.getElementById("seed-input") as HTMLInputElement;
 const toggleSeedBtn = document.getElementById("toggle-seed-btn") as HTMLButtonElement;
+const copySeedBtn = document.getElementById("copy-seed-btn") as HTMLButtonElement;
 const esploraUrlInput = document.getElementById("esplora-url-input") as HTMLInputElement;
-const nodeIdVal = document.getElementById("node-id-val") as HTMLSpanElement;
-const peersCountVal = document.getElementById("peers-count") as HTMLSpanElement;
-
+const networkSelect = document.getElementById("network-select") as HTMLSelectElement;
+const wsBridgeUrlInput = document.getElementById("ws-bridge-url") as HTMLInputElement;
 const lspConnStrInput = document.getElementById("lsp-conn-str") as HTMLInputElement;
 const lspApiUrlInput = document.getElementById("lsp-api-url") as HTMLInputElement;
+const nodeIdVal = document.getElementById("node-id-val") as HTMLSpanElement;
+const restoreBanner = document.getElementById("restore-banner") as HTMLDivElement;
+
+// Per-network defaults: switching the Network selector auto-fills sync/bridge/peer fields.
+const NETWORK_PRESETS: Record<string, { esplora: string; bridge: string; peer: string }> = {
+  regtest: {
+    esplora: "http://127.0.0.1:3002",
+    bridge: "ws://127.0.0.1:8081",
+    peer: "02cee2811b196ef8e7e3beddcf4d9bee63eb4e9edc5c9b9ce211075a90bd0be397@127.0.0.1:9735",
+  },
+  signet: {
+    esplora: "https://mutinynet.com/api",
+    bridge: "ws://127.0.0.1:8083",
+    peer: "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b@45.79.52.207:9735",
+  },
+};
+
+networkSelect.addEventListener("change", () => {
+  const preset = NETWORK_PRESETS[networkSelect.value];
+  if (!preset) return;
+  esploraUrlInput.value = preset.esplora;
+  wsBridgeUrlInput.value = preset.bridge;
+  lspConnStrInput.value = preset.peer;
+  try { localStorage.setItem("libre_ui_network", networkSelect.value); } catch {}
+  appendLog(`[SYSTEM] Network set to ${networkSelect.value}; sync/bridge/peer fields updated.`, "system");
+});
+
+// On page load, restore the previously-selected network (+ its preset) and the
+// existing wallet seed from storage, so a reload preserves your wallet and network
+// instead of resetting to regtest / the default seed (which Start would overwrite).
+(async () => {
+  try {
+    const savedNetwork = localStorage.getItem("libre_ui_network");
+    if (savedNetwork && NETWORK_PRESETS[savedNetwork]) {
+      networkSelect.value = savedNetwork;
+      const preset = NETWORK_PRESETS[savedNetwork];
+      esploraUrlInput.value = preset.esplora;
+      wsBridgeUrlInput.value = preset.bridge;
+      lspConnStrInput.value = preset.peer;
+    }
+  } catch {}
+  try {
+    const storedSeed = await storage.getItem("ldk_seed");
+    if (storedSeed && /^[0-9a-fA-F]{64}$/.test(storedSeed)) {
+      seedInput.value = storedSeed;
+      restoreBanner.classList.add("hidden");
+      appendLog("[SYSTEM] Restored existing wallet seed and network from storage.", "system");
+    } else {
+      // Fresh/wiped browser — guide the user to restore from their backup file.
+      restoreBanner.classList.remove("hidden");
+    }
+  } catch {}
+})();
+const peersCountVal = document.getElementById("peers-count") as HTMLSpanElement;
+
 const connectLspBtn = document.getElementById("connect-lsp-btn") as HTMLButtonElement;
 
 const requestJitBtn = document.getElementById("request-jit-btn") as HTMLButtonElement;
@@ -144,6 +201,7 @@ const satsStreamedVal = document.getElementById("sats-streamed-val") as HTMLSpan
 const boostAmountInput = document.getElementById("boost-amount") as HTMLInputElement;
 const boostMessageInput = document.getElementById("boost-message") as HTMLInputElement;
 const boostSenderName = document.getElementById("boost-sender-name") as HTMLInputElement;
+const boostDestInput = document.getElementById("boost-dest") as HTMLInputElement;
 const sendBoostagramBtn = document.getElementById("send-boostagram-btn") as HTMLButtonElement;
 
 // NWC Elements
@@ -161,6 +219,8 @@ const nwcConnectionsList = document.getElementById("nwc-connections-list") as HT
 const exportStateBtn = document.getElementById("export-state-btn") as HTMLButtonElement;
 const importStateFile = document.getElementById("import-state-file") as HTMLInputElement;
 const importStateBtn = document.getElementById("import-state-btn") as HTMLButtonElement;
+const newWalletBtn = document.getElementById("new-wallet-btn") as HTMLButtonElement;
+const backupStatusEl = document.getElementById("backup-status") as HTMLSpanElement;
 
 let streamIntervalId: any = null;
 let totalSatsStreamed = 0;
@@ -206,15 +266,19 @@ startNodeBtn.addEventListener("click", async () => {
     await storage.setItem("ldk_seed", seed);
 
     const esploraUrl = esploraUrlInput.value.trim();
+    const selectedNetwork = networkSelect.value as "mainnet" | "testnet" | "regtest" | "signet";
 
     // Save current config to storage so SW can read it
-    const ldkConfig = { network: "regtest" as const, esploraUrl };
+    const ldkConfig = { network: selectedNetwork, esploraUrl };
     await storage.setItem("ldk_config", JSON.stringify(ldkConfig));
 
     wallet = new LibreListenerWallet({
       config: {
-        network: "regtest",
+        network: selectedNetwork,
         esploraUrl,
+        // Public channels on real networks (e.g. accepting the Mutinynet faucet's
+        // announced channel); private on regtest where our LND opens --private.
+        announceChannels: selectedNetwork !== "regtest",
       },
       storage,
       socketProvider: new BrowserWebSocketStreamProvider(),
@@ -267,6 +331,7 @@ startNodeBtn.addEventListener("click", async () => {
     sendBoostagramBtn.disabled = false;
     createNwcBtn.disabled = false;
     exportStateBtn.disabled = false;
+    newWalletBtn.disabled = true;
     await updateNwcConnectionsList();
 
 
@@ -305,6 +370,7 @@ stopNodeBtn.addEventListener("click", async () => {
     sendBoostagramBtn.disabled = true;
     createNwcBtn.disabled = true;
     exportStateBtn.disabled = true;
+    newWalletBtn.disabled = false;
     nwcUriContainer.classList.add("hidden");
     nwcConnectionsList.innerHTML = '<div class="empty-list-text text-muted" style="font-size: 0.85rem;">No active pairings yet.</div>';
     nodeIdVal.innerText = "-";
@@ -522,14 +588,22 @@ sendBoostagramBtn.addEventListener("click", async () => {
     const senderName = boostSenderName.value.trim();
     
     appendLog(`[V4V] Preparing Boostagram of ${amountSats} sats with message: "${message}"...`, "system");
-    
+
     const creatorPubkey = "02bdafbf7a60765a9ab4673350c1b5954449e290f498d1ff3a77c58eb7cebfbf24";
     const appDevPubkey = "035c6ec9ffea21051515efbb72d2fb07dfb51fa16d78772cc1c9b6348981f185ef";
-    
-    const destinations = [
-      { destinationPubkey: creatorPubkey, share: 90 },
-      { destinationPubkey: appDevPubkey, share: 10 },
-    ];
+
+    // If a destination override pubkey is provided, route 100% there (e.g. your
+    // channel peer, the only node you have a route to). Otherwise the demo 90/10 split.
+    const destOverride = boostDestInput.value.trim();
+    const destinations = /^0[0-9a-fA-F]{65}$/.test(destOverride)
+      ? [{ destinationPubkey: destOverride, share: 100 }]
+      : [
+          { destinationPubkey: creatorPubkey, share: 90 },
+          { destinationPubkey: appDevPubkey, share: 10 },
+        ];
+    if (destinations.length === 1) {
+      appendLog(`[V4V] Routing 100% to override destination ${destOverride.substring(0, 12)}...`, "system");
+    }
     
     const splits = calculateSplits({
       destinations,
@@ -890,6 +964,8 @@ exportStateBtn.addEventListener("click", async () => {
     a.download = `libre-wallet-backup-${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    localStorage.setItem("libre_last_backup_version", String(wallet.getStateVersion()));
+    refreshBackupStatus();
     appendLog("[SYSTEM] Encrypted backup downloaded. Keep it and your seed safe.", "system");
   } catch (e) {
     appendLog(`[ERROR] Export failed: ${e instanceof Error ? e.message : e}`, "error");
@@ -910,7 +986,10 @@ importStateBtn.addEventListener("click", async () => {
   try {
     const blob = await file.text();
     const importWallet = new LibreListenerWallet({
-      config: { network: "regtest", esploraUrl: esploraUrlInput.value.trim() },
+      config: {
+        network: networkSelect.value as "mainnet" | "testnet" | "regtest" | "signet",
+        esploraUrl: esploraUrlInput.value.trim(),
+      },
       storage,
       socketProvider: new BrowserWebSocketStreamProvider(),
       wasmUrl: "/liblightningjs.wasm",
@@ -922,4 +1001,78 @@ importStateBtn.addEventListener("click", async () => {
   }
 });
 
+// Generate a fresh random LDK seed and clear local state to start a brand-new wallet.
+newWalletBtn.addEventListener("click", async () => {
+  if (isNodeRunning) {
+    appendLog("[ERROR] Stop the node before creating a new wallet.", "error");
+    return;
+  }
+  try {
+    const existing = await storage.getItem("ldk_seed");
+    if (existing) {
+      const confirmed = window.confirm(
+        "Create a new wallet? This erases the current wallet's state from this browser. Make sure you've downloaded an encrypted backup first."
+      );
+      if (!confirmed) {
+        appendLog("[SYSTEM] New wallet cancelled.", "system");
+        return;
+      }
+    }
+    // Wipe existing wallet state so the new seed boots a clean node.
+    await storage.clear();
+    // Generate a fresh 32-byte LDK seed.
+    const seedBytes = new Uint8Array(32);
+    crypto.getRandomValues(seedBytes);
+    const seedHex = Array.from(seedBytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    seedInput.value = seedHex;
+    await storage.setItem("ldk_seed", seedHex);
+    nodeIdVal.innerText = "-";
+    appendLog(
+      "[SYSTEM] New wallet seed generated and local state cleared. Back up your seed, then Start Node.",
+      "system"
+    );
+  } catch (e) {
+    appendLog(`[ERROR] New wallet failed: ${e instanceof Error ? e.message : e}`, "error");
+  }
+});
+
+// Reflect whether the on-disk backup file is current vs. the wallet's channel state.
+function refreshBackupStatus() {
+  if (!wallet || !isNodeRunning) {
+    backupStatusEl.textContent = "—";
+    backupStatusEl.className = "value";
+    return;
+  }
+  const current = wallet.getStateVersion();
+  const lastStr = localStorage.getItem("libre_last_backup_version");
+  const parsed = lastStr === null ? NaN : parseInt(lastStr, 10);
+  const last = Number.isNaN(parsed) ? -1 : parsed;
+  if (last < 0) {
+    backupStatusEl.textContent = "No backup yet — click Download";
+    backupStatusEl.className = "value text-warning";
+  } else if (current > last) {
+    backupStatusEl.textContent = "⚠️ Out of date — click Download";
+    backupStatusEl.className = "value text-warning";
+  } else {
+    backupStatusEl.textContent = "Up to date ✓";
+    backupStatusEl.className = "value";
+  }
+}
+setInterval(refreshBackupStatus, 2000);
+
+copySeedBtn.addEventListener("click", async () => {
+  const seed = seedInput.value.trim();
+  if (seed.length !== 64) {
+    appendLog("[ERROR] No 64-char seed to copy.", "error");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(seed);
+    appendLog("[SYSTEM] Seed copied to clipboard — store it somewhere safe.", "system");
+  } catch (e) {
+    appendLog(`[ERROR] Copy failed: ${e instanceof Error ? e.message : e}`, "error");
+  }
+});
 

@@ -36,13 +36,29 @@
             <div class="input-action-row">
               <input type="password" id="seed-input" value="0000000000000000000000000000000000000000000000000000000000000001" placeholder="Enter 32-byte hex seed" />
               <button id="toggle-seed-btn" class="btn btn-secondary">Show</button>
+              <button id="copy-seed-btn" class="btn btn-secondary">Copy</button>
+              <button id="new-wallet-btn" class="btn btn-secondary">New Wallet</button>
             </div>
-            <p class="help-text">Leave default or input 64-character hex seed.</p>
+            <p class="help-text text-warning">Your seed is your master backup — save it. It recovers your funds even without a backup file.</p>
+          </div>
+
+          <div class="form-group">
+            <label>Network</label>
+            <select id="network-select">
+              <option value="regtest">regtest (local docker)</option>
+              <option value="signet">signet (Mutinynet)</option>
+            </select>
+            <p class="help-text">Switching network auto-fills the Esplora, bridge, and peer fields below.</p>
           </div>
 
           <div class="form-group">
             <label>Esplora (Electrs) Sync URL</label>
             <input type="text" id="esplora-url-input" value="http://127.0.0.1:3002" />
+          </div>
+
+          <div class="form-group">
+            <label>WebSocket Bridge URL (browser → LN node)</label>
+            <input type="text" id="ws-bridge-url" value="ws://127.0.0.1:8081" />
           </div>
 
           <div class="button-row">
@@ -65,7 +81,14 @@
         <!-- Section 2: Backup & Recovery -->
         <section class="card glass-card">
           <h2>Backup &amp; Recovery</h2>
+          <div id="restore-banner" class="help-text text-warning hidden" style="margin-bottom: 10px;">
+            No wallet found in this browser. If you have a backup file, restore it below (you'll need your seed).
+          </div>
           <p class="hint">Your funds live in this browser. Export an encrypted backup so a cleared browser can't lose them.</p>
+          <div class="status-row" style="margin-bottom: 10px;">
+            <span class="label">Backup status:</span>
+            <span id="backup-status" class="value">—</span>
+          </div>
           <button id="export-state-btn" class="btn btn-primary" disabled>Download Encrypted Backup</button>
           <div style="margin-top: 12px;">
             <label>Restore from backup (requires your seed above):</label>
@@ -160,6 +183,12 @@
           <div class="form-group">
             <label>Sender Name</label>
             <input type="text" id="boost-sender-name" value="Anonymous Listener" />
+          </div>
+
+          <div class="form-group">
+            <label>Keysend Destination override (pubkey, optional)</label>
+            <input type="text" id="boost-dest" placeholder="66-char hex pubkey; routes 100% here (e.g. your channel peer)" />
+            <p class="help-text">Leave blank for the demo 90/10 split. Set to a node you have a route to (your channel peer) to send a real boost.</p>
           </div>
 
           <div class="split-destinations-ui">

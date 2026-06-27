@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/.turbo
+**/.next
+**/*.db
+**/*.db-journal
+.git
+.gitignore
+docker-compose.yml
+*.md
+ai/
+packages/example-app/public/*.js

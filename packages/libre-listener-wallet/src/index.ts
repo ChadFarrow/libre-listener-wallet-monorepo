@@ -91,7 +91,7 @@ import { EsploraSyncClient } from "./esplora-client";
 import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
 import { IndexedDBStorageProvider } from "./indexed-db-storage";
-import { serializeAndEncrypt, decryptAndParse, BackupPayload } from "./state-backup";
+import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayload } from "./state-backup";
 
 export { IndexedDBStorageProvider };
 
@@ -840,7 +840,7 @@ export class LibreListenerWallet {
     return this.stateVersion;
   }
 
-  async exportState(): Promise<string> {
+  async exportState(opts?: { passphrase?: string }): Promise<string> {
     // Flush the latest in-memory manager/graph/scorer so the backup is current.
     if (this.isRunning) {
       await this.persistManagerState();
@@ -878,19 +878,56 @@ export class LibreListenerWallet {
       exportedAt: Date.now(),
       entries,
     };
-    return serializeAndEncrypt(payload, seedHex);
+    // v2 (passphrase + seed dual-wrap) when a passphrase is supplied; otherwise
+    // legacy v1 (seed-only) for back-compat/tests.
+    if (opts?.passphrase) {
+      return serializeAndEncrypt(payload, { passphrase: opts.passphrase, seedHex });
+    }
+    return serializeAndEncryptV1(payload, seedHex);
   }
 
-  async importState(envelope: string, seedHex: string): Promise<void> {
+  /**
+   * Restore a backup into storage. `secret` may be the backup passphrase (v2) or
+   * a 64-hex seed (v2 or legacy v1) — decryptAndParse auto-detects.
+   */
+  async importState(envelope: string, secret: string): Promise<void> {
     if (this.isRunning) {
       throw new Error("Cannot import while running — create a fresh wallet and import before start()");
     }
-    const payload = await decryptAndParse(envelope, seedHex);
+    const payload = await decryptAndParse(envelope, secret);
     if (payload.network !== this.config.network) {
       throw new Error(`Backup network mismatch: backup is "${payload.network}" but wallet is configured for "${this.config.network}"`);
     }
     for (const [k, v] of Object.entries(payload.entries)) {
       await this.storage.setItem(k, v);
+    }
+  }
+
+  /**
+   * Decrypt a backup WITHOUT writing to storage, to prove recoverability before
+   * funding. Never returns secret material — only booleans/metadata.
+   */
+  async verifyBackup(envelope: string, secret: string): Promise<{
+    ok: boolean;
+    network?: string;
+    hasSeed: boolean;
+    seedMatches?: boolean;
+    entryKeys: string[];
+    error?: string;
+  }> {
+    try {
+      const payload = await decryptAndParse(envelope, secret);
+      const seedInBackup = payload.entries["ldk_seed"];
+      const isHex = /^[0-9a-fA-F]{64}$/.test(secret);
+      return {
+        ok: true,
+        network: payload.network,
+        hasSeed: !!seedInBackup,
+        seedMatches: isHex ? seedInBackup?.toLowerCase() === secret.toLowerCase() : undefined,
+        entryKeys: Object.keys(payload.entries),
+      };
+    } catch (e) {
+      return { ok: false, hasSeed: false, entryKeys: [], error: e instanceof Error ? e.message : String(e) };
     }
   }
 

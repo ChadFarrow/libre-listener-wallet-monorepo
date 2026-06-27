@@ -104,3 +104,60 @@ describe("LibreListenerWallet export/import round-trip", () => {
     await expect(wB.importState(blob, seedHex)).rejects.toThrow(/network mismatch/);
   });
 });
+
+// v2 passphrase+seed dual-wrap. Construct-only (no start()/WASM): exportState
+// reads ldk_seed straight from storage, so we seed it manually.
+describe("export/import v2 (passphrase + seed)", () => {
+  const seedHex = "33".repeat(32);
+  const passphrase = "a-strong-passphrase-123";
+  const config = { network: "regtest" as const, esploraUrl };
+
+  function seeded(): Map<string, string> {
+    const db = new Map<string, string>();
+    db.set("ldk_seed", seedHex);
+    db.set("channel_manager", "cafebabe");
+    db.set("ldk_keys_index", JSON.stringify(["mon/abc"]));
+    db.set("mon/abc", "0011");
+    db.set("state_version", "5");
+    return db;
+  }
+  const mk = (db: Map<string, string>) =>
+    new LibreListenerWallet({ config, storage: makeStorage(db), socketProvider: noSocket });
+
+  it("restores all entries when importing with the passphrase", async () => {
+    const env = await mk(seeded()).exportState({ passphrase });
+    expect(JSON.parse(env).v).toBe(2);
+    const dbB = new Map<string, string>();
+    await mk(dbB).importState(env, passphrase);
+    expect(dbB.get("ldk_seed")).toBe(seedHex);
+    expect(dbB.get("channel_manager")).toBe("cafebabe");
+    expect(dbB.get("mon/abc")).toBe("0011");
+    expect(dbB.get("state_version")).toBe("5");
+  });
+
+  it("restores when importing with the seed", async () => {
+    const env = await mk(seeded()).exportState({ passphrase });
+    const dbB = new Map<string, string>();
+    await mk(dbB).importState(env, seedHex);
+    expect(dbB.get("ldk_seed")).toBe(seedHex);
+    expect(dbB.get("mon/abc")).toBe("0011");
+  });
+
+  it("verifyBackup reports metadata without writing storage", async () => {
+    const env = await mk(seeded()).exportState({ passphrase });
+    const probe = new Map<string, string>();
+    const res = await mk(probe).verifyBackup(env, passphrase);
+    expect(res.ok).toBe(true);
+    expect(res.hasSeed).toBe(true);
+    expect(res.network).toBe("regtest");
+    expect(res.entryKeys).toContain("channel_manager");
+    expect(probe.has("ldk_seed")).toBe(false);
+  });
+
+  it("verifyBackup reports failure on the wrong secret", async () => {
+    const env = await mk(seeded()).exportState({ passphrase });
+    const res = await mk(new Map()).verifyBackup(env, "wrong-passphrase");
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/wrong secret or corrupt/);
+  });
+});

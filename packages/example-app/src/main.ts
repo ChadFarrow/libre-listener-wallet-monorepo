@@ -72,12 +72,17 @@ import type { AppContext } from "./core/app-context";
 import { initWebPush } from "./web-push";
 import { initNwcUi, setNwcEnabled, updateNwcConnectionsList } from "./nwc-ui";
 import { initV4V, setV4VEnabled } from "./v4v";
+import { ensurePersistentStorage } from "./core/persistent-storage";
 const storage = new IndexedDBStorageProvider();
 
 // 3. Logger helper to update UI terminal console
 // 4. Wallet Lifecycle State
 let wallet: LibreListenerWallet | null = null;
 let isNodeRunning = false;
+// Seed shown to the user but not yet created (Create New Wallet → Create Wallet).
+let pendingSeed: string | null = null;
+// Set when a wallet was just created, so the next start runs the backup check.
+let justCreated = false;
 // Set when the wallet is auto-started on page load, so the start handler knows to
 // also auto-connect the peer once the node is running.
 let autoConnectMode = false;
@@ -88,6 +93,7 @@ const ctx: AppContext = { getWallet: () => wallet, isRunning: () => isNodeRunnin
 // DOM Elements
 const startNodeBtn = document.getElementById("start-node-btn") as HTMLButtonElement;
 const stopNodeBtn = document.getElementById("stop-node-btn") as HTMLButtonElement;
+const autostartCheckbox = document.getElementById("autostart-checkbox") as HTMLInputElement;
 const walletStatusBadge = document.getElementById("wallet-status-badge") as HTMLSpanElement;
 const seedInput = document.getElementById("seed-input") as HTMLInputElement;
 const toggleSeedBtn = document.getElementById("toggle-seed-btn") as HTMLButtonElement;
@@ -116,7 +122,7 @@ const NETWORK_PRESETS: Record<string, { esplora: string; bridge: string; peer: s
     peer: "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b@45.79.52.207:9735",
   },
   mainnet: {
-    esplora: "https://blockstream.info/api",
+    esplora: "https://mempool.space/api",
     // Point at your own LND/CLN node via a local websockify bridge (browser nodes
     // can't dial out directly). Set these in .env.local (gitignored):
     //   VITE_MAINNET_BRIDGE=ws://127.0.0.1:8085
@@ -152,23 +158,37 @@ networkSelect.addEventListener("change", () => {
       lspConnStrInput.value = preset.peer;
     }
   } catch {}
+  let hasWallet = false;
   try {
     const storedSeed = await storage.getItem("ldk_seed");
     if (storedSeed && /^[0-9a-fA-F]{64}$/.test(storedSeed)) {
       seedInput.value = storedSeed;
       restoreBanner.classList.add("hidden");
       appendLog("[SYSTEM] Restored existing wallet seed and network from storage.", "system");
+      hasWallet = true;
     } else {
       // Fresh/wiped browser — guide the user to restore from their backup file.
       restoreBanner.classList.remove("hidden");
     }
   } catch {}
 
-  // Auto-start on load is intentionally disabled: a fresh page firing a full mainnet
-  // sync on every reload trips public-Esplora rate limits (429 Too Many Requests).
-  // Click Start manually instead. (Drive still silently re-auths — that's harmless.)
+  // Auto-start on load (default on; persisted). A wallet should just run. The
+  // off-switch matters because a fresh page firing a full mainnet sync on every
+  // reload can trip public-Esplora rate limits (429) — turn it off if that bites.
+  const autostart = localStorage.getItem("libre_autostart") !== "0"; // default on
+  autostartCheckbox.checked = autostart;
+  if (autostart && hasWallet) {
+    autoConnectMode = true; // also reconnect the configured peer after start
+    appendLog("[SYSTEM] Auto-starting node…", "system");
+    startNodeBtn.click();
+  }
+
   tryAutoConnectDrive();
 })();
+
+autostartCheckbox.addEventListener("change", () => {
+  localStorage.setItem("libre_autostart", autostartCheckbox.checked ? "1" : "0");
+});
 const peersCountVal = document.getElementById("peers-count") as HTMLSpanElement;
 
 const connectLspBtn = document.getElementById("connect-lsp-btn") as HTMLButtonElement;
@@ -208,6 +228,10 @@ const connectDriveBtn = document.getElementById("connect-drive-btn") as HTMLButt
 const backupDriveNowBtn = document.getElementById("backup-drive-now-btn") as HTMLButtonElement;
 const driveStatusEl = document.getElementById("drive-status") as HTMLSpanElement;
 const restoreDriveBtn = document.getElementById("restore-drive-btn") as HTMLButtonElement;
+const createWalletFields = document.getElementById("create-wallet-fields") as HTMLDivElement;
+const seedSavedCheckbox = document.getElementById("seed-saved-checkbox") as HTMLInputElement;
+const createWalletBtn = document.getElementById("create-wallet-btn") as HTMLButtonElement;
+const createWalletStatus = document.getElementById("create-wallet-status") as HTMLSpanElement;
 
 let driveSyncTimer: any = null;
 let driveSyncing = false;
@@ -249,14 +273,31 @@ initLogControls();
 // 6. Start LDK Node
 startNodeBtn.addEventListener("click", async () => {
   try {
+    // A seed was generated via Create New Wallet but the wallet hasn't been
+    // created yet. Don't let Start bypass the save-seed step.
+    if (pendingSeed) {
+      appendLog(
+        "[ERROR] Finish creating your wallet first: tick ‘I've saved my recovery seed’ and click ‘Create Wallet’. " +
+          "(Reload the page to cancel.)",
+        "error"
+      );
+      return;
+    }
     startNodeBtn.disabled = true;
     appendLog("[SYSTEM] Initializing LibreListenerWallet...", "system");
     appendLog("[SYSTEM] Fetching and compiling LDK WebAssembly...", "system");
 
-    // Save custom seed to localStorage before start
-    const seed = seedInput.value.trim();
-    if (seed.length !== 64) {
-      throw new Error("Seed must be a 32-byte hex string (64 characters)");
+    // Resolve the seed: prefer the field (manual entry / New Wallet), else fall
+    // back to the seed already in storage (e.g. after a passphrase-only restore).
+    let seed = seedInput.value.trim();
+    if (!/^[0-9a-fA-F]{64}$/.test(seed)) {
+      const stored = await storage.getItem("ldk_seed");
+      if (stored && /^[0-9a-fA-F]{64}$/.test(stored)) {
+        seed = stored;
+        seedInput.value = stored;
+      } else {
+        throw new Error("No wallet seed found. Create a New Wallet or restore a backup first.");
+      }
     }
     await storage.setItem("ldk_seed", seed);
 
@@ -340,6 +381,12 @@ startNodeBtn.addEventListener("click", async () => {
     newWalletBtn.disabled = true;
     await updateNwcConnectionsList();
 
+    // For a freshly created wallet, best-effort sync + verify the backup to Drive.
+    if (justCreated) {
+      justCreated = false;
+      await createAndVerifyBackup();
+    }
+
 
     // Display Node ID
     const mgr = wallet.getChannelManager();
@@ -359,6 +406,9 @@ startNodeBtn.addEventListener("click", async () => {
   } catch (err: any) {
     appendLog(`[ERROR] Start failed: ${err.message}`, "error");
     startNodeBtn.disabled = false;
+    // Don't leak post-start intents into a later manual Start if this one failed.
+    justCreated = false;
+    autoConnectMode = false;
   }
 });
 
@@ -368,6 +418,11 @@ stopNodeBtn.addEventListener("click", async () => {
   try {
     stopNodeBtn.disabled = true;
     appendLog("[SYSTEM] Shutting down LDK Node...", "system");
+    // Cancel any debounced Drive upload so it can't fire after teardown.
+    if (driveSyncTimer) {
+      clearTimeout(driveSyncTimer);
+      driveSyncTimer = null;
+    }
     await wallet.stop();
     isNodeRunning = false;
     wallet = null;
@@ -561,8 +616,8 @@ importStateBtn.addEventListener("click", async () => {
     return;
   }
   const seed = seedInput.value.trim();
-  if (seed.length !== 64) {
-    appendLog("[ERROR] Enter your 64-char hex seed above to decrypt the backup.", "error");
+  if (!/^[0-9a-fA-F]{64}$/.test(seed)) {
+    appendLog("[ERROR] Paste your 64-hex seed in the Seed field to decrypt the backup.", "error");
     return;
   }
   try {
@@ -583,40 +638,80 @@ importStateBtn.addEventListener("click", async () => {
   }
 });
 
-// Generate a fresh random LDK seed and clear local state to start a brand-new wallet.
+// Enable "Create Wallet" once the user confirms they saved the seed.
+function updateCreateWalletBtnState(): void {
+  createWalletBtn.disabled = !seedSavedCheckbox.checked;
+}
+seedSavedCheckbox.addEventListener("change", updateCreateWalletBtnState);
+
+// Step 1 — "Create New Wallet": generate + reveal a fresh seed and show the
+// "I saved it" panel. No state is written yet.
 newWalletBtn.addEventListener("click", async () => {
   if (isNodeRunning) {
     appendLog("[ERROR] Stop the node before creating a new wallet.", "error");
     return;
   }
+  // Best-effort durable storage (warn, don't block — persist() is false on plain
+  // localhost windows too; the saved seed is the real safety net).
+  if (!(await ensurePersistentStorage())) {
+    appendLog(
+      "[WARN] Browser did not grant persistent storage. In a normal window your data still survives; in a " +
+        "private/Incognito window it is WIPED when the window closes. Save your seed!",
+      "warn"
+    );
+  }
+  const seedBytes = new Uint8Array(32);
+  crypto.getRandomValues(seedBytes);
+  pendingSeed = Array.from(seedBytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  seedInput.value = pendingSeed;
+  seedInput.type = "text"; // reveal so they can copy it
+  seedSavedCheckbox.checked = false;
+  updateCreateWalletBtnState();
+  createWalletFields.classList.remove("hidden");
+  createWalletStatus.textContent = "Save the seed above, tick the box, then Create Wallet";
+  appendLog("[SYSTEM] New seed generated and shown above. SAVE IT NOW (paper/password manager), then tick the box.", "system");
+});
+
+// Step 2 — "Create Wallet": persist the new wallet, then start the node (which
+// best-effort syncs + verifies the seed-encrypted backup to Drive).
+createWalletBtn.addEventListener("click", async () => {
+  if (!pendingSeed) {
+    appendLog("[ERROR] Click ‘Create New Wallet’ first to generate a seed.", "error");
+    return;
+  }
+  if (!seedSavedCheckbox.checked) {
+    appendLog("[ERROR] Confirm you saved the seed first.", "error");
+    return;
+  }
   try {
     const existing = await storage.getItem("ldk_seed");
-    if (existing) {
-      const confirmed = window.confirm(
-        "Create a new wallet? This erases the current wallet's state from this browser. Make sure you've downloaded an encrypted backup first."
-      );
-      if (!confirmed) {
-        appendLog("[SYSTEM] New wallet cancelled.", "system");
-        return;
-      }
+    if (
+      existing &&
+      !window.confirm("Replace the wallet in this browser? Make sure you have a backup of the current one first.")
+    ) {
+      // Abort cleanly: drop the unsaved new seed, restore the field to the real
+      // wallet seed, and hide the panel so Start isn't blocked by pendingSeed.
+      pendingSeed = null;
+      seedInput.value = existing;
+      seedSavedCheckbox.checked = false;
+      createWalletFields.classList.add("hidden");
+      createWalletStatus.textContent = "—";
+      appendLog("[SYSTEM] New wallet cancelled — existing wallet kept.", "system");
+      return;
     }
-    // Wipe existing wallet state so the new seed boots a clean node.
     await storage.clear();
-    // Generate a fresh 32-byte LDK seed.
-    const seedBytes = new Uint8Array(32);
-    crypto.getRandomValues(seedBytes);
-    const seedHex = Array.from(seedBytes)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    seedInput.value = seedHex;
-    await storage.setItem("ldk_seed", seedHex);
+    await storage.setItem("ldk_seed", pendingSeed);
+    pendingSeed = null; // consumed
+    justCreated = true;
+    createWalletFields.classList.add("hidden");
     nodeIdVal.innerText = "-";
-    appendLog(
-      "[SYSTEM] New wallet seed generated and local state cleared. Back up your seed, then Start Node.",
-      "system"
-    );
+    createWalletStatus.textContent = "Wallet created — starting node…";
+    appendLog("[SYSTEM] Wallet created. Starting node…", "system");
+    startNodeBtn.click(); // auto-start → best-effort Drive backup because justCreated is set
   } catch (e) {
-    appendLog(`[ERROR] New wallet failed: ${e instanceof Error ? e.message : e}`, "error");
+    appendLog(`[ERROR] Create wallet failed: ${e instanceof Error ? e.message : e}`, "error");
   }
 });
 
@@ -653,6 +748,14 @@ function onWalletStateChanged(): void {
       driveSyncTimer = null;
       void uploadBackupToDrive();
     }, 5000);
+  }
+}
+
+// On (re)connecting Drive, push immediately if channel state advanced while we were
+// disconnected — so a state change is never left un-backed-up.
+function maybeCatchUpDriveSync(): void {
+  if (wallet && isNodeRunning && drive.isConnected() && !driveSyncing && wallet.getStateVersion() > loadDriveSyncedVersion()) {
+    void uploadBackupToDrive();
   }
 }
 
@@ -694,6 +797,7 @@ connectDriveBtn.addEventListener("click", async () => {
     await drive.connect(clientId);
     updateDriveStatus();
     appendLog("[SYSTEM] Connected to Google Drive.", "system");
+    maybeCatchUpDriveSync();
   } catch (e) {
     updateDriveStatus("not connected");
     appendLog(`[ERROR] Google Drive connect failed: ${e instanceof Error ? e.message : e}`, "error");
@@ -710,9 +814,44 @@ async function tryAutoConnectDrive(): Promise<void> {
     await drive.connect(clientId, { silent: true });
     updateDriveStatus();
     appendLog("[SYSTEM] Auto-connected to Google Drive.", "system");
+    maybeCatchUpDriveSync();
   } catch {
     updateDriveStatus("not connected");
     appendLog("[SYSTEM] Google Drive: silent reconnect unavailable — click Connect Drive.", "system");
+  }
+}
+
+// Best-effort: if Drive is connected, sync the seed-encrypted backup and verify
+// it re-downloads + decrypts with the seed. Non-blocking — the seed itself is the
+// primary recovery, so a missing Drive connection just prints a reminder.
+async function createAndVerifyBackup(): Promise<void> {
+  if (!wallet) return;
+  const seedHex = (await storage.getItem("ldk_seed")) || "";
+  try {
+    if (!drive.isConnected()) {
+      appendLog("[SYSTEM] Tip: Connect Google Drive to store an encrypted backup of your channel state.", "system");
+      createWalletStatus.textContent = "Wallet running — connect Drive to back up channel state";
+      return;
+    }
+    const env = await wallet.exportState();
+    await drive.uploadBackup(env);
+    const redown = await drive.downloadBackup();
+    if (!redown) {
+      appendLog("[WARN] Backup not found in Drive after upload. Your seed is your recovery — keep it safe.", "warn");
+      createWalletStatus.textContent = "⚠️ Drive backup not verified — keep your seed";
+      return;
+    }
+    const res = await wallet.verifyBackup(redown, seedHex);
+    if (res.ok && res.hasSeed && res.seedMatches !== false) {
+      localStorage.setItem("libre_drive_synced_version", String(wallet.getStateVersion()));
+      appendLog("[SYSTEM] ✅ Backup synced to Drive & verified restorable with your seed.", "system");
+      createWalletStatus.textContent = "✅ Backup verified on Drive";
+    } else {
+      appendLog(`[WARN] Drive backup not verified (${res.error ?? "mismatch"}). Your seed is still your recovery — keep it safe.`, "warn");
+      createWalletStatus.textContent = "⚠️ Drive backup not verified — keep your seed";
+    }
+  } catch (e) {
+    appendLog(`[WARN] Drive backup step failed: ${e instanceof Error ? e.message : e}. Your seed is your recovery — keep it safe.`, "warn");
   }
 }
 
@@ -753,8 +892,8 @@ backupDriveNowBtn.addEventListener("click", () => {
 
 restoreDriveBtn.addEventListener("click", async () => {
   const seed = seedInput.value.trim();
-  if (seed.length !== 64) {
-    appendLog("[ERROR] Enter your 64-char hex seed above to decrypt the Drive backup.", "error");
+  if (!/^[0-9a-fA-F]{64}$/.test(seed)) {
+    appendLog("[ERROR] Paste your 64-hex seed in the Seed field to decrypt the Drive backup.", "error");
     return;
   }
   try {

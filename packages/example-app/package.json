@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "@libre/listener-wallet": "workspace:*",
@@ -13,9 +14,11 @@
     "nostr-tools": "^2.7.2"
   },
   "devDependencies": {
+    "jsdom": "^24.0.0",
     "msw": "^2.14.6",
     "tsup": "^8.0.2",
     "typescript": "^5.4.5",
-    "vite": "^5.2.11"
+    "vite": "^5.2.11",
+    "vitest": "^1.6.0"
   }
 }

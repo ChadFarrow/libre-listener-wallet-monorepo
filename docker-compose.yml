@@ -62,6 +62,8 @@ services:
       --listen=0.0.0.0:9735
       --protocol.zero-conf
       --protocol.option-scid-alias
+      --noseedbackup
+      --accept-keysend
       --debuglevel=info
     ports:
       # strictly bound to localhost for security

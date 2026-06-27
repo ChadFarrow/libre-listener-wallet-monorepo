@@ -18,10 +18,10 @@ if (import.meta.env.DEV) {
 // 1. Browser websocket connection provider for LDK
 class BrowserWebSocketStreamProvider implements WebSocketStreamProvider {
   async connect(address: string, port: number): Promise<WebSocketConnection> {
-    // Bridge browser WebSocket to LND TCP port 9735 via websockify at 127.0.0.1:8081
+    // Bridge browser WebSocket to LND TCP port 9735 via websockify at 127.0.0.1:8091
     const wsUrl =
       (document.getElementById("ws-bridge-url") as HTMLInputElement | null)?.value?.trim() ||
-      "ws://127.0.0.1:8081";
+      "ws://127.0.0.1:8091";
     appendLog(`[SYSTEM] Connecting WebSocket bridge to ${wsUrl} (LND peer at ${address}:${port})...`, "system");
     
     const socket = new WebSocket(wsUrl);
@@ -120,8 +120,10 @@ const restoreBanner = document.getElementById("restore-banner") as HTMLDivElemen
 const NETWORK_PRESETS: Record<string, { esplora: string; bridge: string; peer: string }> = {
   regtest: {
     esplora: "http://127.0.0.1:3002",
-    bridge: "ws://127.0.0.1:8081",
-    peer: "02cee2811b196ef8e7e3beddcf4d9bee63eb4e9edc5c9b9ce211075a90bd0be397@127.0.0.1:9735",
+    bridge: "ws://127.0.0.1:8091",
+    // libre-lnd identity (regenerates if the docker lnd volume is recreated — if
+    // Connect Peer fails, refresh via: docker exec libre-lnd lncli getinfo).
+    peer: "024228161e3c775fba9255f9253b15cfe12b214113fa7f71b28e42543a14c3ce7d@127.0.0.1:9735",
   },
   signet: {
     esplora: "https://mutinynet.com/api",
@@ -364,10 +366,21 @@ startNodeBtn.addEventListener("click", async () => {
     await storage.setItem("ldk_config", JSON.stringify(ldkConfig));
     await setActiveNetwork(selectedNetwork);
 
+    // Do NOT auto-trust any peer for 0-conf. Accepting a channel 0-conf
+    // (min_depth 0) when the LSP opened it non-zero-conf makes lnd reject the
+    // open ("non-zero-conf channel has min depth zero"). Current LSPs open
+    // CONFIRMED channels — the regtest onboarding server opens a non-anchor
+    // channel and mines to confirm; Mutinynet advertises ZeroConf: not supported.
+    // So the listener accepts a normal confirmed channel. (True 0-conf JIT would
+    // require an anchor channel + an LSP that signals zeroconf, and on real
+    // networks the fee negotiation works — that's a future addition.)
+    const trustedZeroConfPeers: string[] = [];
+
     wallet = new LibreListenerWallet({
       config: {
         network: selectedNetwork,
         esploraUrl,
+        trustedZeroConfPeers,
         // Rapid Gossip Sync is disabled in-browser: the LDK RGS server
         // (rapidsync.lightningdevkit.org) sends no CORS headers, so a browser fetch is
         // blocked. Works from Node; in-browser use needs a CORS-enabled RGS proxy.

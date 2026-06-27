@@ -80,8 +80,9 @@ services:
     container_name: libre-websockify
     command: sh -c "pip install websockify && websockify 0.0.0.0:8081 lnd:9735"
     ports:
-      # strictly bound to localhost for security
-      - "127.0.0.1:8081:8081"
+      # strictly bound to localhost for security (host 8091 → container 8081;
+      # 8081 is commonly taken by a local nginx/dev proxy on dev machines)
+      - "127.0.0.1:8091:8081"
     depends_on:
       - lnd
 

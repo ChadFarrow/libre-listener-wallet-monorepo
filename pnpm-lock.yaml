@@ -80,6 +80,34 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@25.9.3)(jsdom@24.1.3)
 
+  packages/libre-lsps2-server:
+    dependencies:
+      '@libre/shared':
+        specifier: workspace:*
+        version: link:../shared
+      cors:
+        specifier: ^2.8.5
+        version: 2.8.6
+      express:
+        specifier: ^4.19.2
+        version: 4.22.2
+    devDependencies:
+      '@types/cors':
+        specifier: ^2.8.17
+        version: 2.8.19
+      '@types/express':
+        specifier: ^4.17.21
+        version: 4.17.25
+      tsup:
+        specifier: ^8.0.2
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@25.9.3)(jsdom@24.1.3)
+
   packages/libre-nwc-push-gateway:
     dependencies:
       '@libre/shared':

@@ -86,6 +86,7 @@ import {
   Result_RecipientOnionFieldsNoneZ_OK,
 } from "lightningdevkit";
 import { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
+import { getSecureRandomBytes } from "./crypto-utils";
 import { EsploraSyncClient } from "./esplora-client";
 import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
@@ -119,16 +120,6 @@ export interface WebSocketStreamProvider {
 }
 
 let isWasmInitialized = false;
-
-function getSecureRandomBytes(len: number): Uint8Array {
-  const bytes = new Uint8Array(len);
-  if (typeof globalThis !== "undefined" && globalThis.crypto && globalThis.crypto.getRandomValues) {
-    globalThis.crypto.getRandomValues(bytes);
-  } else {
-    throw new Error("Secure random bytes generation not supported in this environment");
-  }
-  return bytes;
-}
 
 export class WebSocketDescriptor implements SocketDescriptorInterface {
   id: number;
@@ -203,6 +194,7 @@ export class LibreListenerWallet {
   private nodeAnnTickCount = 0;
   private nextDescriptorId: number = 1;
   private stateVersion: number = 0;
+  private stateListeners: (() => void)[] = [];
   private connectedPeers: Map<string, WebSocketDescriptor> = new Map(); // hex pubkey -> descriptor
   private registryCache?: LspProvider[];
   private eventListeners: ((event: Event) => void)[] = [];
@@ -222,7 +214,7 @@ export class LibreListenerWallet {
     this.logger = options.logger;
     this.wasmBinary = options.wasmBinary;
     this.wasmUrl = options.wasmUrl;
-    this.nwc = new NwcManager(this);
+    this.nwc = new NwcManager(this, { logger: this.logger, storage: this.storage, network: this.config.network });
   }
 
   async start(): Promise<void> {
@@ -564,17 +556,20 @@ export class LibreListenerWallet {
         } else if (name === "Event_OpenChannelRequest") {
           const tempChanId = (event as any).temporary_channel_id;
           const counterparty = (event as any).counterparty_node_id;
-          this.logger?.info("[LDK Event] OpenChannelRequest received. Trying zero-conf accept...");
-          let res = this.channelManager!.accept_inbound_channel_from_trusted_peer_0conf(
-            tempChanId,
-            counterparty,
-            0n
-          );
-          if (!res.is_ok()) {
-            // Counterparty didn't offer zero-conf (e.g. the Mutinynet faucet opens a
-            // normal channel). Accept it as a standard channel; it becomes usable after
-            // the funding tx confirms.
-            this.logger?.info("[LDK Event] Zero-conf unavailable; accepting as a normal channel (awaits confirmation).");
+          const counterpartyHex = bytesToHex(counterparty);
+          let res;
+          if (this.isZeroConfTrusted(counterpartyHex)) {
+            // Trusted LSP/peer: a 0-conf JIT channel is usable immediately.
+            this.logger?.info("[LDK Event] OpenChannelRequest from a trusted peer; trying zero-conf accept...");
+            res = this.channelManager!.accept_inbound_channel_from_trusted_peer_0conf(tempChanId, counterparty, 0n);
+            if (!res.is_ok()) {
+              this.logger?.info("[LDK Event] Zero-conf unavailable; accepting as a normal channel (awaits confirmation).");
+              res = this.channelManager!.accept_inbound_channel(tempChanId, counterparty, 0n);
+            }
+          } else {
+            // Untrusted peer: never 0-conf (double-spend guardrail). Accept a normal,
+            // confirmation-gated channel — still works, just not instant.
+            this.logger?.info("[LDK Event] OpenChannelRequest from an untrusted peer; accepting as a normal channel (no 0-conf).");
             res = this.channelManager!.accept_inbound_channel(tempChanId, counterparty, 0n);
           }
           this.logger?.info(`[LDK Event] accept_inbound_channel result: ${res.is_ok()}`);
@@ -606,12 +601,7 @@ export class LibreListenerWallet {
             .catch((err) =>
               this.logger?.error(`Failed to persist channel_manager: ${err instanceof Error ? err.message : err}`)
             );
-          this.stateVersion++;
-          this.storage
-            .setItem("state_version", String(this.stateVersion))
-            .catch((err) =>
-              this.logger?.error(`Failed to persist state_version: ${err instanceof Error ? err.message : err}`)
-            );
+          this.notifyStateChanged();
         }
       }
       if (this.chainMonitor) {
@@ -685,31 +675,69 @@ export class LibreListenerWallet {
     return this.networkGraph;
   }
 
+  /** Whether 0-conf JIT channels may be accepted from this counterparty (double-spend guard). */
+  private isZeroConfTrusted(counterpartyHex: string): boolean {
+    return (this.config.trustedZeroConfPeers ?? []).includes(counterpartyHex);
+  }
+
+  /** Subscribe to wallet state changes (channel opened, payment sent/claimed, etc.). */
+  onStateChanged(cb: () => void): void {
+    this.stateListeners.push(cb);
+  }
+
+  /** Bump the monotonic state version, persist it, and notify subscribers. */
+  private notifyStateChanged(): void {
+    this.stateVersion++;
+    this.storage
+      .setItem("state_version", String(this.stateVersion))
+      .catch((err) => this.logger?.error(`Failed to persist state_version: ${err instanceof Error ? err.message : err}`));
+    for (const l of this.stateListeners) {
+      try {
+        l();
+      } catch (e) {
+        this.logger?.error(`onStateChanged listener error: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+  }
+
   /**
-   * Create a BOLT11 invoice to receive a payment. Uses the ChannelManager creator, which
-   * automatically embeds route hints for our (possibly unannounced/private) channels — so a
-   * counterparty can pay us even though we're a private node not in the public graph. The
-   * preimage is persisted so the Event_PaymentClaimable handler can claim the payment.
+   * Create a BOLT11 invoice to receive a payment (sats). Returns the invoice string.
    */
-  async createInvoice(amountSats: number, description = "Libre Listener Wallet"): Promise<string> {
+  async createInvoice(amountSats: number, description = "Libre Listener Wallet", expirySeconds = 3600): Promise<string> {
+    const { invoice } = await this.buildInvoice(BigInt(Math.round(amountSats)) * 1000n, description, expirySeconds);
+    this.logger?.info(`[Receive] Created BOLT11 invoice for ${amountSats} sats`);
+    return invoice;
+  }
+
+  /**
+   * Single BOLT11 builder shared by createInvoice / requestLSPS2Invoice / NWC make_invoice.
+   * Uses the ChannelManager creator, which auto-embeds route hints for our (possibly
+   * unannounced/private) channels, so a counterparty can pay a private node. Generates a
+   * preimage if one isn't supplied, and persists it (preimage_<hash>) so the
+   * Event_PaymentClaimable handler can claim the payment. Returns invoice + hash + preimage.
+   */
+  private async buildInvoice(
+    amountMsat: bigint,
+    description: string,
+    expirySeconds: number,
+    preimage?: Uint8Array
+  ): Promise<{ invoice: string; paymentHash: string; preimage: string }> {
     if (!this.channelManager) throw new Error("Wallet not started");
-    const amountMsat = BigInt(Math.round(amountSats)) * 1000n;
-    const preimage = getSecureRandomBytes(32);
-    const paymentHashBuf = await crypto.subtle.digest("SHA-256", preimage as any);
+    const pre = preimage ?? getSecureRandomBytes(32);
+    const paymentHashBuf = await crypto.subtle.digest("SHA-256", pre as any);
     const paymentHashHex = bytesToHex(new Uint8Array(paymentHashBuf));
     const invoiceRes = UtilMethods.constructor_create_invoice_from_channelmanager_with_payment_hash(
       this.channelManager,
       Option_u64Z.constructor_some(amountMsat),
       description,
-      3600,
+      expirySeconds,
       hexToBytes(paymentHashHex),
       Option_u16Z.constructor_some(42)
     );
     if (!invoiceRes.is_ok()) throw new Error("Failed to create BOLT11 invoice");
-    const invoiceStr = (invoiceRes as Result_Bolt11InvoiceSignOrCreationErrorZ_OK).res.to_str();
-    await this.storage.setItem(`preimage_${paymentHashHex}`, bytesToHex(preimage));
-    this.logger?.info(`[Receive] Created BOLT11 invoice for ${amountSats} sats`);
-    return invoiceStr;
+    const invoice = (invoiceRes as Result_Bolt11InvoiceSignOrCreationErrorZ_OK).res.to_str();
+    await this.storage.setItem(`preimage_${paymentHashHex}`, bytesToHex(pre));
+    return { invoice, paymentHash: paymentHashHex, preimage: bytesToHex(pre) };
   }
 
   /**
@@ -1063,28 +1091,10 @@ export class LibreListenerWallet {
       client_node_id: bytesToHex(this.channelManager.get_our_node_id()),
     });
 
-    // 3. Generate BOLT11 Invoice using standard ChannelManager creator
-    // This signs with the real node's key and automatically adds route hints for the active zero-conf channel
-    const invoiceRes = UtilMethods.constructor_create_invoice_from_channelmanager_with_payment_hash(
-      this.channelManager,
-      Option_u64Z.constructor_some(amountMsat),
-      description,
-      3600, // expiry seconds
-      hexToBytes(paymentHashHex),
-      Option_u16Z.constructor_some(42)
-    );
-
-    if (!invoiceRes.is_ok()) {
-      throw new Error("Failed to create BOLT11 invoice using channel manager");
-    }
-
-    const invoiceObj = (invoiceRes as Result_Bolt11InvoiceSignOrCreationErrorZ_OK).res;
-    const invoiceStr = invoiceObj.to_str();
-
+    // 3. Generate the BOLT11 invoice with the same payment hash via the shared builder
+    // (route hints auto-added; preimage persisted for the claim path).
+    const { invoice: invoiceStr } = await this.buildInvoice(amountMsat, description, 3600, preimage);
     this.logger?.info(`[LSPS2] Generated standard JIT invoice: ${invoiceStr}`);
-
-    // Persist invoice preimage/hash mapping if needed for claims
-    await this.storage.setItem(`preimage_${paymentHashHex}`, bytesToHex(preimage));
 
     return invoiceStr;
   }
@@ -1139,6 +1149,7 @@ export class LibreListenerWallet {
     amountSats: number;
     customRecords?: Record<number, string | Uint8Array>;
     retryAttempts?: number;
+    preimage?: Uint8Array;
   }): Promise<{ ok: true; paymentId: string; paymentHash: string } | { ok: false; error: string }> {
     if (!this.isRunning || !this.channelManager) {
       throw new Error("Wallet is not running");
@@ -1149,7 +1160,7 @@ export class LibreListenerWallet {
 
     try {
       const destPubkeyBytes = hexToBytes(destinationPubkey);
-      const preimage = getSecureRandomBytes(32);
+      const preimage = options.preimage ?? getSecureRandomBytes(32);
       const paymentId = getSecureRandomBytes(32);
 
       const paymentHash = await crypto.subtle.digest("SHA-256", preimage as any);

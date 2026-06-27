@@ -345,6 +345,153 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       // Restore Date.now
       Date.now = originalNow;
     });
+
+    it("does not let concurrent requests exceed the daily limit (no TOCTOU race)", async () => {
+      const clientSecretBytes = generateSecretKey();
+      const clientSecretHex = bytesToHex(clientSecretBytes);
+      const clientPubkeyHex = getPublicKey(clientSecretBytes);
+
+      nwc["connections"].push({
+        name: "Race App",
+        clientPubkey: clientPubkeyHex,
+        secret: clientSecretHex,
+        spendingLimitSats: 100,
+        spentTodaySats: 0,
+        lastSpentTimestamp: Date.now(),
+        createdAt: Date.now(),
+        enabled: true,
+        relayUrl: "wss://relay.test.io",
+      });
+      await nwc["saveConnections"]();
+
+      vi.spyOn(wallet, "getChannelManager").mockReturnValue({
+        current_best_block: () => ({ get_height: () => 100, get_block_hash: () => new Uint8Array(32) }),
+        get_our_node_id: () => new Uint8Array(33),
+        list_channels: () => [],
+        send_payment: () => ({ is_ok: () => true }),
+      } as any);
+
+      // Each pay_invoice is worth 60 sats; two of them (120) exceed the 100 cap.
+      vi.spyOn(Bolt11Invoice, "constructor_from_str").mockReturnValue({
+        is_ok: () => true,
+        res: { amount_milli_satoshis: () => Option_u64Z_Some.constructor_some(60000n) },
+      } as any);
+
+      // Distinct payment hash per request so each can resolve independently.
+      const usedHashes: string[] = [];
+      let hashCounter = 0;
+      vi.spyOn(UtilMethods, "constructor_payment_parameters_from_invoice").mockImplementation(() => {
+        const h = new Uint8Array(32);
+        h[0] = ++hashCounter;
+        usedHashes.push(bytesToHex(h));
+        return { is_ok: () => true, res: { get_a: () => h, get_b: () => ({}), get_c: () => ({}) } } as any;
+      });
+      vi.spyOn(Retry, "constructor_attempts").mockReturnValue({} as any);
+
+      await nwc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      const walletPubkeyHex = nwc["walletPubkey"]!;
+
+      const mkEvent = async (id: string) => ({
+        kind: 23194,
+        pubkey: clientPubkeyHex,
+        id: `evt-${id}`,
+        content: await nip04.encrypt(
+          clientSecretHex,
+          walletPubkeyHex,
+          JSON.stringify({ jsonrpc: "2.0", id, method: "pay_invoice", params: { invoice: "lnbc60n..." } })
+        ),
+      });
+      const resolvePayment = (hashHex: string) => {
+        const ev = Object.create(Event_PaymentSent.prototype);
+        ev.payment_hash = hexToBytes(hashHex);
+        ev.payment_preimage = new Uint8Array([7]);
+        wallet["eventListeners"].forEach((l) => l(ev));
+      };
+
+      const e1 = await mkEvent("r1");
+      const e2 = await mkEvent("r2");
+      mockPublish.mockClear();
+      // Fire both concurrently.
+      const p1 = subHandler!(e1);
+      const p2 = subHandler!(e2);
+
+      // Resolve whatever actually got sent (serialized: only the first; racing: both).
+      await new Promise((r) => setTimeout(r, 80));
+      if (usedHashes[0]) resolvePayment(usedHashes[0]);
+      await new Promise((r) => setTimeout(r, 80));
+      if (usedHashes[1]) resolvePayment(usedHashes[1]);
+      await new Promise((r) => setTimeout(r, 80));
+      await Promise.all([p1, p2]);
+
+      const responses = await Promise.all(
+        mockPublish.mock.calls
+          .filter((c) => c[0].kind === 23195)
+          .map(async (c) => JSON.parse(await nip04.decrypt(clientSecretHex, walletPubkeyHex, c[0].content)))
+      );
+      const successes = responses.filter((r) => r.result?.preimage).length;
+      const quota = responses.filter((r) => r.error?.code === "QUOTA_EXCEEDED").length;
+      expect(successes).toBe(1);
+      expect(quota).toBe(1);
+      expect((await nwc.listConnections())[0].spentTodaySats).toBeLessThanOrEqual(100);
+    });
+  });
+
+  describe("make_invoice response — no preimage leak (guardrail)", () => {
+    it("does not include the unpaid-invoice preimage in the make_invoice response", async () => {
+      const clientSecretBytes = generateSecretKey();
+      const clientSecretHex = bytesToHex(clientSecretBytes);
+      const clientPubkeyHex = getPublicKey(clientSecretBytes);
+
+      nwc["connections"].push({
+        name: "Invoice App",
+        clientPubkey: clientPubkeyHex,
+        secret: clientSecretHex,
+        spendingLimitSats: 0,
+        spentTodaySats: 0,
+        lastSpentTimestamp: Date.now(),
+        createdAt: Date.now(),
+        enabled: true,
+        relayUrl: "wss://relay.test.io",
+      });
+      await nwc["saveConnections"]();
+
+      // buildInvoice reads the private channelManager field; createInvoice persists the preimage.
+      (wallet as any).channelManager = {};
+      vi.spyOn(UtilMethods, "constructor_create_invoice_from_channelmanager_with_payment_hash").mockReturnValue({
+        is_ok: () => true,
+        res: { to_str: () => "lnbc10u1pfakeinvoice" },
+      } as any);
+      // make_invoice re-parses the created invoice to report its payment_hash.
+      vi.spyOn(Bolt11Invoice, "constructor_from_str").mockReturnValue({
+        is_ok: () => true,
+        res: { payment_hash: () => new Uint8Array(32) },
+      } as any);
+
+      await nwc.start();
+      await new Promise((r) => setTimeout(r, 50));
+
+      const walletPubkeyHex = nwc["walletPubkey"]!;
+      const payload = JSON.stringify({
+        jsonrpc: "2.0",
+        id: "mk-1",
+        method: "make_invoice",
+        params: { amount: 1000000, description: "test" },
+      });
+      const encrypted = await nip04.encrypt(clientSecretHex, walletPubkeyHex, payload);
+      mockPublish.mockClear();
+      await subHandler!({ kind: 23194, pubkey: clientPubkeyHex, content: encrypted, id: "evt-mk-1" });
+
+      const respCall = mockPublish.mock.calls.find((c) => c[0].kind === 23195)?.[0];
+      expect(respCall).toBeDefined();
+      const plain = await nip04.decrypt(clientSecretHex, walletPubkeyHex, respCall!.content);
+      const obj = JSON.parse(plain);
+      // The invoice + payment_hash are returned, but the preimage (a claim secret for
+      // an as-yet-unpaid invoice) must NOT be sent over the relay.
+      expect(obj.result.invoice).toBe("lnbc10u1pfakeinvoice");
+      expect(obj.result.payment_hash).toBeDefined();
+      expect(obj.result.preimage).toBeUndefined();
+    });
   });
 });
 

@@ -254,6 +254,8 @@ describe("LibreListenerWallet LSPS2 Integration Test Suite", () => {
       config: {
         network: "regtest",
         esploraUrl: "http://127.0.0.1:3002",
+        // The regtest LND is the trusted LSP here, so allow its 0-conf JIT channel.
+        trustedZeroConfPeers: [lspPubkey],
       },
       storage,
       socketProvider: new TCPStreamProvider(),

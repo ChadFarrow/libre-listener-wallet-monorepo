@@ -189,7 +189,8 @@ describe("LibreListenerWallet Keysend Boost (outbound) Integration", () => {
     };
 
     const wallet = new LibreListenerWallet({
-      config: { network: "regtest", esploraUrl: "http://127.0.0.1:3002" },
+      // The regtest LND is the trusted LSP here, so allow its 0-conf JIT channel.
+      config: { network: "regtest", esploraUrl: "http://127.0.0.1:3002", trustedZeroConfPeers: [lspPubkey] },
       storage,
       socketProvider: new TCPStreamProvider(),
       wasmBinary: loadWasmBinary(),

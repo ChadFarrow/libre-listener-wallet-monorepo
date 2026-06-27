@@ -10,6 +10,11 @@ export interface WalletConfig {
   // instead of "Unknown". Only propagates once a public channel is announced.
   // Max 32 bytes (UTF-8); longer names are truncated.
   alias?: string;
+  // Pubkeys (hex) of LSPs/peers from which 0-conf (zero-confirmation) JIT channels
+  // may be accepted. Accepting 0-conf from an unvetted node risks a double-spend, so
+  // any peer NOT in this list gets a normal (confirmed) channel instead. Empty/unset
+  // = never accept 0-conf.
+  trustedZeroConfPeers?: string[];
 }
 
 export interface NWCRequest {

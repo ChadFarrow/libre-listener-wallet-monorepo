@@ -4,7 +4,6 @@ import {
   WebSocketStreamProvider,
   WebSocketConnection,
 } from "@libre/listener-wallet";
-import { calculateSplits } from "@libre/shared";
 
 // Boot MSW browser worker conditionally in development mode to intercept LSP API (9099) requests
 if (import.meta.env.DEV) {
@@ -67,50 +66,24 @@ class BrowserWebSocketStreamProvider implements WebSocketStreamProvider {
 // 2. Browser IndexedDB storage implementation for LDK settings
 import { IndexedDBStorageProvider } from "@libre/listener-wallet";
 import * as drive from "./drive-backup";
+import { appendLog, initLogControls } from "./core/logger";
+import { copyToClipboard } from "./core/ui-helpers";
+import type { AppContext } from "./core/app-context";
+import { initWebPush } from "./web-push";
+import { initNwcUi, setNwcEnabled, updateNwcConnectionsList } from "./nwc-ui";
+import { initV4V, setV4VEnabled } from "./v4v";
 const storage = new IndexedDBStorageProvider();
 
 // 3. Logger helper to update UI terminal console
-const terminalContent = document.getElementById("terminal-content") as HTMLDivElement;
-const logFilter = document.getElementById("log-filter") as HTMLSelectElement;
-
-function appendLog(msg: string, type: "info" | "warn" | "error" | "system" | "ldk-info" | "ldk-debug" | "ldk-trace") {
-  const line = document.createElement("div");
-  line.className = `log-line ${type}`;
-  line.innerText = msg;
-  terminalContent.appendChild(line);
-  
-  // Keep scrolling to the bottom
-  terminalContent.parentElement!.scrollTop = terminalContent.parentElement!.scrollHeight;
-
-  // Filter visibility based on current selection
-  applyLogFilter();
-}
-
-function applyLogFilter() {
-  const filter = logFilter.value;
-  const lines = terminalContent.querySelectorAll(".log-line");
-  lines.forEach((lineNode) => {
-    const el = lineNode as HTMLDivElement;
-    if (filter === "all") {
-      el.style.display = "block";
-    } else if (filter === "error" && el.classList.contains("error")) {
-      el.style.display = "block";
-    } else if (filter === "warn" && el.classList.contains("warn")) {
-      el.style.display = "block";
-    } else if (filter === "info" && (el.classList.contains("info") || el.classList.contains("system") || el.classList.contains("ldk-info"))) {
-      el.style.display = "block";
-    } else {
-      el.style.display = "none";
-    }
-  });
-}
-
 // 4. Wallet Lifecycle State
 let wallet: LibreListenerWallet | null = null;
 let isNodeRunning = false;
 // Set when the wallet is auto-started on page load, so the start handler knows to
 // also auto-connect the peer once the node is running.
 let autoConnectMode = false;
+
+// Live accessors handed to feature modules (see core/app-context.ts).
+const ctx: AppContext = { getWallet: () => wallet, isRunning: () => isNodeRunning };
 
 // DOM Elements
 const startNodeBtn = document.getElementById("start-node-btn") as HTMLButtonElement;
@@ -143,7 +116,7 @@ const NETWORK_PRESETS: Record<string, { esplora: string; bridge: string; peer: s
     peer: "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b@45.79.52.207:9735",
   },
   mainnet: {
-    esplora: "https://mempool.space/api",
+    esplora: "https://blockstream.info/api",
     // Point at your own LND/CLN node via a local websockify bridge (browser nodes
     // can't dial out directly). Set these in .env.local (gitignored):
     //   VITE_MAINNET_BRIDGE=ws://127.0.0.1:8085
@@ -191,13 +164,9 @@ networkSelect.addEventListener("change", () => {
     }
   } catch {}
 
-  // Auto-connect on page load: start the node (which then auto-connects the peer),
-  // and silently re-authorize Google Drive. No-op if there's no saved seed.
-  if (seedInput.value && /^[0-9a-fA-F]{64}$/.test(seedInput.value)) {
-    autoConnectMode = true;
-    appendLog("[SYSTEM] Auto-starting wallet…", "system");
-    startNodeBtn.click();
-  }
+  // Auto-start on load is intentionally disabled: a fresh page firing a full mainnet
+  // sync on every reload trips public-Esplora rate limits (429 Too Many Requests).
+  // Click Start manually instead. (Drive still silently re-auths — that's harmless.)
   tryAutoConnectDrive();
 })();
 const peersCountVal = document.getElementById("peers-count") as HTMLSpanElement;
@@ -217,20 +186,7 @@ const lsps1InvoiceContainer = document.getElementById("lsps1-invoice-container")
 const lsps1InvoiceStr = document.getElementById("lsps1-invoice-str") as HTMLTextAreaElement;
 const copyLsps1InvoiceBtn = document.getElementById("copy-lsps1-invoice-btn") as HTMLButtonElement;
 
-const clearLogsBtn = document.getElementById("clear-logs-btn") as HTMLButtonElement;
-const copyLogsBtn = document.getElementById("copy-logs-btn") as HTMLButtonElement;
 
-// V4V Elements
-const audioPlayer = document.getElementById("audio-player") as HTMLAudioElement;
-const streamRateInput = document.getElementById("stream-rate-input") as HTMLInputElement;
-const streamModeStatus = document.getElementById("stream-mode-status") as HTMLSpanElement;
-const satsStreamedVal = document.getElementById("sats-streamed-val") as HTMLSpanElement;
-
-const boostAmountInput = document.getElementById("boost-amount") as HTMLInputElement;
-const boostMessageInput = document.getElementById("boost-message") as HTMLInputElement;
-const boostSenderName = document.getElementById("boost-sender-name") as HTMLInputElement;
-const boostDestInput = document.getElementById("boost-dest") as HTMLInputElement;
-const sendBoostagramBtn = document.getElementById("send-boostagram-btn") as HTMLButtonElement;
 
 // Receive (create invoice) Elements
 const receiveAmountInput = document.getElementById("receive-amount") as HTMLInputElement;
@@ -241,15 +197,6 @@ const receiveInvoiceStr = document.getElementById("receive-invoice-str") as HTML
 const copyReceiveInvoiceBtn = document.getElementById("copy-receive-invoice-btn") as HTMLButtonElement;
 
 // NWC Elements
-const createNwcBtn = document.getElementById("create-nwc-btn") as HTMLButtonElement;
-const nwcConnNameInput = document.getElementById("nwc-conn-name") as HTMLInputElement;
-const nwcSpendingLimitInput = document.getElementById("nwc-spending-limit") as HTMLInputElement;
-const nwcRelayUrlInput = document.getElementById("nwc-relay-url") as HTMLInputElement;
-const nwcUriContainer = document.getElementById("nwc-uri-container") as HTMLDivElement;
-const nwcUriStr = document.getElementById("nwc-uri-str") as HTMLTextAreaElement;
-const copyNwcUriBtn = document.getElementById("copy-nwc-uri-btn") as HTMLButtonElement;
-const nwcQrImg = document.getElementById("nwc-qr-img") as HTMLImageElement;
-const nwcConnectionsList = document.getElementById("nwc-connections-list") as HTMLDivElement;
 
 // Backup & Recovery Elements
 const exportStateBtn = document.getElementById("export-state-btn") as HTMLButtonElement;
@@ -277,8 +224,6 @@ function resolveClientId(): string {
   return BAKED_CLIENT_ID;
 }
 
-let streamIntervalId: any = null;
-let totalSatsStreamed = 0;
 
 
 // Helper to extract hex node id from byte array
@@ -299,23 +244,7 @@ toggleSeedBtn.addEventListener("click", () => {
   }
 });
 
-clearLogsBtn.addEventListener("click", () => {
-  terminalContent.innerHTML = "";
-  appendLog("[SYSTEM] Console cleared.", "system");
-});
-
-copyLogsBtn.addEventListener("click", async () => {
-  // Copy every log line (regardless of the active filter) as plain text.
-  const lines = Array.from(terminalContent.querySelectorAll(".log-line")).map((el) => el.textContent || "");
-  try {
-    await navigator.clipboard.writeText(lines.join("\n"));
-    appendLog(`[SYSTEM] Copied ${lines.length} log lines to clipboard.`, "system");
-  } catch (e) {
-    appendLog(`[ERROR] Failed to copy logs: ${e instanceof Error ? e.message : e}`, "error");
-  }
-});
-
-logFilter.addEventListener("change", applyLogFilter);
+initLogControls();
 
 // 6. Start LDK Node
 startNodeBtn.addEventListener("click", async () => {
@@ -342,15 +271,10 @@ startNodeBtn.addEventListener("click", async () => {
       config: {
         network: selectedNetwork,
         esploraUrl,
-        // Rapid Gossip Sync populates the network graph so the router can find
-        // multi-hop routes (pay nodes you're not directly channeled to). Only
-        // mainnet/testnet have public RGS servers.
-        rapidGossipSyncUrl:
-          selectedNetwork === "mainnet"
-            ? "https://rapidsync.lightningdevkit.org/snapshot"
-            : selectedNetwork === "testnet"
-            ? "https://rapidsync.lightningdevkit.org/testnet/snapshot"
-            : undefined,
+        // Rapid Gossip Sync is disabled in-browser: the LDK RGS server
+        // (rapidsync.lightningdevkit.org) sends no CORS headers, so a browser fetch is
+        // blocked. Works from Node; in-browser use needs a CORS-enabled RGS proxy.
+        rapidGossipSyncUrl: undefined,
         // Public channels on real networks (e.g. accepting the Mutinynet faucet's
         // announced channel); private on regtest where our LND opens --private.
         announceChannels: selectedNetwork !== "regtest",
@@ -397,6 +321,9 @@ startNodeBtn.addEventListener("click", async () => {
 
     await wallet.start();
     isNodeRunning = true;
+    // Event-driven backup status + Drive auto-sync (replaces 2s polling).
+    wallet.onStateChanged(onWalletStateChanged);
+    onWalletStateChanged();
     appendLog("[SYSTEM] LDK Node running successfully!", "system");
 
     // Update UI Status
@@ -406,9 +333,9 @@ startNodeBtn.addEventListener("click", async () => {
     connectLspBtn.disabled = false;
     requestJitBtn.disabled = false;
     purchaseLsps1Btn.disabled = false;
-    sendBoostagramBtn.disabled = false;
+    setV4VEnabled(true);
     createInvoiceBtn.disabled = false;
-    createNwcBtn.disabled = false;
+    setNwcEnabled(true);
     exportStateBtn.disabled = false;
     newWalletBtn.disabled = true;
     await updateNwcConnectionsList();
@@ -455,27 +382,15 @@ stopNodeBtn.addEventListener("click", async () => {
     connectLspBtn.disabled = true;
     requestJitBtn.disabled = true;
     purchaseLsps1Btn.disabled = true;
-    sendBoostagramBtn.disabled = true;
-    createNwcBtn.disabled = true;
+    setV4VEnabled(false);
+    setNwcEnabled(false);
     exportStateBtn.disabled = true;
     newWalletBtn.disabled = false;
-    nwcUriContainer.classList.add("hidden");
-    nwcConnectionsList.innerHTML = '<div class="empty-list-text text-muted" style="font-size: 0.85rem;">No active pairings yet.</div>';
     nodeIdVal.innerText = "-";
     peersCountVal.innerText = "0";
     jitInvoiceContainer.classList.add("hidden");
     lsps1InvoiceContainer.classList.add("hidden");
 
-    // Reset V4V state
-    audioPlayer.pause();
-    if (streamIntervalId) {
-      clearInterval(streamIntervalId);
-      streamIntervalId = null;
-    }
-    streamModeStatus.innerText = "Inactive";
-    streamModeStatus.className = "value text-warning";
-    totalSatsStreamed = 0;
-    satsStreamedVal.innerText = "0";
 
   } catch (err: any) {
     appendLog(`[ERROR] Stop failed: ${err.message}`, "error");
@@ -551,10 +466,7 @@ requestJitBtn.addEventListener("click", async () => {
   }
 });
 
-copyJitInvoiceBtn.addEventListener("click", () => {
-  navigator.clipboard.writeText(jitInvoiceStr.value);
-  appendLog("[SYSTEM] JIT Invoice copied to clipboard.", "system");
-});
+copyJitInvoiceBtn.addEventListener("click", () => copyToClipboard(jitInvoiceStr.value, "JIT Invoice copied to clipboard."));
 
 createInvoiceBtn.addEventListener("click", async () => {
   if (!wallet || !isNodeRunning) return;
@@ -574,10 +486,7 @@ createInvoiceBtn.addEventListener("click", async () => {
   }
 });
 
-copyReceiveInvoiceBtn.addEventListener("click", () => {
-  navigator.clipboard.writeText(receiveInvoiceStr.value);
-  appendLog("[SYSTEM] Invoice copied to clipboard.", "system");
-});
+copyReceiveInvoiceBtn.addEventListener("click", () => copyToClipboard(receiveInvoiceStr.value, "Invoice copied to clipboard."));
 
 // 10. Purchase LSPS1 Capacity
 purchaseLsps1Btn.addEventListener("click", async () => {
@@ -614,453 +523,14 @@ purchaseLsps1Btn.addEventListener("click", async () => {
   }
 });
 
-copyLsps1InvoiceBtn.addEventListener("click", () => {
-  navigator.clipboard.writeText(lsps1InvoiceStr.value);
-  appendLog("[SYSTEM] LSPS1 Invoice copied to clipboard.", "system");
-});
+copyLsps1InvoiceBtn.addEventListener("click", () => copyToClipboard(lsps1InvoiceStr.value, "LSPS1 Invoice copied to clipboard."));
 
-// 11. V4V Audio Streaming Event Listeners
-audioPlayer.addEventListener("play", () => {
-  if (!wallet || !isNodeRunning) {
-    appendLog("[SYSTEM] Start the LDK Node before playing to enable V4V streaming.", "warn");
-    audioPlayer.pause();
-    return;
-  }
-  
-  appendLog("[V4V] Audio playback started. Beginning streaming micropayments...", "system");
-  streamModeStatus.innerText = "Active";
-  streamModeStatus.className = "value text-success";
-  
-  if (streamIntervalId) clearInterval(streamIntervalId);
-  
-  // Send payments every 10 seconds (for testing convenience)
-  streamIntervalId = setInterval(async () => {
-    if (!wallet || !isNodeRunning) {
-      clearInterval(streamIntervalId);
-      return;
-    }
-    
-    const rateSatsMin = parseInt(streamRateInput.value, 10);
-    const amountSats = Math.max(1, Math.round((rateSatsMin * 10) / 60));
-    
-    appendLog(`[V4V] Streaming ${amountSats} sats (interval: 10s)...`, "info");
-    
-    // Creator pubkey and App Dev pubkey
-    const creatorPubkey = "02bdafbf7a60765a9ab4673350c1b5954449e290f498d1ff3a77c58eb7cebfbf24";
-    const appDevPubkey = "035c6ec9ffea21051515efbb72d2fb07dfb51fa16d78772cc1c9b6348981f185ef";
-    
-    const destinations = [
-      { destinationPubkey: creatorPubkey, share: 90 },
-      { destinationPubkey: appDevPubkey, share: 10 },
-    ];
-    
-    const splits = calculateSplits({
-      destinations,
-      amountSats,
-      boostRecordTemplate: {
-        action: "stream",
-        app_name: "v4vmusic-player",
-        ts: Math.floor(audioPlayer.currentTime),
-      },
-    });
-    
-    const res = await wallet.sendSplitPayments(splits);
-    if (res.ok) {
-      totalSatsStreamed += amountSats;
-      satsStreamedVal.innerText = totalSatsStreamed.toString();
-      appendLog(`[V4V] Successfully streamed ${amountSats} sats split!`, "info");
-    } else {
-      appendLog(`[V4V] Failed streaming split payment: some recipients failed. Check LDK logs.`, "error");
-    }
-  }, 10000);
-});
 
-const stopStreaming = () => {
-  if (streamIntervalId) {
-    clearInterval(streamIntervalId);
-    streamIntervalId = null;
-  }
-  streamModeStatus.innerText = "Inactive";
-  streamModeStatus.className = "value text-warning";
-  appendLog("[V4V] Audio playback paused/stopped. Stopped streaming micropayments.", "system");
-};
 
-audioPlayer.addEventListener("pause", stopStreaming);
-audioPlayer.addEventListener("ended", stopStreaming);
-audioPlayer.addEventListener("error", stopStreaming);
 
-// 12. Send Boostagram Splits
-sendBoostagramBtn.addEventListener("click", async () => {
-  if (!wallet || !isNodeRunning) return;
-  try {
-    sendBoostagramBtn.disabled = true;
-    const amountSats = parseInt(boostAmountInput.value, 10);
-    const message = boostMessageInput.value.trim();
-    const senderName = boostSenderName.value.trim();
-    
-    appendLog(`[V4V] Preparing Boostagram of ${amountSats} sats with message: "${message}"...`, "system");
-
-    const creatorPubkey = "02bdafbf7a60765a9ab4673350c1b5954449e290f498d1ff3a77c58eb7cebfbf24";
-    const appDevPubkey = "035c6ec9ffea21051515efbb72d2fb07dfb51fa16d78772cc1c9b6348981f185ef";
-
-    // If a destination override pubkey is provided, route 100% there (e.g. your
-    // channel peer, the only node you have a route to). Otherwise the demo 90/10 split.
-    const destOverride = boostDestInput.value.trim();
-    const destinations = /^0[0-9a-fA-F]{65}$/.test(destOverride)
-      ? [{ destinationPubkey: destOverride, share: 100 }]
-      : [
-          { destinationPubkey: creatorPubkey, share: 90 },
-          { destinationPubkey: appDevPubkey, share: 10 },
-        ];
-    if (destinations.length === 1) {
-      appendLog(`[V4V] Routing 100% to override destination ${destOverride.substring(0, 12)}...`, "system");
-    }
-    
-    const splits = calculateSplits({
-      destinations,
-      amountSats,
-      boostRecordTemplate: {
-        action: "boost",
-        app_name: "v4vmusic-player",
-        message,
-        sender_name: senderName,
-        ts: Math.floor(audioPlayer.currentTime),
-      },
-    });
-    
-    const res = await wallet.sendSplitPayments(splits);
-    if (res.ok) {
-      appendLog(`[V4V] Boostagram sent successfully! Total ${amountSats} sats split:`, "info");
-      for (const r of res.results) {
-        const hash = r.result.ok ? r.result.paymentHash : "N/A";
-        appendLog(` -> ${r.destinationPubkey.substring(0, 8)}... gets ${r.amountSats} sats, status: OK, paymentHash: ${hash}`, "info");
-      }
-    } else {
-      appendLog(`[V4V] Failed to send Boostagram: one or more payments failed.`, "error");
-      for (const r of res.results) {
-        const status = r.result.ok ? "OK" : `Error: ${r.result.error}`;
-        appendLog(` -> ${r.destinationPubkey.substring(0, 8)}... gets ${r.amountSats} sats, status: ${status}`, "error");
-      }
-    }
-  } catch (err: any) {
-    appendLog(`[ERROR] Boostagram sending failed: ${err.message}`, "error");
-  } finally {
-    sendBoostagramBtn.disabled = false;
-    createInvoiceBtn.disabled = false;
-  }
-});
-
-// 13. Nostr Wallet Connect (NWC) Event Listeners & Helpers
-createNwcBtn.addEventListener("click", async () => {
-  if (!wallet || !isNodeRunning) return;
-  try {
-    createNwcBtn.disabled = true;
-    nwcUriContainer.classList.add("hidden");
-    nwcQrImg.classList.add("hidden");
-
-    const name = nwcConnNameInput.value.trim() || "Nostr Client App";
-    const limit = parseInt(nwcSpendingLimitInput.value, 10) || 0;
-    const relayUrl = nwcRelayUrlInput.value.trim() || "wss://relay.getalby.com/v1";
-
-    appendLog(`[NWC] Creating connection pairing: "${name}" with limit: ${limit} sats on relay ${relayUrl}...`, "system");
-    const uri = await wallet.nwc.createConnection(name, {
-      spendingLimitSats: limit,
-      relayUrl,
-    });
-
-    appendLog(`[NWC] Connection created successfully!`, "system");
-    nwcUriStr.value = uri;
-    nwcQrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(uri)}`;
-    nwcQrImg.classList.remove("hidden");
-    nwcUriContainer.classList.remove("hidden");
-
-    await updateNwcConnectionsList();
-  } catch (err: any) {
-    appendLog(`[ERROR] NWC connection creation failed: ${err.message}`, "error");
-  } finally {
-    createNwcBtn.disabled = false;
-  }
-});
-
-copyNwcUriBtn.addEventListener("click", () => {
-  if (!nwcUriStr.value) return;
-  navigator.clipboard.writeText(nwcUriStr.value);
-  appendLog("[SYSTEM] NWC Connection URI copied to clipboard.", "system");
-});
-
-async function updateNwcConnectionsList() {
-  if (!wallet) return;
-  try {
-    const list = await wallet.nwc.listConnections();
-    nwcConnectionsList.innerHTML = "";
-
-    if (list.length === 0) {
-      nwcConnectionsList.innerHTML = '<div class="empty-list-text text-muted" style="font-size: 0.85rem;">No active pairings yet.</div>';
-      return;
-    }
-
-    for (const conn of list) {
-      const item = document.createElement("div");
-      item.className = "connection-item";
-
-      const details = document.createElement("div");
-      details.className = "connection-details";
-
-      const nameEl = document.createElement("div");
-      nameEl.className = "connection-name";
-      nameEl.innerText = conn.name;
-
-      const metaEl = document.createElement("div");
-      metaEl.className = "connection-meta";
-
-      const pubkeyEl = document.createElement("span");
-      pubkeyEl.className = "connection-pubkey";
-      pubkeyEl.innerText = `${conn.clientPubkey.substring(0, 8)}...`;
-      pubkeyEl.title = conn.clientPubkey;
-
-      const limitEl = document.createElement("span");
-      limitEl.className = "connection-limit";
-      const limitStr = conn.spendingLimitSats > 0 
-        ? `Limit: ${conn.spentTodaySats}/${conn.spendingLimitSats} sats`
-        : "Limit: Unlimited";
-      limitEl.innerText = limitStr;
-
-      const relayEl = document.createElement("span");
-      relayEl.className = "connection-relay";
-      relayEl.innerText = `Relay: ${conn.relayUrl}`;
-
-      metaEl.appendChild(pubkeyEl);
-      metaEl.appendChild(limitEl);
-      metaEl.appendChild(relayEl);
-
-      details.appendChild(nameEl);
-      details.appendChild(metaEl);
-
-      const revokeBtn = document.createElement("button");
-      revokeBtn.className = "btn-revoke";
-      revokeBtn.innerText = "Revoke";
-      revokeBtn.addEventListener("click", async () => {
-        try {
-          revokeBtn.disabled = true;
-          appendLog(`[NWC] Revoking connection for ${conn.name}...`, "system");
-          await wallet!.nwc.deleteConnection(conn.clientPubkey);
-          appendLog(`[NWC] Connection revoked.`, "system");
-          await updateNwcConnectionsList();
-        } catch (e: any) {
-          appendLog(`[ERROR] Failed to revoke connection: ${e.message}`, "error");
-          revokeBtn.disabled = false;
-        }
-      });
-
-      item.appendChild(details);
-      item.appendChild(revokeBtn);
-      nwcConnectionsList.appendChild(item);
-    }
-  } catch (err: any) {
-    console.error("Failed to update connections list", err);
-  }
-}
-
-// --- Service Worker & Web Push Registration ---
-const registerPushBtn = document.getElementById("register-push-btn") as HTMLButtonElement;
-const unregisterPushBtn = document.getElementById("unregister-push-btn") as HTMLButtonElement;
-const pushStatusVal = document.getElementById("push-status-val") as HTMLSpanElement;
-const pushGatewayUrlInput = document.getElementById("push-gateway-url") as HTMLInputElement;
-const simulateOfflinePushBtn = document.getElementById("simulate-offline-push-btn") as HTMLButtonElement;
-
-let swRegistration: ServiceWorkerRegistration | null = null;
-
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
-
-async function initServiceWorker() {
-  if ("serviceWorker" in navigator && "PushManager" in window) {
-    try {
-      appendLog("[SYSTEM] Registering Service Worker...", "system");
-      swRegistration = await navigator.serviceWorker.register("/service-worker.js", { type: "module" });
-      appendLog("[SYSTEM] Service Worker registered successfully!", "system");
-
-      const subscription = await swRegistration.pushManager.getSubscription();
-      if (subscription) {
-        pushStatusVal.innerText = "Registered";
-        pushStatusVal.className = "value text-success";
-        registerPushBtn.disabled = true;
-        unregisterPushBtn.disabled = false;
-      }
-    } catch (e: any) {
-      appendLog(`[ERROR] SW registration failed: ${e.message}`, "error");
-    }
-  } else {
-    appendLog("[WARN] Service Worker or Push Notifications are not supported in this browser.", "warn");
-    registerPushBtn.disabled = true;
-  }
-}
-
-initServiceWorker();
-
-registerPushBtn.addEventListener("click", async () => {
-  if (!swRegistration || !wallet) {
-    appendLog("[WARN] Start LDK node first to pairing wallet for push registration.", "warn");
-    return;
-  }
-
-  try {
-    registerPushBtn.disabled = true;
-    appendLog("[SYSTEM] Requesting notification permission...", "system");
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") {
-      throw new Error("Notification permission denied");
-    }
-
-    const gatewayUrl = pushGatewayUrlInput.value.trim().replace(/\/$/, "");
-
-    appendLog(`[Push] Fetching VAPID public key from ${gatewayUrl}...`, "info");
-    const vapidRes = await fetch(`${gatewayUrl}/api/vapid-public-key`);
-    if (!vapidRes.ok) throw new Error("Failed to fetch VAPID key");
-    const { publicKey: vapidPubKey } = await vapidRes.json();
-
-    appendLog("[Push] Subscribing via browser PushManager...", "info");
-    const subscription = await swRegistration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidPubKey)
-    });
-
-    const walletPubkey = wallet.nwc.getWalletPubkey();
-    const relayUrl = nwcRelayUrlInput.value.trim();
-
-    appendLog("[Push] Sending subscription details to gateway...", "info");
-    const regRes = await fetch(`${gatewayUrl}/api/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        walletPubkey,
-        relayUrl,
-        subscription
-      })
-    });
-
-    if (!regRes.ok) {
-      throw new Error("Failed to register subscription with gateway");
-    }
-
-    pushStatusVal.innerText = "Registered";
-    pushStatusVal.className = "value text-success";
-    unregisterPushBtn.disabled = false;
-    appendLog("[Push] Web Push Notification wakeup enabled successfully!", "system");
-
-  } catch (err: any) {
-    appendLog(`[ERROR] Push registration failed: ${err.message}`, "error");
-    registerPushBtn.disabled = false;
-  }
-});
-
-unregisterPushBtn.addEventListener("click", async () => {
-  if (!swRegistration) return;
-  try {
-    unregisterPushBtn.disabled = true;
-    const subscription = await swRegistration.pushManager.getSubscription();
-    if (subscription) {
-      await subscription.unsubscribe();
-
-      if (wallet) {
-        const gatewayUrl = pushGatewayUrlInput.value.trim().replace(/\/$/, "");
-        const walletPubkey = wallet.nwc.getWalletPubkey();
-        const relayUrl = nwcRelayUrlInput.value.trim();
-
-        await fetch(`${gatewayUrl}/api/unregister`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ walletPubkey, relayUrl })
-        });
-      }
-    }
-
-    pushStatusVal.innerText = "Not Registered";
-    pushStatusVal.className = "value text-warning";
-    registerPushBtn.disabled = false;
-    appendLog("[Push] Web Push Notification un-registered.", "system");
-
-  } catch (err: any) {
-    appendLog(`[ERROR] Push unregistration failed: ${err.message}`, "error");
-    unregisterPushBtn.disabled = false;
-  }
-});
-
-simulateOfflinePushBtn.addEventListener("click", async () => {
-  try {
-    simulateOfflinePushBtn.disabled = true;
-
-    const storage = new IndexedDBStorageProvider();
-    const connJson = await storage.getItem("nwc_connections");
-    const connections = connJson ? JSON.parse(connJson) : [];
-    if (connections.length === 0) {
-      throw new Error("Create an NWC Connection (Section 7) first to retrieve active keys.");
-    }
-
-    const conn = connections[connections.length - 1];
-    const clientSecretHex = conn.secret;
-
-    const walletPrivKeyHex = await storage.getItem("nwc_wallet_private_key");
-    if (!walletPrivKeyHex) {
-      throw new Error("Wallet private key not found in storage. Start the node first.");
-    }
-
-    const { getPublicKey: derivePubkey, Relay: NostrRelay, finalizeEvent: nostrFinalize, nip04: nostrNip04 } = await import("nostr-tools");
-
-    const hexToBytesHelper = (hex: string) => {
-      const bytes = new Uint8Array(hex.length / 2);
-      for (let i = 0; i < bytes.length; i++) {
-        bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-      }
-      return bytes;
-    };
-
-    const targetPubkey = derivePubkey(hexToBytesHelper(walletPrivKeyHex));
-    const relayUrl = conn.relayUrl;
-
-    appendLog(`[Simulate] Connecting to Nostr relay: ${relayUrl} to publish NWC request...`, "info");
-    const relay = await NostrRelay.connect(relayUrl);
-
-    const requestPayload = {
-      jsonrpc: "2.0",
-      id: "sim-request-" + Math.floor(Math.random() * 100000),
-      method: "get_balance",
-      params: {}
-    };
-
-    appendLog("[Simulate] Encrypting NWC get_balance request payload...", "info");
-    const encryptedContent = await nostrNip04.encrypt(clientSecretHex, targetPubkey, JSON.stringify(requestPayload));
-
-    const event = {
-      kind: 23194,
-      tags: [["p", targetPubkey]],
-      content: encryptedContent,
-      created_at: Math.floor(Date.now() / 1000)
-    };
-
-    const finalizedEvent = nostrFinalize(event, hexToBytesHelper(clientSecretHex));
-
-    appendLog(`[Simulate] Publishing kind 23194 request to relay. Event ID: ${finalizedEvent.id}`, "info");
-    await relay.publish(finalizedEvent);
-    appendLog("[Simulate] Event published successfully! Closing Nostr connection.", "system");
-    await relay.close();
-
-    appendLog("[SYSTEM] Simulated NWC request event published to relay. Waking up background Service Worker...", "system");
-
-  } catch (err: any) {
-    appendLog(`[ERROR] Simulation failed: ${err.message}`, "error");
-  } finally {
-    simulateOfflinePushBtn.disabled = false;
-  }
-});
+initV4V(ctx);
+initNwcUi(ctx);
+initWebPush(ctx);
 
 // Backup & Recovery Handlers
 exportStateBtn.addEventListener("click", async () => {
@@ -1172,7 +642,19 @@ function refreshBackupStatus() {
     backupStatusEl.className = "value";
   }
 }
-setInterval(refreshBackupStatus, 2000);
+// Fired by wallet.onStateChanged (registered on node start) — no polling. Refreshes the
+// backup indicator and debounces a Drive auto-upload when channel state advances.
+function onWalletStateChanged(): void {
+  refreshBackupStatus();
+  if (!wallet || !isNodeRunning || !drive.isConnected() || driveSyncing) return;
+  if (wallet.getStateVersion() > loadDriveSyncedVersion()) {
+    if (driveSyncTimer) clearTimeout(driveSyncTimer);
+    driveSyncTimer = setTimeout(() => {
+      driveSyncTimer = null;
+      void uploadBackupToDrive();
+    }, 5000);
+  }
+}
 
 copySeedBtn.addEventListener("click", async () => {
   const seed = seedInput.value.trim();
@@ -1268,17 +750,6 @@ backupDriveNowBtn.addEventListener("click", () => {
   void uploadBackupToDrive();
 });
 
-// Auto-upload to Drive (debounced) whenever channel state advances past what's synced.
-setInterval(() => {
-  if (!wallet || !isNodeRunning || !drive.isConnected() || driveSyncing) return;
-  if (wallet.getStateVersion() > loadDriveSyncedVersion()) {
-    if (driveSyncTimer) clearTimeout(driveSyncTimer);
-    driveSyncTimer = setTimeout(() => {
-      driveSyncTimer = null;
-      void uploadBackupToDrive();
-    }, 5000);
-  }
-}, 2000);
 
 restoreDriveBtn.addEventListener("click", async () => {
   const seed = seedInput.value.trim();

@@ -15,37 +15,22 @@ import {
   Bolt11Invoice,
   UtilMethods,
   Retry,
-  Result_Bolt11InvoiceSignOrCreationErrorZ_OK,
   Result_C3Tuple_ThirtyTwoBytesRecipientOnionFieldsRouteParametersZNoneZ_OK,
-  Option_u64Z,
   Option_u64Z_Some,
-  Option_u16Z,
-  Option_ThirtyTwoBytesZ,
   Option_ThirtyTwoBytesZ_Some,
-  RecipientOnionFields,
-  PaymentParameters,
-  RouteParameters,
-  TwoTuple_u64CVec_u8ZZ,
-  Result_RecipientOnionFieldsNoneZ_OK,
   Event,
   Event_PaymentSent,
   Event_PaymentFailed
 } from "lightningdevkit";
 import { bytesToHex, hexToBytes } from "./storage-cache";
-import type { LibreListenerWallet } from "./index";
-
-function getSecureRandomBytes(len: number): Uint8Array {
-  const bytes = new Uint8Array(len);
-  if (typeof globalThis !== "undefined" && globalThis.crypto && globalThis.crypto.getRandomValues) {
-    globalThis.crypto.getRandomValues(bytes);
-  } else {
-    throw new Error("Secure random bytes generation not supported in this environment");
-  }
-  return bytes;
-}
+import { getSecureRandomBytes } from "./crypto-utils";
+import type { LibreListenerWallet, Logger, SecureStorageProvider } from "./index";
 
 export class NwcManager {
   private wallet: LibreListenerWallet;
+  private logger?: Logger;
+  private storage: SecureStorageProvider;
+  private network: string;
   private connections: NwcConnection[] = [];
   private relays: Map<string, Relay> = new Map();
   private subs: Map<string, any> = new Map();
@@ -53,10 +38,15 @@ export class NwcManager {
   private walletPubkey?: string;
   private pendingPayments: Map<string, { resolve: (preimage: string) => void; reject: (err: Error) => void }> = new Map();
   private active: boolean = false;
+  // Per-client request serialization so the spending-limit check-and-update is atomic.
+  private requestChains: Map<string, Promise<void>> = new Map();
   private requestListeners: ((result: { eventId: string; method: string; success: boolean; error?: string }) => void)[] = [];
 
-  constructor(wallet: LibreListenerWallet) {
+  constructor(wallet: LibreListenerWallet, deps: { logger?: Logger; storage: SecureStorageProvider; network: string }) {
     this.wallet = wallet;
+    this.logger = deps.logger;
+    this.storage = deps.storage;
+    this.network = deps.network;
   }
 
   getWalletPubkey(): string | undefined {
@@ -76,13 +66,13 @@ export class NwcManager {
       try {
         listener({ eventId, method, success, error });
       } catch (e) {
-        this.wallet["logger"]?.error(`Error in NwcManager request listener: ${e}`);
+        this.logger?.error(`Error in NwcManager request listener: ${e}`);
       }
     }
   }
 
   async init(): Promise<void> {
-    const storage = this.wallet["storage"];
+    const storage = this.storage;
     
     // Load or generate NWC Wallet key pair
     let nwcPrivHex = await storage.getItem("nwc_wallet_private_key");
@@ -152,7 +142,7 @@ export class NwcManager {
     // If manager is active, immediately establish relay socket connection and subscribe
     if (this.active) {
       this.connectRelay(relayUrl).catch((err) => {
-        this.wallet["logger"]?.error(`Failed to connect to relay ${relayUrl} for new connection: ${err.message}`);
+        this.logger?.error(`Failed to connect to relay ${relayUrl} for new connection: ${err.message}`);
       });
     }
 
@@ -204,7 +194,7 @@ export class NwcManager {
     const uniqueRelays = Array.from(new Set(this.connections.filter((c) => c.enabled).map((c) => c.relayUrl)));
     for (const url of uniqueRelays) {
       this.connectRelay(url).catch((err) => {
-        this.wallet["logger"]?.error(`Failed to connect to relay ${url}: ${err.message}`);
+        this.logger?.error(`Failed to connect to relay ${url}: ${err.message}`);
       });
     }
   }
@@ -229,13 +219,13 @@ export class NwcManager {
   }
 
   private async saveConnections(): Promise<void> {
-    await this.wallet["storage"].setItem("nwc_connections", JSON.stringify(this.connections));
+    await this.storage.setItem("nwc_connections", JSON.stringify(this.connections));
   }
 
   private async connectRelay(relayUrl: string): Promise<void> {
     if (this.relays.has(relayUrl)) return;
 
-    this.wallet["logger"]?.info(`[NWC] Connecting to Nostr relay: ${relayUrl}`);
+    this.logger?.info(`[NWC] Connecting to Nostr relay: ${relayUrl}`);
     const relay = await Relay.connect(relayUrl);
     this.relays.set(relayUrl, relay);
 
@@ -248,9 +238,9 @@ export class NwcManager {
         created_at: Math.floor(Date.now() / 1000),
       }, hexToBytes(this.walletPrivKeyHex!));
       await relay.publish(infoEvent);
-      this.wallet["logger"]?.info(`[NWC] Published NIP-47 info event (kind 13194) to ${relayUrl}`);
+      this.logger?.info(`[NWC] Published NIP-47 info event (kind 13194) to ${relayUrl}`);
     } catch (err: any) {
-      this.wallet["logger"]?.error(`[NWC] Failed to publish NIP-47 info event to ${relayUrl}: ${err.message}`);
+      this.logger?.error(`[NWC] Failed to publish NIP-47 info event to ${relayUrl}: ${err.message}`);
     }
 
     const sub = relay.subscribe([
@@ -263,11 +253,11 @@ export class NwcManager {
         try {
           await this.handleNwcRequest(event, relayUrl);
         } catch (err: any) {
-          this.wallet["logger"]?.error(`Error handling NWC request event: ${err.message}`);
+          this.logger?.error(`Error handling NWC request event: ${err.message}`);
         }
       },
       onclose: (reason) => {
-        this.wallet["logger"]?.warn(`[NWC] Subscription closed for relay ${relayUrl}: ${reason}`);
+        this.logger?.warn(`[NWC] Subscription closed for relay ${relayUrl}: ${reason}`);
       }
     });
 
@@ -275,10 +265,21 @@ export class NwcManager {
   }
 
   private async handleNwcRequest(event: any, relayUrl: string): Promise<void> {
+    // Serialize requests per client so the spending-limit check-and-update is atomic —
+    // concurrent requests from one client must not both pass the limit check before
+    // either records its spend (TOCTOU race).
+    const key = event.pubkey;
+    const prev = this.requestChains.get(key) ?? Promise.resolve();
+    const run = prev.then(() => this.processNwcRequest(event, relayUrl));
+    this.requestChains.set(key, run.catch(() => {}));
+    return run;
+  }
+
+  private async processNwcRequest(event: any, relayUrl: string): Promise<void> {
     // 1. Locate connection object
     const pairing = this.connections.find((c) => c.clientPubkey === event.pubkey && c.enabled);
     if (!pairing) {
-      this.wallet["logger"]?.warn(`[NWC] Ignoring request from unauthorized or disabled sender: ${event.pubkey}`);
+      this.logger?.warn(`[NWC] Ignoring request from unauthorized or disabled sender: ${event.pubkey}`);
       return;
     }
 
@@ -287,7 +288,7 @@ export class NwcManager {
     try {
       plaintext = await nip04.decrypt(this.walletPrivKeyHex!, event.pubkey, event.content);
     } catch (e) {
-      this.wallet["logger"]?.error(`[NWC] Cryptographic decryption failed for request: ${e}`);
+      this.logger?.error(`[NWC] Cryptographic decryption failed for request: ${e}`);
       return;
     }
 
@@ -331,7 +332,7 @@ export class NwcManager {
           color: "#3399ff",
           pubkey: bytesToHex(mgr.get_our_node_id()),
           // NIP-47 expects mainnet/testnet/signet/regtest (not "bitcoin").
-          network: this.wallet["config"].network,
+          network: this.network,
           block_height: bestBlock.get_height(),
           // Block hashes are displayed big-endian; LDK returns internal little-endian.
           block_hash: bytesToHex(Uint8Array.from(bestBlock.get_block_hash()).reverse()),
@@ -354,34 +355,20 @@ export class NwcManager {
         const description = request.params.description || "";
         const expiry = request.params.expiry || 3600;
 
-        const preimage = getSecureRandomBytes(32);
-        const paymentHash = await crypto.subtle.digest("SHA-256", preimage as any);
-        const paymentHashHex = bytesToHex(new Uint8Array(paymentHash));
-
-        const invoiceRes = UtilMethods.constructor_create_invoice_from_channelmanager_with_payment_hash(
-          this.wallet.getChannelManager()!,
-          Option_u64Z.constructor_some(amountMsat),
-          description,
-          expiry,
-          hexToBytes(paymentHashHex),
-          Option_u16Z.constructor_some(42)
-        );
-
-        if (!invoiceRes.is_ok()) {
-          throw new Error("Failed to create BOLT11 invoice via LDK");
-        }
-
-        const invoiceObj = (invoiceRes as Result_Bolt11InvoiceSignOrCreationErrorZ_OK).res;
-        const invoiceStr = invoiceObj.to_str();
-
-        await this.wallet["storage"].setItem(`preimage_${paymentHashHex}`, bytesToHex(preimage));
+        // The wallet owns the single invoice builder (it persists the preimage for claims).
+        const invoiceStr = await this.wallet.createInvoice(Number(amountMsat / 1000n), description, expiry);
+        const parsed = Bolt11Invoice.constructor_from_str(invoiceStr);
+        if (!parsed.is_ok()) throw new Error("Failed to parse created invoice");
+        const paymentHashHex = bytesToHex((parsed as any).res.payment_hash());
 
         const result = {
           type: "incoming",
           invoice: invoiceStr,
           description,
           description_hash: request.params.description_hash || "",
-          preimage: bytesToHex(preimage),
+          // The preimage is a claim secret for an as-yet-unpaid invoice — it is
+          // persisted locally (preimage_<hash>) for the claim path but must NEVER
+          // leave the sandbox over the relay (key-isolation guardrail).
           payment_hash: paymentHashHex,
           amount: Number(amountMsat),
           fees_paid: 0,
@@ -460,67 +447,34 @@ export class NwcManager {
           return;
         }
 
-        // Generate preimage
-        let keysendPreimage: Uint8Array;
-        if (request.params.preimage) {
-          keysendPreimage = hexToBytes(request.params.preimage);
-        } else {
-          keysendPreimage = getSecureRandomBytes(32);
-        }
+        // Use the client-supplied preimage or generate one; knowing the hash lets us register
+        // the settlement waiter BEFORE initiating (no race with Event_PaymentSent).
+        const keysendPreimage = request.params.preimage ? hexToBytes(request.params.preimage) : getSecureRandomBytes(32);
+        const keysendHashHex = bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", keysendPreimage as any)));
 
-        const keysendPaymentHash = await crypto.subtle.digest("SHA-256", keysendPreimage as any);
-        const keysendPaymentHashHex = bytesToHex(new Uint8Array(keysendPaymentHash));
-
-        // Construct custom TLV records
-        const tlvTuples: TwoTuple_u64CVec_u8ZZ[] = [];
+        // Map NWC tlv_records (hex values) to the wallet's customRecords (raw bytes).
+        const customRecords: Record<number, Uint8Array> = {};
         if (request.params.tlv_records) {
-          const sorted = [...request.params.tlv_records].sort((a, b) => a.type - b.type);
-          for (const item of sorted) {
-            tlvTuples.push(TwoTuple_u64CVec_u8ZZ.constructor_new(BigInt(item.type), hexToBytes(item.value)));
-          }
+          for (const item of request.params.tlv_records) customRecords[item.type] = hexToBytes(item.value);
         }
 
-        let onionFields = RecipientOnionFields.constructor_spontaneous_empty();
-        if (tlvTuples.length > 0) {
-          const onionRes = onionFields.with_custom_tlvs(tlvTuples);
-          if (!onionRes.is_ok()) {
-            throw new Error("Failed to construct custom TLVs on onion fields");
-          }
-          onionFields = (onionRes as Result_RecipientOnionFieldsNoneZ_OK).res;
-        }
-
-        const paymentParams = PaymentParameters.constructor_for_keysend(
-          hexToBytes(destinationPubkey),
-          42,
-          false
-        );
-
-        const routeParams = RouteParameters.constructor_from_payment_params_and_value(
-          paymentParams,
-          amountMsat
-        );
-
-        const paymentId = getSecureRandomBytes(32);
-        const retryStrategy = Retry.constructor_attempts(10);
-
-        const promise = new Promise<string>((resolve, reject) => {
-          this.pendingPayments.set(keysendPaymentHashHex, { resolve, reject });
+        const settled = new Promise<string>((resolve, reject) => {
+          this.pendingPayments.set(keysendHashHex, { resolve, reject });
         });
 
-        const sendRes = this.wallet.getChannelManager()!.send_spontaneous_payment(
-          Option_ThirtyTwoBytesZ.constructor_some(keysendPreimage),
-          onionFields,
-          paymentId,
-          routeParams,
-          retryStrategy
-        );
-
-        if (!sendRes.is_ok()) {
-          this.pendingPayments.delete(keysendPaymentHashHex);
-          throw new Error(`Keysend spontaneous payment failed to initiate: ${(sendRes as any).err?.toString() || "LDK keysend error"}`);
+        // The wallet owns the keysend construction (TLVs, onion, route, send).
+        const sendRes = await this.wallet.sendKeysendPayment({
+          destinationPubkey,
+          amountSats: amtSats,
+          customRecords,
+          preimage: keysendPreimage,
+        });
+        if (!sendRes.ok) {
+          this.pendingPayments.delete(keysendHashHex);
+          throw new Error(`Keysend failed to initiate: ${sendRes.error}`);
         }
 
-        const preimageHex = await promise;
+        const preimageHex = await settled;
 
         // Update spent quota
         pairing.spentTodaySats = spentToday + amtSats;

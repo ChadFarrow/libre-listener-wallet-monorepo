@@ -42,6 +42,37 @@ export interface EsploraSpendInfo {
   status?: EsploraTxStatus;
 }
 
+// Decide which watched txs are "buried" — confirmed on-chain at a height the forward
+// sync loop won't revisit (block_height <= bestHeight) — and group them by height
+// ascending so the caller can confirm them in chain order. Pure; no LDK, no direct network.
+// `fetchStatus` returns null for fetch errors/missing txs (caller logs); null = skip.
+export async function planBuriedConfirmations(
+  watchedTxids: string[],
+  fetchStatus: (txid: string) => Promise<{ confirmed: boolean; block_height?: number } | null>,
+  bestHeight: number,
+): Promise<{ height: number; txids: string[] }[]> {
+  const byHeight = new Map<number, string[]>();
+  for (const txid of watchedTxids) {
+    const status = await fetchStatus(txid);
+    if (!status || !status.confirmed || typeof status.block_height !== "number") continue;
+    if (status.block_height > bestHeight) continue;
+    const h = status.block_height;
+    const group = byHeight.get(h);
+    if (group) group.push(txid);
+    else byHeight.set(h, [txid]);
+  }
+  return [...byHeight.keys()]
+    .sort((a, b) => a - b)
+    .map((height) => ({ height, txids: byHeight.get(height)! }));
+}
+
+// LDK hands txids as raw bytes in internal (little-endian) order; esplora's REST API
+// addresses txs by display (big-endian) hex — the reverse. Convert before any esplora query.
+// (Do NOT use this when feeding a txid back to LDK, e.g. transaction_unconfirmed.)
+export function ldkTxidToDisplay(txidBytes: Uint8Array): string {
+  return bytesToHex(new Uint8Array(txidBytes).reverse());
+}
+
 export class EsploraSyncClient implements FilterInterface {
   private esploraUrl: string;
   private logger?: Logger;
@@ -56,14 +87,14 @@ export class EsploraSyncClient implements FilterInterface {
   // --- FilterInterface implementation ---
 
   register_tx(txid: Uint8Array, script_pubkey: Uint8Array): void {
-    const txidHex = bytesToHex(txid);
+    const txidHex = ldkTxidToDisplay(txid); // display order for esplora lookups
     this.logger?.info(`Registering tx filter: ${txidHex}`);
     this.registeredTxs.set(txidHex, script_pubkey);
   }
 
   register_output(output: WatchedOutput): void {
     const outpoint = output.get_outpoint();
-    const txidHex = bytesToHex(outpoint.get_txid());
+    const txidHex = ldkTxidToDisplay(outpoint.get_txid()); // display order for esplora lookups
     const index = outpoint.get_index();
     const outpointHex = `${txidHex}:${index}`;
     this.logger?.info(`Registering output filter: ${outpointHex}`);
@@ -253,6 +284,54 @@ export class EsploraSyncClient implements FilterInterface {
       }
     }
 
+    // 1.5 Catch-up: confirm watched txs already buried at/below bestHeight.
+    // The forward loop (step 2) only confirms txs whose block is in (bestHeight, tip].
+    // A funding tx registered AFTER its block was synced — instant regtest mining, or
+    // app closed -> funding confirms -> reopen past the block — would otherwise never
+    // confirm, leaving the channel stuck "pending" forever (no channel_ready sent).
+    {
+      const watched = new Set<string>();
+      for (const tuple of [...confirmManager.get_relevant_txids(), ...confirmMonitor.get_relevant_txids()]) {
+        if (!(tuple.get_c() instanceof Option_ThirtyTwoBytesZ_Some)) {
+          watched.add(ldkTxidToDisplay(tuple.get_a())); // esplora display order
+        }
+      }
+      for (const txidHex of this.registeredTxs.keys()) watched.add(txidHex);
+
+      const groups = await planBuriedConfirmations(
+        [...watched],
+        async (txid) => {
+          try {
+            const tx = await this.fetchTx(txid);
+            return tx?.status ?? null;
+          } catch (e) {
+            this.logger?.warn(`Catch-up confirm: failed to fetch tx ${txid}: ${e instanceof Error ? e.message : e}`);
+            return null;
+          }
+        },
+        bestHeight,
+      );
+
+      for (const { height, txids } of groups) {
+        try {
+          const header = hexToBytes(await this.fetchBlockHeader(height));
+          const entries: { pos: number; rawTx: Uint8Array }[] = [];
+          for (const txidHex of txids) {
+            const rawTx = hexToBytes(await this.fetchRawTx(txidHex));
+            const merkle = await this.fetchMerkleProof(txidHex);
+            entries.push({ pos: merkle ? merkle.pos : 0, rawTx });
+          }
+          entries.sort((a, b) => a.pos - b.pos);
+          const txdata = entries.map((e) => TwoTuple_usizeTransactionZ.constructor_new(e.pos, e.rawTx));
+          confirmManager.transactions_confirmed(header, txdata, height);
+          confirmMonitor.transactions_confirmed(header, txdata, height);
+          this.logger?.info(`Catch-up confirmed ${txids.length} buried tx(s) at height ${height}`);
+        } catch (e) {
+          this.logger?.warn(`Catch-up confirm at height ${height} failed: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+    }
+
     // 2. Sync forward block-by-block
     let currentHeight = bestHeight + 1;
     while (currentHeight <= tipHeight) {
@@ -269,7 +348,7 @@ export class EsploraSyncClient implements FilterInterface {
       for (const tuple of [...managerRelevant, ...monitorRelevant]) {
         // If it was previously confirmed, check if it was at or after currentHeight
         // Or if it needs confirmation check
-        activeTxidsToCheck.add(bytesToHex(tuple.get_a()));
+        activeTxidsToCheck.add(ldkTxidToDisplay(tuple.get_a())); // esplora display order
       }
 
       // Add manually registered transactions (e.g. funding transactions)

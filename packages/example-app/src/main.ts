@@ -90,6 +90,8 @@ let isNodeRunning = false;
 let pendingSeed: string | null = null;
 // Set when a wallet was just created, so the next start runs the backup check.
 let justCreated = false;
+// 5s poll handle for the balance/channels view while the node runs.
+let walletViewTimer: any = null;
 // Set when the wallet is auto-started on page load, so the start handler knows to
 // also auto-connect the peer once the node is running.
 let autoConnectMode = false;
@@ -115,6 +117,10 @@ const lspConnStrInput = document.getElementById("lsp-conn-str") as HTMLInputElem
 const lspApiUrlInput = document.getElementById("lsp-api-url") as HTMLInputElement;
 const nodeIdVal = document.getElementById("node-id-val") as HTMLSpanElement;
 const restoreBanner = document.getElementById("restore-banner") as HTMLDivElement;
+const balanceSpendableEl = document.getElementById("balance-spendable") as HTMLSpanElement;
+const balanceReceivableEl = document.getElementById("balance-receivable") as HTMLSpanElement;
+const channelsCountEl = document.getElementById("channels-count") as HTMLSpanElement;
+const channelsListEl = document.getElementById("channels-list") as HTMLDivElement;
 
 // Per-network defaults: switching the Network selector auto-fills sync/bridge/peer fields.
 const NETWORK_PRESETS: Record<string, { esplora: string; bridge: string; peer: string }> = {
@@ -328,6 +334,41 @@ toggleSeedBtn.addEventListener("click", () => {
 initLogControls();
 
 // 6. Start LDK Node
+// Renders balance + channel list with connected/active status. Safe to call any time.
+function refreshWalletView(): void {
+  try {
+    if (!wallet || !isNodeRunning) {
+      balanceSpendableEl.textContent = "0 sats";
+      balanceReceivableEl.textContent = "0 sats";
+      channelsCountEl.textContent = "0";
+      channelsListEl.textContent = "No channels yet";
+      return;
+    }
+    const bal = wallet.getBalance();
+    const chans = wallet.getChannels();
+    balanceSpendableEl.textContent = `${bal.spendableSat} sats`;
+    balanceReceivableEl.textContent = `${bal.receivableSat} sats`;
+    channelsCountEl.textContent = String(chans.length);
+    if (chans.length === 0) {
+      channelsListEl.textContent = "No channels yet";
+      return;
+    }
+    channelsListEl.innerHTML = chans
+      .map((c) => {
+        const badge = c.isUsable
+          ? '<span style="color:#22c55e">● active</span>'
+          : c.isChannelReady
+          ? '<span style="color:#f59e0b">● ready (peer offline)</span>'
+          : '<span style="color:#9ca3af">● pending</span>';
+        return `<div class="status-line"><span class="value">${c.channelId.slice(0, 8)}… ${badge}</span>` +
+          `<span class="value">cap ${c.capacitySat} · send ${c.outboundSendableSat} / recv ${c.inboundSat}</span></div>`;
+      })
+      .join("");
+  } catch (e) {
+    appendLog(`[WARN] refreshWalletView failed: ${e instanceof Error ? e.message : e}`, "warn");
+  }
+}
+
 startNodeBtn.addEventListener("click", async () => {
   try {
     // A seed was generated via Create New Wallet but the wallet hasn't been
@@ -427,6 +468,7 @@ startNodeBtn.addEventListener("click", async () => {
         const peers = wallet.getConnectedPeers();
         peersCountVal.innerText = peers.length.toString();
       }
+      refreshWalletView();
     });
 
     await wallet.start();
@@ -434,6 +476,9 @@ startNodeBtn.addEventListener("click", async () => {
     // Event-driven backup status + Drive auto-sync (replaces 2s polling).
     wallet.onStateChanged(onWalletStateChanged);
     onWalletStateChanged();
+    refreshWalletView();
+    if (walletViewTimer) clearInterval(walletViewTimer);
+    walletViewTimer = setInterval(refreshWalletView, 5000);
     appendLog("[SYSTEM] LDK Node running successfully!", "system");
 
     // Update UI Status
@@ -514,6 +559,11 @@ stopNodeBtn.addEventListener("click", async () => {
     newWalletBtn.disabled = false;
     nodeIdVal.innerText = "-";
     peersCountVal.innerText = "0";
+    if (walletViewTimer) {
+      clearInterval(walletViewTimer);
+      walletViewTimer = null;
+    }
+    refreshWalletView(); // renders zeros / "No channels yet"
     jitInvoiceContainer.classList.add("hidden");
     lsps1InvoiceContainer.classList.add("hidden");
 
@@ -812,6 +862,7 @@ function refreshBackupStatus() {
 // backup indicator and debounces a Drive auto-upload when channel state advances.
 function onWalletStateChanged(): void {
   refreshBackupStatus();
+  refreshWalletView();
   if (!wallet || !isNodeRunning || !drive.isConnected() || driveSyncing) return;
   if (wallet.getStateVersion() > loadDriveSyncedVersion()) {
     if (driveSyncTimer) clearTimeout(driveSyncTimer);

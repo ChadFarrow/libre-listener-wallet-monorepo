@@ -164,6 +164,38 @@ export class WebSocketDescriptor implements SocketDescriptorInterface {
   }
 }
 
+export interface ChannelInfo {
+  channelId: string;
+  counterpartyNodeId: string;
+  capacitySat: number;
+  outboundSendableSat: number;
+  inboundSat: number;
+  isUsable: boolean;
+  isChannelReady: boolean;
+}
+
+// Map one LDK ChannelDetails to a plain ChannelInfo. msat getters are bigint.
+export function mapChannelDetails(cd: ChannelDetails): ChannelInfo {
+  return {
+    channelId: bytesToHex(cd.get_channel_id().get_a()),
+    counterpartyNodeId: bytesToHex(cd.get_counterparty().get_node_id()),
+    capacitySat: Number(cd.get_channel_value_satoshis()),
+    outboundSendableSat: Number(cd.get_outbound_capacity_msat() / 1000n),
+    inboundSat: Number(cd.get_inbound_capacity_msat() / 1000n),
+    isUsable: cd.get_is_usable(),
+    isChannelReady: cd.get_is_channel_ready(),
+  };
+}
+
+// Aggregate spendable/receivable over USABLE channels only.
+export function sumBalance(channels: ChannelInfo[]): { spendableSat: number; receivableSat: number } {
+  const usable = channels.filter((c) => c.isUsable);
+  return {
+    spendableSat: usable.reduce((s, c) => s + c.outboundSendableSat, 0),
+    receivableSat: usable.reduce((s, c) => s + c.inboundSat, 0),
+  };
+}
+
 export class LibreListenerWallet {
   private config: WalletConfig;
   private logger?: Logger;
@@ -943,6 +975,15 @@ export class LibreListenerWallet {
 
   getChannelManager(): ChannelManager | undefined {
     return this.channelManager;
+  }
+
+  getChannels(): ChannelInfo[] {
+    if (!this.isRunning || !this.channelManager) return [];
+    return this.channelManager.list_channels().map(mapChannelDetails);
+  }
+
+  getBalance(): { spendableSat: number; receivableSat: number } {
+    return sumBalance(this.getChannels());
   }
 
   getChainMonitor(): ChainMonitor | undefined {

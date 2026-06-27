@@ -78,4 +78,17 @@ export class IndexedDBStorageProvider implements SecureStorageProvider {
       req.onerror = () => reject(req.error);
     });
   }
+
+  // Enumerate every key in the store — used by app-layer migration to copy a full
+  // legacy DB into a network-scoped one (including preimage_* keys not tracked in
+  // ldk_keys_index).
+  async keys(): Promise<string[]> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(this.storeName, "readonly");
+      const req = tx.objectStore(this.storeName).getAllKeys();
+      req.onsuccess = () => resolve((req.result as IDBValidKey[]).map((k) => String(k)));
+      req.onerror = () => reject(req.error);
+    });
+  }
 }

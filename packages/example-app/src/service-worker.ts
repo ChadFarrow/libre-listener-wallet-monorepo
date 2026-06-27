@@ -1,4 +1,5 @@
 import { LibreListenerWallet, IndexedDBStorageProvider } from "@libre/listener-wallet";
+import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 
 declare const self: any;
 
@@ -30,8 +31,12 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
 
   console.log("[SW] Offline state. Booting LDK Node in background Service Worker...");
 
-  // 2. Fetch configurations from storage
-  const storage = new IndexedDBStorageProvider();
+  // 2. Fetch configurations from storage — read the active network from the meta DB
+  // so we open the correct network-scoped DB (e.g. libre-wallet-mainnet) rather than
+  // the legacy default (libre-wallet).
+  const metaStore = new IndexedDBStorageProvider(META_DB_NAME);
+  const activeNetwork = (await metaStore.getItem(ACTIVE_NETWORK_KEY)) || "regtest";
+  const storage = new IndexedDBStorageProvider(dbNameForNetwork(activeNetwork));
 
   // Read config from IndexedDB if saved
   let configJson = await storage.getItem("ldk_config");

@@ -73,7 +73,14 @@ import { initWebPush } from "./web-push";
 import { initNwcUi, setNwcEnabled, updateNwcConnectionsList } from "./nwc-ui";
 import { initV4V, setV4VEnabled } from "./v4v";
 import { ensurePersistentStorage } from "./core/persistent-storage";
-const storage = new IndexedDBStorageProvider();
+import { dbNameForNetwork, migrateStorage, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
+let storage!: IndexedDBStorageProvider; // assigned in the init IIFE via refreshWalletForNetwork
+
+// Persist the active network to the meta DB so off-page code (SW, simulate-offline)
+// can open the correct network-scoped DB without reading the main app's state.
+async function setActiveNetwork(network: string): Promise<void> {
+  await new IndexedDBStorageProvider(META_DB_NAME).setItem(ACTIVE_NETWORK_KEY, network);
+}
 
 // 3. Logger helper to update UI terminal console
 // 4. Wallet Lifecycle State
@@ -133,6 +140,11 @@ const NETWORK_PRESETS: Record<string, { esplora: string; bridge: string; peer: s
 };
 
 networkSelect.addEventListener("change", () => {
+  // Network determines which wallet DB we use — switching needs a stopped node.
+  if (isNodeRunning) {
+    appendLog("[ERROR] Stop the node before switching networks.", "error");
+    return;
+  }
   const preset = NETWORK_PRESETS[networkSelect.value];
   if (!preset) return;
   esploraUrlInput.value = preset.esplora;
@@ -141,7 +153,54 @@ networkSelect.addEventListener("change", () => {
   try { localStorage.setItem("libre_ui_network", networkSelect.value); } catch {}
   updateNetworkBadge();
   appendLog(`[SYSTEM] Network set to ${networkSelect.value}; sync/bridge/peer fields updated.`, "system");
+  void refreshWalletForNetwork(networkSelect.value);
 });
+
+// Point `storage` at the given network's DB and reflect that wallet in the UI.
+// Returns true if that network already has a wallet seed.
+async function refreshWalletForNetwork(network: string): Promise<boolean> {
+  storage = new IndexedDBStorageProvider(dbNameForNetwork(network));
+  await setActiveNetwork(network);
+  const storedSeed = await storage.getItem("ldk_seed");
+  if (storedSeed && /^[0-9a-fA-F]{64}$/.test(storedSeed)) {
+    seedInput.value = storedSeed;
+    restoreBanner.classList.add("hidden");
+    return true;
+  }
+  seedInput.value = "";
+  restoreBanner.classList.remove("hidden");
+  return false;
+}
+
+// One-time copy of the legacy un-namespaced `libre-wallet` DB into the correct
+// network-scoped DB. Idempotent (localStorage flag + migrateStorage skips a
+// non-empty target). Legacy DB is left intact as a fallback.
+async function migrateLegacyStorageOnce(selectedNetwork: string): Promise<void> {
+  if (localStorage.getItem("libre_ns_migrated") === "1") return;
+  try {
+    const legacy = new IndexedDBStorageProvider("libre-wallet");
+    const legacySeed = await legacy.getItem("ldk_seed");
+    if (legacySeed && /^[0-9a-fA-F]{64}$/.test(legacySeed)) {
+      let net = selectedNetwork;
+      try {
+        const cfg = JSON.parse((await legacy.getItem("ldk_config")) || "{}");
+        if (cfg && typeof cfg.network === "string") net = cfg.network;
+      } catch {}
+      const target = new IndexedDBStorageProvider(dbNameForNetwork(net));
+      const copied = await migrateStorage(legacy, target);
+      appendLog(
+        copied > 0
+          ? `[SYSTEM] Migrated existing wallet into network storage (libre-wallet-${net}, ${copied} keys).`
+          : `[SYSTEM] Existing wallet already present in network storage (libre-wallet-${net}).`,
+        "system"
+      );
+    }
+  } catch (e) {
+    appendLog(`[WARN] Storage migration skipped: ${e instanceof Error ? e.message : e}`, "warn");
+  } finally {
+    localStorage.setItem("libre_ns_migrated", "1");
+  }
+}
 
 // On page load, restore the previously-selected network (+ its preset) and the
 // existing wallet seed from storage, so a reload preserves your wallet and network
@@ -158,19 +217,15 @@ networkSelect.addEventListener("change", () => {
       lspConnStrInput.value = preset.peer;
     }
   } catch {}
-  let hasWallet = false;
-  try {
-    const storedSeed = await storage.getItem("ldk_seed");
-    if (storedSeed && /^[0-9a-fA-F]{64}$/.test(storedSeed)) {
-      seedInput.value = storedSeed;
-      restoreBanner.classList.add("hidden");
-      appendLog("[SYSTEM] Restored existing wallet seed and network from storage.", "system");
-      hasWallet = true;
-    } else {
-      // Fresh/wiped browser — guide the user to restore from their backup file.
-      restoreBanner.classList.remove("hidden");
-    }
-  } catch {}
+  const selectedNetwork = networkSelect.value;
+  // Assign storage up-front so it's never undefined during the (possibly slow,
+  // first-load-only) migration await — a Start click in that window must not throw.
+  storage = new IndexedDBStorageProvider(dbNameForNetwork(selectedNetwork));
+  await migrateLegacyStorageOnce(selectedNetwork);
+  const hasWallet = await refreshWalletForNetwork(selectedNetwork);
+  if (hasWallet) {
+    appendLog("[SYSTEM] Restored existing wallet seed and network from storage.", "system");
+  }
 
   // Auto-start on load (default on; persisted). A wallet should just run. The
   // off-switch matters because a fresh page firing a full mainnet sync on every
@@ -236,7 +291,7 @@ const createWalletStatus = document.getElementById("create-wallet-status") as HT
 let driveSyncTimer: any = null;
 let driveSyncing = false;
 function loadDriveSyncedVersion(): number {
-  const s = localStorage.getItem("libre_drive_synced_version");
+  const s = localStorage.getItem(`libre_drive_synced_version_${networkSelect.value}`);
   const n = s === null ? NaN : parseInt(s, 10);
   return Number.isNaN(n) ? -1 : n;
 }
@@ -307,6 +362,7 @@ startNodeBtn.addEventListener("click", async () => {
     // Save current config to storage so SW can read it
     const ldkConfig = { network: selectedNetwork, esploraUrl };
     await storage.setItem("ldk_config", JSON.stringify(ldkConfig));
+    await setActiveNetwork(selectedNetwork);
 
     wallet = new LibreListenerWallet({
       config: {
@@ -371,6 +427,7 @@ startNodeBtn.addEventListener("click", async () => {
     walletStatusBadge.innerText = "Running";
     walletStatusBadge.className = "badge badge-status running";
     stopNodeBtn.disabled = false;
+    networkSelect.disabled = true;
     connectLspBtn.disabled = false;
     requestJitBtn.disabled = false;
     purchaseLsps1Btn.disabled = false;
@@ -434,6 +491,7 @@ stopNodeBtn.addEventListener("click", async () => {
     walletStatusBadge.className = "badge badge-status stopped";
     startNodeBtn.disabled = false;
     stopNodeBtn.disabled = true;
+    networkSelect.disabled = false;
     connectLspBtn.disabled = true;
     requestJitBtn.disabled = true;
     purchaseLsps1Btn.disabled = true;
@@ -601,7 +659,7 @@ exportStateBtn.addEventListener("click", async () => {
     a.download = `libre-wallet-backup-${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    localStorage.setItem("libre_last_backup_version", String(wallet.getStateVersion()));
+    localStorage.setItem(`libre_last_backup_version_${networkSelect.value}`, String(wallet.getStateVersion()));
     refreshBackupStatus();
     appendLog("[SYSTEM] Encrypted backup downloaded. Keep it and your seed safe.", "system");
   } catch (e) {
@@ -723,7 +781,7 @@ function refreshBackupStatus() {
     return;
   }
   const current = wallet.getStateVersion();
-  const lastStr = localStorage.getItem("libre_last_backup_version");
+  const lastStr = localStorage.getItem(`libre_last_backup_version_${networkSelect.value}`);
   const parsed = lastStr === null ? NaN : parseInt(lastStr, 10);
   const last = Number.isNaN(parsed) ? -1 : parsed;
   if (last < 0) {
@@ -834,8 +892,8 @@ async function createAndVerifyBackup(): Promise<void> {
       return;
     }
     const env = await wallet.exportState();
-    await drive.uploadBackup(env);
-    const redown = await drive.downloadBackup();
+    await drive.uploadBackup(env, networkSelect.value);
+    const redown = await drive.downloadBackup(networkSelect.value);
     if (!redown) {
       appendLog("[WARN] Backup not found in Drive after upload. Your seed is your recovery — keep it safe.", "warn");
       createWalletStatus.textContent = "⚠️ Drive backup not verified — keep your seed";
@@ -843,7 +901,7 @@ async function createAndVerifyBackup(): Promise<void> {
     }
     const res = await wallet.verifyBackup(redown, seedHex);
     if (res.ok && res.hasSeed && res.seedMatches !== false) {
-      localStorage.setItem("libre_drive_synced_version", String(wallet.getStateVersion()));
+      localStorage.setItem(`libre_drive_synced_version_${networkSelect.value}`, String(wallet.getStateVersion()));
       appendLog("[SYSTEM] ✅ Backup synced to Drive & verified restorable with your seed.", "system");
       createWalletStatus.textContent = "✅ Backup verified on Drive";
     } else {
@@ -868,8 +926,8 @@ async function uploadBackupToDrive(): Promise<void> {
   updateDriveStatus("syncing…");
   try {
     const version = wallet.getStateVersion();
-    await drive.uploadBackup(await wallet.exportState());
-    localStorage.setItem("libre_drive_synced_version", String(version));
+    await drive.uploadBackup(await wallet.exportState(), networkSelect.value);
+    localStorage.setItem(`libre_drive_synced_version_${networkSelect.value}`, String(version));
     updateDriveStatus(`synced ✓ (v${version})`);
     appendLog(`[SYSTEM] Backup synced to Google Drive (v${version}).`, "system");
   } catch (e) {
@@ -906,7 +964,7 @@ restoreDriveBtn.addEventListener("click", async () => {
       await drive.connect(clientId);
       updateDriveStatus();
     }
-    const blob = await drive.downloadBackup();
+    const blob = await drive.downloadBackup(networkSelect.value);
     if (!blob) {
       appendLog("[SYSTEM] No backup found in your Google Drive.", "system");
       return;

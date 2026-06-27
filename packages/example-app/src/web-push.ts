@@ -2,6 +2,7 @@
 // plus the "simulate offline request" helper.
 import { appendLog } from "./core/logger";
 import { IndexedDBStorageProvider } from "@libre/listener-wallet";
+import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 import type { AppContext } from "./core/app-context";
 
 function urlBase64ToUint8Array(base64String: string) {
@@ -144,7 +145,9 @@ export function initWebPush(ctx: AppContext) {
     try {
       simulateOfflinePushBtn.disabled = true;
 
-      const storage = new IndexedDBStorageProvider();
+      const metaStore = new IndexedDBStorageProvider(META_DB_NAME);
+      const activeNetwork = (await metaStore.getItem(ACTIVE_NETWORK_KEY)) || "regtest";
+      const storage = new IndexedDBStorageProvider(dbNameForNetwork(activeNetwork));
       const connJson = await storage.getItem("nwc_connections");
       const connections = connJson ? JSON.parse(connJson) : [];
       if (connections.length === 0) {

@@ -4,8 +4,12 @@
 // is short-lived and kept only in memory (never persisted).
 
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
-const BACKUP_FILENAME = "libre-wallet-backup.json";
 const GIS_SRC = "https://accounts.google.com/gsi/client";
+
+// One backup file PER NETWORK so a regtest sync can't clobber the mainnet backup.
+export function backupFilename(network: string): string {
+  return `libre-wallet-backup-${network}.json`;
+}
 
 let accessToken: string | null = null;
 let gisLoaded = false;
@@ -86,8 +90,8 @@ async function driveFetch(url: string, init: RequestInit): Promise<Response> {
   return res;
 }
 
-async function findBackupFileId(): Promise<string | null> {
-  const q = encodeURIComponent(`name='${BACKUP_FILENAME}'`);
+async function findBackupFileId(network: string): Promise<string | null> {
+  const q = encodeURIComponent(`name='${backupFilename(network)}'`);
   const res = await driveFetch(
     `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=files(id)`,
     { method: "GET" }
@@ -96,8 +100,8 @@ async function findBackupFileId(): Promise<string | null> {
   return data.files && data.files.length > 0 ? data.files[0].id : null;
 }
 
-export async function uploadBackup(contents: string): Promise<void> {
-  const existingId = await findBackupFileId();
+export async function uploadBackup(contents: string, network: string): Promise<void> {
+  const existingId = await findBackupFileId(network);
   if (existingId) {
     await driveFetch(
       `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media`,
@@ -105,7 +109,7 @@ export async function uploadBackup(contents: string): Promise<void> {
     );
   } else {
     const boundary = "libreBackupBoundary";
-    const metadata = { name: BACKUP_FILENAME, parents: ["appDataFolder"] };
+    const metadata = { name: backupFilename(network), parents: ["appDataFolder"] };
     const body =
       `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
       `${JSON.stringify(metadata)}\r\n` +
@@ -118,8 +122,8 @@ export async function uploadBackup(contents: string): Promise<void> {
   }
 }
 
-export async function downloadBackup(): Promise<string | null> {
-  const id = await findBackupFileId();
+export async function downloadBackup(network: string): Promise<string | null> {
+  const id = await findBackupFileId(network);
   if (!id) return null;
   const res = await driveFetch(
     `https://www.googleapis.com/drive/v3/files/${id}?alt=media`,

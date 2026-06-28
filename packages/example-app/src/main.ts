@@ -452,8 +452,10 @@ startNodeBtn.addEventListener("click", async () => {
     const esploraUrl = esploraUrlInput.value.trim();
     const selectedNetwork = networkSelect.value as "mainnet" | "testnet" | "regtest" | "signet";
 
-    // Save current config to storage so SW can read it
-    const ldkConfig = { network: selectedNetwork, esploraUrl };
+    // Save current config to storage so the service worker can read it on an offline
+    // push wake-up (it has no DOM). Include the bridge URL so the SW dials the real
+    // (remote) bridge instead of a hardcoded localhost default.
+    const ldkConfig = { network: selectedNetwork, esploraUrl, bridgeUrl: wsBridgeUrlInput.value.trim() };
     await storage.setItem("ldk_config", JSON.stringify(ldkConfig));
     await setActiveNetwork(selectedNetwork);
 

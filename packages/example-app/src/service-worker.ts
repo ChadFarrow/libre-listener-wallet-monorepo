@@ -1,5 +1,6 @@
 import { LibreListenerWallet, IndexedDBStorageProvider } from "@libre/listener-wallet";
 import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
+import { resolveSwConfig } from "./core/sw-config";
 
 declare const self: any;
 
@@ -38,22 +39,21 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
   const activeNetwork = (await metaStore.getItem(ACTIVE_NETWORK_KEY)) || "regtest";
   const storage = new IndexedDBStorageProvider(dbNameForNetwork(activeNetwork));
 
-  // Read config from IndexedDB if saved
-  let configJson = await storage.getItem("ldk_config");
-  let config = {
-    network: "regtest" as const,
-    esploraUrl: "http://127.0.0.1:3002",
-  };
-  if (configJson) {
-    try {
-      config = JSON.parse(configJson);
-    } catch (e) {}
+  // Read config the main app persisted (the SW has no DOM). No localhost defaults —
+  // a deployed SW must use the real remote esplora + bridge from config.
+  const config = resolveSwConfig(await storage.getItem("ldk_config"));
+  if (!config.esploraUrl) {
+    console.error("[SW] No esploraUrl in ldk_config — cannot boot node on push; aborting.");
+    return;
   }
 
   // Create a minimal WebSocket connection provider that uses browser WebSockets inside SW
   const socketProvider = {
     connect: async (host: string, port: number) => {
-      const wsUrl = "ws://127.0.0.1:8081";
+      const wsUrl = config.bridgeUrl;
+      if (!wsUrl) {
+        throw new Error("[SW] No bridgeUrl in ldk_config — cannot connect to peer on push.");
+      }
       console.log(`[SW] SW Connecting WebSocket bridge to ${wsUrl}...`);
       const socket = new WebSocket(wsUrl);
       socket.binaryType = "arraybuffer";
@@ -97,7 +97,10 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
   };
 
   const wallet = new LibreListenerWallet({
-    config,
+    config: {
+      network: config.network as "mainnet" | "testnet" | "regtest" | "signet",
+      esploraUrl: config.esploraUrl,
+    },
     storage,
     socketProvider,
     wasmUrl: "/liblightningjs.wasm",

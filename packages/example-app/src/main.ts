@@ -76,6 +76,7 @@ import { ensurePersistentStorage } from "./core/persistent-storage";
 import { dbNameForNetwork, migrateStorage, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 import { rgsUrlForNetwork } from "./core/rgs-config";
 import { driveButtonView, shouldArmGestureReconnect } from "./core/drive-ui";
+import { assessStartReadiness } from "./core/wallet-readiness";
 let storage!: IndexedDBStorageProvider; // assigned in the init IIFE via refreshWalletForNetwork
 
 // Persist the active network to the meta DB so off-page code (SW, simulate-offline)
@@ -219,15 +220,15 @@ async function migrateLegacyStorageOnce(selectedNetwork: string): Promise<void> 
 // instead of resetting to regtest / the default seed (which Start would overwrite).
 (async () => {
   try {
+    // Default to mainnet (this is a mainnet product); returning users keep their last choice.
     const savedNetwork = localStorage.getItem("libre_ui_network");
-    if (savedNetwork && NETWORK_PRESETS[savedNetwork]) {
-      networkSelect.value = savedNetwork;
-      updateNetworkBadge();
-      const preset = NETWORK_PRESETS[savedNetwork];
-      esploraUrlInput.value = preset.esplora;
-      wsBridgeUrlInput.value = preset.bridge;
-      lspConnStrInput.value = preset.peer;
-    }
+    const initialNetwork = savedNetwork && NETWORK_PRESETS[savedNetwork] ? savedNetwork : "mainnet";
+    networkSelect.value = initialNetwork;
+    updateNetworkBadge();
+    const preset = NETWORK_PRESETS[initialNetwork];
+    esploraUrlInput.value = preset.esplora;
+    wsBridgeUrlInput.value = preset.bridge;
+    lspConnStrInput.value = preset.peer;
   } catch {}
   const selectedNetwork = networkSelect.value;
   // Assign storage up-front so it's never undefined during the (possibly slow,
@@ -244,7 +245,18 @@ async function migrateLegacyStorageOnce(selectedNetwork: string): Promise<void> 
   // reload can trip public-Esplora rate limits (429) — turn it off if that bites.
   const autostart = localStorage.getItem("libre_autostart") !== "0"; // default on
   autostartCheckbox.checked = autostart;
-  if (autostart && hasWallet) {
+  // SAFETY: never auto-start a wallet whose seed exists but channel state is missing and
+  // that wasn't freshly created here — starting + connecting in that state force-closes
+  // channels. Require an explicit restore first.
+  const hasChannelState = !!(await storage.getItem("channel_manager"));
+  const createdNew = (await storage.getItem("wallet_created_new")) === "1";
+  const readiness = assessStartReadiness({ hasSeed: hasWallet, hasChannelState, createdNew });
+  if (readiness.needsRestore) {
+    appendLog(`[WARN] ${readiness.message}`, "warn");
+    restoreBanner.textContent = readiness.message ?? "";
+    restoreBanner.classList.remove("hidden");
+  }
+  if (autostart && readiness.canStart) {
     autoConnectMode = true; // also reconnect the configured peer after start
     appendLog("[SYSTEM] Auto-starting node…", "system");
     startNodeBtn.click();
@@ -447,6 +459,22 @@ startNodeBtn.addEventListener("click", async () => {
         throw new Error("No wallet seed found. Create a New Wallet or restore a backup first.");
       }
     }
+
+    // SAFETY GUARD: refuse to start when a seed has no channel state and this wasn't a
+    // brand-new wallet created here (e.g. a pasted seed, or an incomplete restore).
+    // Starting + connecting would tell the peer "unknown channel" → force-close. Restore first.
+    const startHasChannelState = !!(await storage.getItem("channel_manager"));
+    const startCreatedNew = (await storage.getItem("wallet_created_new")) === "1";
+    const startReadiness = assessStartReadiness({ hasSeed: true, hasChannelState: startHasChannelState, createdNew: startCreatedNew });
+    if (!startReadiness.canStart) {
+      const msg = startReadiness.message ?? "Wallet is not ready to start.";
+      appendLog(`[ERROR] ${msg}`, "error");
+      restoreBanner.textContent = msg;
+      restoreBanner.classList.remove("hidden");
+      startNodeBtn.disabled = false;
+      return;
+    }
+
     await storage.setItem("ldk_seed", seed);
 
     const esploraUrl = esploraUrlInput.value.trim();
@@ -887,6 +915,10 @@ createWalletBtn.addEventListener("click", async () => {
     }
     await storage.clear();
     await storage.setItem("ldk_seed", pendingSeed);
+    // Provenance: this seed was created brand-new here, so it's allowed to bootstrap a
+    // fresh node with no channel state (the safety guard reads this). Cleared once channel
+    // state is persisted (onWalletStateChanged).
+    await storage.setItem("wallet_created_new", "1");
     pendingSeed = null; // consumed
     justCreated = true;
     autoConnectMode = true; // also connect the configured peer after start (mirrors auto-start path)
@@ -927,6 +959,9 @@ function refreshBackupStatus() {
 function onWalletStateChanged(): void {
   refreshBackupStatus();
   refreshWalletView();
+  // Once channel state is persisted, this seed is "established" — drop the fresh-create
+  // provenance so a later missing-state situation is correctly flagged (not bypassed).
+  void storage.getItem("channel_manager").then((cm) => { if (cm) void storage.removeItem("wallet_created_new"); });
   if (!wallet || !isNodeRunning || !drive.isConnected() || driveSyncing) return;
   if (wallet.getStateVersion() > loadDriveSyncedVersion()) {
     if (driveSyncTimer) clearTimeout(driveSyncTimer);

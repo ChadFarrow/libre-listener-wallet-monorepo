@@ -92,6 +92,7 @@ import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
 import { IndexedDBStorageProvider } from "./indexed-db-storage";
 import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayload } from "./state-backup";
+import { reconnectDelayMs } from "./peer-reconnect";
 
 export { IndexedDBStorageProvider };
 
@@ -228,6 +229,10 @@ export class LibreListenerWallet {
   private stateVersion: number = 0;
   private stateListeners: (() => void)[] = [];
   private connectedPeers: Map<string, WebSocketDescriptor> = new Map(); // hex pubkey -> descriptor
+  // Peers we want to keep connected (hex pubkey -> address). Drives auto-reconnect.
+  private desiredPeers: Map<string, { host: string; port: number }> = new Map();
+  private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private reconnectAttempts: Map<string, number> = new Map();
   private registryCache?: LspProvider[];
   private eventListeners: ((event: Event) => void)[] = [];
   public nwc: NwcManager;
@@ -834,6 +839,13 @@ export class LibreListenerWallet {
       this.gossipIntervalId = undefined;
     }
 
+    // Stop auto-reconnect first: cancel pending redials and forget desired peers so the
+    // disconnects below don't schedule new reconnect attempts.
+    for (const timer of this.reconnectTimers.values()) clearTimeout(timer);
+    this.reconnectTimers.clear();
+    this.reconnectAttempts.clear();
+    this.desiredPeers.clear();
+
     // Disconnect peers
     for (const descriptor of this.connectedPeers.values()) {
       descriptor.disconnect_socket();
@@ -1015,6 +1027,9 @@ export class LibreListenerWallet {
 
     this.logger?.info(`Connecting to peer: ${pubkey}@${host}:${port}`);
 
+    // Remember this peer so we keep it connected (auto-reconnect on drop).
+    this.desiredPeers.set(pubkey, { host, port });
+
     // If already connected, do nothing
     if (this.connectedPeers.has(pubkey)) {
       this.logger?.info(`Peer ${pubkey} is already connected`);
@@ -1061,6 +1076,7 @@ export class LibreListenerWallet {
       const initialBytes = (initialBytesResult as Result_CVec_u8ZPeerHandleErrorZ_OK).res;
       descriptorImpl.send_data(initialBytes, false);
       this.connectedPeers.set(pubkey, descriptorImpl);
+      this.reconnectAttempts.delete(pubkey); // healthy connection — reset backoff
       this.logger?.info(`Successfully connected to peer: ${pubkey}`);
     } else {
       descriptorImpl.disconnect_socket();
@@ -1072,12 +1088,45 @@ export class LibreListenerWallet {
     if (this.connectedPeers.get(desc.peerPubkey)?.id === desc.id) {
       this.connectedPeers.delete(desc.peerPubkey);
       this.logger?.info(`Disconnected peer: ${desc.peerPubkey}`);
+      // The current connection for this peer dropped — keep it alive by redialing.
+      this.scheduleReconnect(desc.peerPubkey);
     }
     if (this.peerManager) {
       const sdkDescriptor = SocketDescriptor.new_impl(desc);
       this.peerManager.socket_disconnected(sdkDescriptor);
       this.peerManager.process_events();
     }
+  }
+
+  /**
+   * Schedule a backoff redial of a dropped peer. No-op when auto-reconnect is disabled,
+   * the node is stopped, the peer is no longer desired, it's already reconnected, or a
+   * reconnect is already pending. Reschedules itself (growing backoff) until it succeeds.
+   */
+  private scheduleReconnect(pubkey: string): void {
+    if (this.config.autoReconnectPeers === false) return;
+    if (!this.isRunning) return;
+    const target = this.desiredPeers.get(pubkey);
+    if (!target) return;
+    if (this.connectedPeers.has(pubkey)) return;
+    if (this.reconnectTimers.has(pubkey)) return;
+
+    const attempt = (this.reconnectAttempts.get(pubkey) ?? 0) + 1;
+    this.reconnectAttempts.set(pubkey, attempt);
+    const delay = reconnectDelayMs(attempt);
+    this.logger?.info(`[Reconnect] peer ${pubkey} dropped — retrying in ${delay}ms (attempt ${attempt})`);
+
+    const timer = setTimeout(async () => {
+      this.reconnectTimers.delete(pubkey);
+      if (!this.isRunning || !this.desiredPeers.has(pubkey) || this.connectedPeers.has(pubkey)) return;
+      try {
+        await this.connectPeer(pubkey, target.host, target.port);
+      } catch (e) {
+        this.logger?.warn(`[Reconnect] peer ${pubkey} attempt ${attempt} failed: ${e instanceof Error ? e.message : e}`);
+        this.scheduleReconnect(pubkey); // try again with a longer backoff
+      }
+    }, delay);
+    this.reconnectTimers.set(pubkey, timer);
   }
 
   // --- LSP Discovery Client ---

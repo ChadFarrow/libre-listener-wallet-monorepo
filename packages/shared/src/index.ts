@@ -15,6 +15,10 @@ export interface WalletConfig {
   // any peer NOT in this list gets a normal (confirmed) channel instead. Empty/unset
   // = never accept 0-conf.
   trustedZeroConfPeers?: string[];
+  // Auto-redial channel peers when their connection drops (browser/PWA tabs sleep and
+  // networks flap; a dropped peer silently disables sending). Exponential backoff while
+  // the node runs. Default true; set false to disable.
+  autoReconnectPeers?: boolean;
 }
 
 export interface NWCRequest {

@@ -55,6 +55,18 @@ export function backupFilename(network: string): string {
   return `libre-wallet-backup-${network}.json`;
 }
 
+// Parse the network out of a backup filename, e.g. "libre-wallet-backup-mainnet.json" → "mainnet".
+export function networkFromBackupFilename(name: string): string | null {
+  const m = /^libre-wallet-backup-([a-z]+)\.json$/.exec(name);
+  return m ? m[1] : null;
+}
+
+// When several networks have a backup, choose which to restore: prefer mainnet, else the first.
+export function pickRestoreNetwork(networks: string[]): string | null {
+  if (networks.includes("mainnet")) return "mainnet";
+  return networks[0] ?? null;
+}
+
 let accessToken: string | null = null;
 let gisLoaded = false;
 
@@ -136,6 +148,21 @@ async function driveFetch(url: string, init: RequestInit): Promise<Response> {
   }
   if (!res.ok) throw new Error(`Drive API error ${res.status}: ${await res.text()}`);
   return res;
+}
+
+// List which networks have a backup in the app's Drive folder (no decryption needed) — lets
+// restore auto-detect the network instead of making the user pre-select it.
+export async function listBackupNetworks(): Promise<string[]> {
+  const q = encodeURIComponent("name contains 'libre-wallet-backup-'");
+  const res = await driveFetch(
+    `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=files(name)`,
+    { method: "GET" }
+  );
+  const data = await res.json();
+  const nets = ((data.files || []) as { name: string }[])
+    .map((f) => networkFromBackupFilename(f.name))
+    .filter((n): n is string => !!n);
+  return Array.from(new Set(nets));
 }
 
 async function findBackupFileId(network: string): Promise<string | null> {

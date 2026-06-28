@@ -1174,6 +1174,10 @@ restoreDriveBtn.addEventListener("click", async () => {
     appendLog("[ERROR] Paste your 64-hex seed in the Seed field to decrypt the Drive backup.", "error");
     return;
   }
+  if (isNodeRunning) {
+    appendLog("[ERROR] Stop the node before restoring.", "error");
+    return;
+  }
   try {
     if (!drive.isConnected()) {
       const clientId = resolveClientId();
@@ -1184,14 +1188,39 @@ restoreDriveBtn.addEventListener("click", async () => {
       await connectDrive(clientId);
       updateDriveStatus();
     }
-    const blob = await drive.downloadBackup(networkSelect.value);
+
+    // Auto-detect the network from the backup(s) in Drive — no need to pre-select it.
+    const networks = await drive.listBackupNetworks();
+    const net = drive.pickRestoreNetwork(networks);
+    if (!net) {
+      appendLog("[SYSTEM] No backup found in your Google Drive.", "system");
+      return;
+    }
+    if (networks.length > 1) {
+      appendLog(`[SYSTEM] Found backups for ${networks.join(", ")} — restoring ${net}.`, "system");
+    }
+
+    // Switch the app to the detected network (fill sync/bridge/peer, swap the wallet DB).
+    networkSelect.value = net;
+    const preset = NETWORK_PRESETS[net];
+    if (preset) {
+      esploraUrlInput.value = preset.esplora;
+      wsBridgeUrlInput.value = preset.bridge;
+      lspConnStrInput.value = preset.peer;
+    }
+    try { localStorage.setItem("libre_ui_network", net); } catch {}
+    updateNetworkBadge();
+    await setActiveNetwork(net);
+    storage = new IndexedDBStorageProvider(dbNameForNetwork(net));
+
+    const blob = await drive.downloadBackup(net);
     if (!blob) {
       appendLog("[SYSTEM] No backup found in your Google Drive.", "system");
       return;
     }
     const importWallet = new LibreListenerWallet({
       config: {
-        network: networkSelect.value as "mainnet" | "testnet" | "regtest" | "signet",
+        network: net as "mainnet" | "testnet" | "regtest" | "signet",
         esploraUrl: esploraUrlInput.value.trim(),
       },
       storage,
@@ -1199,7 +1228,8 @@ restoreDriveBtn.addEventListener("click", async () => {
       wasmUrl: `${import.meta.env.BASE_URL}liblightningjs.wasm`,
     });
     await importWallet.importState(blob, seed);
-    appendLog("[SYSTEM] Backup restored from Google Drive. Click Start Node to boot the recovered wallet.", "system");
+    restoreBanner.classList.add("hidden");
+    appendLog(`[SYSTEM] Backup restored from Google Drive (${net}). Click Start Node to boot the recovered wallet.`, "system");
   } catch (e) {
     appendLog(`[ERROR] Restore from Drive failed: ${e instanceof Error ? e.message : e}`, "error");
   }

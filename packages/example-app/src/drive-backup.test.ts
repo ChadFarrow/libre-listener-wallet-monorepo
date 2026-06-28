@@ -1,5 +1,30 @@
 import { describe, it, expect } from "vitest";
-import { buildTokenClientConfig } from "./drive-backup";
+import { buildTokenClientConfig, networkFromBackupFilename, pickRestoreNetwork } from "./drive-backup";
+
+describe("networkFromBackupFilename", () => {
+  it("extracts the network from a backup filename", () => {
+    expect(networkFromBackupFilename("libre-wallet-backup-mainnet.json")).toBe("mainnet");
+    expect(networkFromBackupFilename("libre-wallet-backup-signet.json")).toBe("signet");
+    expect(networkFromBackupFilename("libre-wallet-backup-regtest.json")).toBe("regtest");
+  });
+  it("returns null for unrelated names", () => {
+    expect(networkFromBackupFilename("something-else.json")).toBeNull();
+    expect(networkFromBackupFilename("libre-wallet-backup-.json")).toBeNull();
+  });
+});
+
+describe("pickRestoreNetwork", () => {
+  it("prefers mainnet when present", () => {
+    expect(pickRestoreNetwork(["signet", "mainnet"])).toBe("mainnet");
+  });
+  it("falls back to the only/first network", () => {
+    expect(pickRestoreNetwork(["signet"])).toBe("signet");
+    expect(pickRestoreNetwork(["regtest", "signet"])).toBe("regtest");
+  });
+  it("returns null when there are no backups", () => {
+    expect(pickRestoreNetwork([])).toBeNull();
+  });
+});
 
 describe("buildTokenClientConfig", () => {
   const CLIENT_ID = "abc.apps.googleusercontent.com";

@@ -223,6 +223,30 @@ export class LibreNWCPushGateway {
       }
     });
 
+    // CORS-enabled passthrough for LDK Rapid Gossip Sync snapshots. A browser fetch
+    // against rapidsync.lightningdevkit.org is CORS-blocked (no Access-Control-Allow-Origin),
+    // so the wallet can't populate its network graph (⇒ no multi-hop routing). The SDK
+    // requests `${rapidGossipSyncUrl}/${lastTimestamp}`, so this path takes :timestamp.
+    app.get("/rgs/snapshot/:timestamp", async (req, res) => {
+      const ts = req.params.timestamp;
+      if (!/^\d+$/.test(ts)) {
+        res.status(400).json({ error: "timestamp must be a non-negative integer" });
+        return;
+      }
+      try {
+        const upstream = await fetch(`https://rapidsync.lightningdevkit.org/snapshot/${ts}`);
+        if (!upstream.ok) {
+          res.status(upstream.status).end();
+          return;
+        }
+        const buf = Buffer.from(await upstream.arrayBuffer());
+        res.set("Content-Type", "application/octet-stream").send(buf);
+      } catch (err: any) {
+        console.error("[RGS] proxy failed:", err.message || err);
+        res.status(502).json({ error: "rgs upstream fetch failed" });
+      }
+    });
+
     this.server = app.listen(this.config.port, this.config.host || "127.0.0.1", () => {
       console.log(`[Gateway] HTTP server listening on ${this.config.host || "127.0.0.1"}:${this.config.port}`);
     });

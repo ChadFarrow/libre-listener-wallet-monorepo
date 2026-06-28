@@ -103,6 +103,15 @@
               <span id="channels-count" class="value">0</span>
             </div>
             <div id="channels-list" class="help-text">No channels yet</div>
+            <div class="status-line">
+              <span class="label">Routing graph:</span>
+              <span id="gossip-status" class="value">Graph: 0 channels</span>
+            </div>
+            <button id="sync-gossip-btn" class="btn" disabled>Sync gossip</button>
+            <div class="help-text">
+              Populates the routing graph (mainnet RGS) so multi-hop sends — e.g. v4vmusic
+              boosts to arbitrary artists — can find a route. Warm this before boosting.
+            </div>
           </div>
         </section>
 

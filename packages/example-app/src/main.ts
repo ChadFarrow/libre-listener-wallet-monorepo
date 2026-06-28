@@ -74,6 +74,7 @@ import { initNwcUi, setNwcEnabled, updateNwcConnectionsList } from "./nwc-ui";
 import { initV4V, setV4VEnabled } from "./v4v";
 import { ensurePersistentStorage } from "./core/persistent-storage";
 import { dbNameForNetwork, migrateStorage, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
+import { rgsUrlForNetwork } from "./core/rgs-config";
 let storage!: IndexedDBStorageProvider; // assigned in the init IIFE via refreshWalletForNetwork
 
 // Persist the active network to the meta DB so off-page code (SW, simulate-offline)
@@ -121,6 +122,8 @@ const balanceSpendableEl = document.getElementById("balance-spendable") as HTMLS
 const balanceReceivableEl = document.getElementById("balance-receivable") as HTMLSpanElement;
 const channelsCountEl = document.getElementById("channels-count") as HTMLSpanElement;
 const channelsListEl = document.getElementById("channels-list") as HTMLDivElement;
+const gossipStatusEl = document.getElementById("gossip-status") as HTMLSpanElement;
+const syncGossipBtn = document.getElementById("sync-gossip-btn") as HTMLButtonElement;
 
 // Per-network defaults: switching the Network selector auto-fills sync/bridge/peer fields.
 const NETWORK_PRESETS: Record<string, { esplora: string; bridge: string; peer: string }> = {
@@ -369,6 +372,52 @@ function refreshWalletView(): void {
   }
 }
 
+// Show how many channels the routing graph holds. Multi-hop sends (v4vmusic boosts
+// to arbitrary artists) need a populated graph; a count near zero means routing will
+// fail and the user should Sync gossip first.
+function renderGraphStatus(): void {
+  if (!wallet || !isNodeRunning) {
+    gossipStatusEl.textContent = "Graph: 0 channels";
+    return;
+  }
+  try {
+    const ng = wallet.getNetworkGraph();
+    if (!ng) {
+      gossipStatusEl.textContent = "Graph: unavailable";
+      return;
+    }
+    const readOnly = ng.read_only();
+    const count = readOnly.list_channels().length;
+    readOnly.free(); // ReadOnlyNetworkGraph holds a read lock that must be freed.
+    gossipStatusEl.textContent = `Graph: ${count.toLocaleString()} channels`;
+  } catch (e) {
+    gossipStatusEl.textContent = "Graph: unavailable";
+    appendLog(`[WARN] renderGraphStatus failed: ${e instanceof Error ? e.message : e}`, "warn");
+  }
+}
+
+// Fetch a Rapid Gossip Sync snapshot (via the CORS proxy) and refresh the readout.
+// No-op on non-mainnet (no RGS URL ⇒ syncGossip returns immediately).
+async function syncGossipAndRender(): Promise<void> {
+  if (!wallet || !isNodeRunning) return;
+  try {
+    syncGossipBtn.disabled = true;
+    gossipStatusEl.textContent = "Syncing gossip…";
+    await wallet.syncGossip();
+    renderGraphStatus();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    appendLog(`[WARN] Gossip sync failed: ${msg}`, "warn");
+    gossipStatusEl.textContent = `Sync failed: ${msg}`;
+  } finally {
+    if (wallet && isNodeRunning) syncGossipBtn.disabled = false;
+  }
+}
+
+syncGossipBtn.addEventListener("click", () => {
+  void syncGossipAndRender();
+});
+
 startNodeBtn.addEventListener("click", async () => {
   try {
     // A seed was generated via Create New Wallet but the wallet hasn't been
@@ -422,10 +471,14 @@ startNodeBtn.addEventListener("click", async () => {
         network: selectedNetwork,
         esploraUrl,
         trustedZeroConfPeers,
-        // Rapid Gossip Sync is disabled in-browser: the LDK RGS server
-        // (rapidsync.lightningdevkit.org) sends no CORS headers, so a browser fetch is
-        // blocked. Works from Node; in-browser use needs a CORS-enabled RGS proxy.
-        rapidGossipSyncUrl: undefined,
+        // Rapid Gossip Sync populates the network graph so the router can find
+        // multi-hop routes (e.g. a v4vmusic boost to an arbitrary artist). The LDK
+        // RGS server is CORS-blocked in the browser, so VITE_MAINNET_RGS must point
+        // at a CORS-enabled proxy (the push gateway's /rgs/snapshot route). Mainnet-only.
+        rapidGossipSyncUrl: rgsUrlForNetwork(
+          selectedNetwork,
+          (import.meta as any).env?.VITE_MAINNET_RGS as string | undefined
+        ),
         // Public channels on real networks (e.g. accepting the Mutinynet faucet's
         // announced channel); private on regtest where our LND opens --private.
         announceChannels: selectedNetwork !== "regtest",
@@ -479,6 +532,11 @@ startNodeBtn.addEventListener("click", async () => {
     refreshWalletView();
     if (walletViewTimer) clearInterval(walletViewTimer);
     walletViewTimer = setInterval(refreshWalletView, 5000);
+    syncGossipBtn.disabled = false;
+    renderGraphStatus();
+    // Warm the routing graph in the background so multi-hop sends can find a route.
+    // No-op off mainnet (no RGS URL configured).
+    void syncGossipAndRender();
     appendLog("[SYSTEM] LDK Node running successfully!", "system");
 
     // Update UI Status
@@ -564,6 +622,8 @@ stopNodeBtn.addEventListener("click", async () => {
       walletViewTimer = null;
     }
     refreshWalletView(); // renders zeros / "No channels yet"
+    syncGossipBtn.disabled = true;
+    renderGraphStatus();
     jitInvoiceContainer.classList.add("hidden");
     lsps1InvoiceContainer.classList.add("hidden");
 
@@ -826,6 +886,7 @@ createWalletBtn.addEventListener("click", async () => {
     await storage.setItem("ldk_seed", pendingSeed);
     pendingSeed = null; // consumed
     justCreated = true;
+    autoConnectMode = true; // also connect the configured peer after start (mirrors auto-start path)
     createWalletFields.classList.add("hidden");
     nodeIdVal.innerText = "-";
     createWalletStatus.textContent = "Wallet created — starting node…";

@@ -103,7 +103,7 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
     },
     storage,
     socketProvider,
-    wasmUrl: "/liblightningjs.wasm",
+    wasmUrl: "./liblightningjs.wasm",
     logger: {
       info: (msg, ...args) => console.log("[SW LDK INFO]", msg, ...args),
       warn: (msg, ...args) => console.warn("[SW LDK WARN]", msg, ...args),

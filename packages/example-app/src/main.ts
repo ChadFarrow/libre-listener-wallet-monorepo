@@ -491,7 +491,7 @@ startNodeBtn.addEventListener("click", async () => {
       },
       storage,
       socketProvider: new BrowserWebSocketStreamProvider(),
-      wasmUrl: "/liblightningjs.wasm",
+      wasmUrl: `${import.meta.env.BASE_URL}liblightningjs.wasm`,
       logger: {
         info: (msg: string, ...args: any[]) => {
           console.log(msg, ...args);
@@ -813,7 +813,7 @@ importStateBtn.addEventListener("click", async () => {
       },
       storage,
       socketProvider: new BrowserWebSocketStreamProvider(),
-      wasmUrl: "/liblightningjs.wasm",
+      wasmUrl: `${import.meta.env.BASE_URL}liblightningjs.wasm`,
     });
     await importWallet.importState(blob, seed);
     appendLog("[SYSTEM] Backup restored to storage. Click Start Node to boot the recovered wallet.", "system");
@@ -1161,7 +1161,7 @@ restoreDriveBtn.addEventListener("click", async () => {
       },
       storage,
       socketProvider: new BrowserWebSocketStreamProvider(),
-      wasmUrl: "/liblightningjs.wasm",
+      wasmUrl: `${import.meta.env.BASE_URL}liblightningjs.wasm`,
     });
     await importWallet.importState(blob, seed);
     appendLog("[SYSTEM] Backup restored from Google Drive. Click Start Node to boot the recovered wallet.", "system");

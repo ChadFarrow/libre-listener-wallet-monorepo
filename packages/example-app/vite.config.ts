@@ -47,6 +47,10 @@ function copyLdkWasmPlugin() {
 }
 
 export default defineConfig({
+  // Relative base so the build works at a domain root (Cloudflare) AND a project
+  // subpath (GitHub Pages, e.g. /libre-listener-wallet-monorepo/) with no rebuild.
+  // The SW + WASM paths below are made base-aware to match.
+  base: "./",
   plugins: [copyLdkWasmPlugin()],
   server: {
     port: 5173,

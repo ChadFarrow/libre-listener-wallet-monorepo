@@ -1,0 +1,68 @@
+name: Deploy example-app to GitHub Pages
+
+# Builds the @libre/example-app PWA and publishes the static dist/ to GitHub Pages.
+# Requires (one-time): Settings → Pages → Source = "GitHub Actions", and the VITE_*
+# repository *Variables* below (Settings → Secrets and variables → Actions → Variables).
+# These are non-secret (pubkey / URLs / OAuth client id), so Variables (not Secrets) is fine.
+#   VITE_MAINNET_PEER     e.g. 028ea4...@45.33.65.45:9735
+#   VITE_MAINNET_BRIDGE   wss://ws-bridge-production-9e2f.up.railway.app
+#   VITE_MAINNET_RGS      https://nwc-push-gateway-production.up.railway.app/rgs/snapshot
+#   VITE_GOOGLE_CLIENT_ID your Google OAuth client id
+# Custom domain: also add the domain to packages/example-app/public/CNAME so it
+# persists across deploys (and set it in Settings → Pages → Custom domain).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "packages/example-app/**"
+      - "packages/shared/**"
+      - "packages/libre-listener-wallet/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build workspace deps + example-app
+        env:
+          VITE_MAINNET_PEER: ${{ vars.VITE_MAINNET_PEER }}
+          VITE_MAINNET_BRIDGE: ${{ vars.VITE_MAINNET_BRIDGE }}
+          VITE_MAINNET_RGS: ${{ vars.VITE_MAINNET_RGS }}
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+        run: |
+          pnpm --filter @libre/shared build
+          pnpm --filter @libre/listener-wallet build
+          pnpm --filter @libre/example-app build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/example-app/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

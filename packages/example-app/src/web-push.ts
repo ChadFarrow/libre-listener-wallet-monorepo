@@ -30,7 +30,7 @@ export function initWebPush(ctx: AppContext) {
     if ("serviceWorker" in navigator && "PushManager" in window) {
       try {
         appendLog("[SYSTEM] Registering Service Worker...", "system");
-        swRegistration = await navigator.serviceWorker.register("/service-worker.js", { type: "module" });
+        swRegistration = await navigator.serviceWorker.register(`${import.meta.env.BASE_URL}service-worker.js`, { type: "module" });
         appendLog("[SYSTEM] Service Worker registered successfully!", "system");
 
         const subscription = await swRegistration.pushManager.getSubscription();

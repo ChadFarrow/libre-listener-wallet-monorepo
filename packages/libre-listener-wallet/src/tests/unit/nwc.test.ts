@@ -7,6 +7,7 @@ import { nwcRequestSchema } from "@libre/shared";
 import {
   Event_PaymentSent,
   Event_PaymentFailed,
+  Event_PaymentClaimed,
   Option_ThirtyTwoBytesZ_Some,
   Bolt11Invoice,
   Option_u64Z_Some,
@@ -543,6 +544,13 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       wallet["eventListeners"].forEach((l: any) => l(ev));
     };
 
+    const fireClaimed = (hashHex: string, amountMsat: bigint) => {
+      const ev = Object.create(Event_PaymentClaimed.prototype);
+      ev.payment_hash = hexToBytes(hashHex);
+      ev.amount_msat = amountMsat;
+      wallet["eventListeners"].forEach((l: any) => l(ev));
+    };
+
     const findKind = (kind: number) =>
       mockPublish.mock.calls.map((c) => c[0]).find((e: any) => e.kind === kind);
 
@@ -575,7 +583,7 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       const info = findKind(13194);
       expect(info).toBeDefined();
       expect(info.content).toContain("notifications");
-      expect(info.tags).toContainEqual(["notifications", "payment_sent"]);
+      expect(info.tags).toContainEqual(["notifications", "payment_sent payment_received"]);
     });
 
     it("advertises notifications in the get_info result", async () => {
@@ -588,6 +596,33 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       expect(resp).toBeDefined();
       const obj = JSON.parse(await nip04.decrypt(clientSecretHex, walletPubkeyHex, resp.content));
       expect(obj.result.notifications).toContain("payment_sent");
+      expect(obj.result.notifications).toContain("payment_received");
+    });
+
+    it("publishes a kind-23196 payment_received notification when a tracked invoice is claimed", async () => {
+      const { clientSecretHex, clientPubkeyHex, walletPubkeyHex } = await setupConnAndStart();
+      const hashHex = bytesToHex(new Uint8Array(32).fill(5));
+      // Simulate make_invoice having recorded which client owns this invoice.
+      nwc["invoiceContexts"].set(hashHex, { clientPubkey: clientPubkeyHex, relayUrl: RELAY });
+
+      fireClaimed(hashHex, 7000n);
+      await new Promise((r) => setTimeout(r, 50));
+
+      const notif = findKind(23196);
+      expect(notif).toBeDefined();
+      expect(notif.tags).toContainEqual(["p", clientPubkeyHex]);
+      const obj = JSON.parse(await nip04.decrypt(clientSecretHex, walletPubkeyHex, notif.content));
+      expect(obj.notification_type).toBe("payment_received");
+      expect(obj.notification.payment_hash).toBe(hashHex);
+      expect(obj.notification.amount).toBe(7000);
+      expect(nwc["invoiceContexts"].has(hashHex)).toBe(false);
+    });
+
+    it("does not notify on a claim for an untracked invoice (not created via this NWC client)", async () => {
+      await setupConnAndStart();
+      fireClaimed(bytesToHex(new Uint8Array(32).fill(8)), 1000n);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(findKind(23196)).toBeUndefined();
     });
 
     it("publishes no notification and clears context on payment failure", async () => {
@@ -600,6 +635,19 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
 
       expect(findKind(23196)).toBeUndefined();
       expect(nwc["paymentContexts"].has(hashHex)).toBe(false);
+    });
+  });
+
+  describe("awaitWithTimeout (settlement-await safety valve)", () => {
+    it("resolves with the value when the promise settles before the timeout", async () => {
+      const v = await nwc["awaitWithTimeout"](Promise.resolve("preimage"), 1000, new Error("timed out"));
+      expect(v).toBe("preimage");
+    });
+
+    it("rejects with the timeout error when the promise hangs past the deadline", async () => {
+      await expect(
+        nwc["awaitWithTimeout"](new Promise(() => {}), 20, new Error("payment still in flight"))
+      ).rejects.toThrow("payment still in flight");
     });
   });
 });

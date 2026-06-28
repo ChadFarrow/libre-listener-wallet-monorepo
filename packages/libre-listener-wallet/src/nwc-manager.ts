@@ -20,11 +20,19 @@ import {
   Option_ThirtyTwoBytesZ_Some,
   Event,
   Event_PaymentSent,
-  Event_PaymentFailed
+  Event_PaymentFailed,
+  Event_PaymentClaimed
 } from "lightningdevkit";
 import { bytesToHex, hexToBytes } from "./storage-cache";
 import { getSecureRandomBytes } from "./crypto-utils";
 import type { LibreListenerWallet, Logger, SecureStorageProvider } from "./index";
+
+// Cap how long a pay request blocks awaiting settlement. Generous (normal multi-hop
+// settles in seconds) so the synchronous response still works for healthy payments; the
+// timeout is a safety valve so a stuck HTLC can't freeze the per-client request chain.
+// A late settlement after this still reaches the client via the payment_sent notification.
+const SETTLEMENT_TIMEOUT_MS = 90_000;
+const SETTLEMENT_TIMEOUT_MSG = "Payment initiated but not yet settled; you'll be notified when it completes.";
 
 export class NwcManager {
   private wallet: LibreListenerWallet;
@@ -41,6 +49,9 @@ export class NwcManager {
   // payment_sent notification on settlement — even if the synchronous response already
   // timed out on the client. This is what clears the false "timeout" failure in apps.
   private paymentContexts: Map<string, { clientPubkey: string; relayUrl: string; amountMsat: number }> = new Map();
+  // Which client created each invoice (by payment-hash hex), so an inbound claim notifies
+  // the make_invoice requester with a NIP-47 payment_received notification.
+  private invoiceContexts: Map<string, { clientPubkey: string; relayUrl: string }> = new Map();
   private active: boolean = false;
   // Per-client request serialization so the spending-limit check-and-update is atomic.
   private requestChains: Map<string, Promise<void>> = new Map();
@@ -106,6 +117,8 @@ export class NwcManager {
         if (event.payment_hash instanceof Option_ThirtyTwoBytesZ_Some) {
           this.handlePaymentFailed(bytesToHex(event.payment_hash.some));
         }
+      } else if (event instanceof Event_PaymentClaimed) {
+        void this.handlePaymentReceived(bytesToHex(event.payment_hash), Number(event.amount_msat));
       }
     });
   }
@@ -145,6 +158,43 @@ export class NwcManager {
       this.pendingPayments.delete(paymentHashHex);
     }
     this.paymentContexts.delete(paymentHashHex);
+  }
+
+  /**
+   * An inbound payment was claimed. If it settles an invoice a NWC client created via
+   * make_invoice, publish a NIP-47 `payment_received` notification to that client.
+   * (Preimage is intentionally omitted — the key-isolation guardrail keeps claim secrets
+   * off the relay.)
+   */
+  private async handlePaymentReceived(paymentHashHex: string, amountMsat: number): Promise<void> {
+    const ctx = this.invoiceContexts.get(paymentHashHex);
+    if (!ctx) return;
+    this.invoiceContexts.delete(paymentHashHex);
+    try {
+      await this.sendNotification(ctx.clientPubkey, ctx.relayUrl, "payment_received", {
+        type: "incoming",
+        payment_hash: paymentHashHex,
+        amount: amountMsat,
+        fees_paid: 0,
+      });
+    } catch (e: any) {
+      this.logger?.error(`[NWC] Failed to publish payment_received notification: ${e?.message || e}`);
+    }
+  }
+
+  /**
+   * Await a settlement promise but give up after `ms` so a hung payment can't block the
+   * per-client request chain forever. On timeout the (still-pending) payment is left in
+   * flight — a late settlement still resolves it and fires the payment_sent notification.
+   */
+  private awaitWithTimeout<T>(p: Promise<T>, ms: number, timeoutError: Error): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(timeoutError), ms);
+      p.then(
+        (v) => { clearTimeout(timer); resolve(v); },
+        (e) => { clearTimeout(timer); reject(e); }
+      );
+    });
   }
 
   async createConnection(name: string, options?: { spendingLimitSats?: number; relayUrl?: string }): Promise<string> {
@@ -268,7 +318,7 @@ export class NwcManager {
         content: "pay_invoice pay_keysend make_invoice get_balance get_info notifications",
         // NIP-47: supported notification types are listed in a `notifications` tag so
         // clients know to subscribe for async settlement updates.
-        tags: [["notifications", "payment_sent"]],
+        tags: [["notifications", "payment_sent payment_received"]],
         created_at: Math.floor(Date.now() / 1000),
       }, hexToBytes(this.walletPrivKeyHex!));
       await relay.publish(infoEvent);
@@ -371,7 +421,7 @@ export class NwcManager {
           // Block hashes are displayed big-endian; LDK returns internal little-endian.
           block_hash: bytesToHex(Uint8Array.from(bestBlock.get_block_hash()).reverse()),
           methods: ["pay_invoice", "pay_keysend", "make_invoice", "get_balance", "get_info"],
-          notifications: ["payment_sent"]
+          notifications: ["payment_sent", "payment_received"]
         };
         await this.sendResultResponse(event, "get_info", result, relayUrl, rpcReq.id);
 
@@ -395,6 +445,8 @@ export class NwcManager {
         const parsed = Bolt11Invoice.constructor_from_str(invoiceStr);
         if (!parsed.is_ok()) throw new Error("Failed to parse created invoice");
         const paymentHashHex = bytesToHex((parsed as any).res.payment_hash());
+        // Remember which client created this invoice so an inbound claim notifies them.
+        this.invoiceContexts.set(paymentHashHex, { clientPubkey: event.pubkey, relayUrl });
 
         const result = {
           type: "incoming",
@@ -465,7 +517,7 @@ export class NwcManager {
           throw new Error(`LDK send_payment failed: ${(sendRes as any).err?.toString() || "Route not found"}`);
         }
 
-        const preimageHex = await promise;
+        const preimageHex = await this.awaitWithTimeout(promise, SETTLEMENT_TIMEOUT_MS, new Error(SETTLEMENT_TIMEOUT_MSG));
 
         // Update spent quota
         pairing.spentTodaySats = spentToday + amtSats;
@@ -514,7 +566,7 @@ export class NwcManager {
           throw new Error(`Keysend failed to initiate: ${sendRes.error}`);
         }
 
-        const preimageHex = await settled;
+        const preimageHex = await this.awaitWithTimeout(settled, SETTLEMENT_TIMEOUT_MS, new Error(SETTLEMENT_TIMEOUT_MSG));
 
         // Update spent quota
         pairing.spentTodaySats = spentToday + amtSats;

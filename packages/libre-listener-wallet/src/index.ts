@@ -74,6 +74,7 @@ import {
   Event,
   EventHandler,
   Result_NoneReplayEventZ,
+  ReplayEvent,
   Option_ThirtyTwoBytesZ_Some,
   Event_PaymentClaimable,
   Result_ThirtyTwoBytesNoneZ_OK,
@@ -566,6 +567,7 @@ export class LibreListenerWallet {
       handle_event: (event: Event) => {
         const name = event.constructor.name;
         this.logger?.info(`[LDK Event] Received event: ${name}`);
+        let replayEvent = false; // ask LDK to re-deliver this event if we couldn't fully handle it
 
         for (const listener of this.eventListeners) {
           try {
@@ -627,10 +629,14 @@ export class LibreListenerWallet {
           // A channel close left on-chain outputs we can claim. Sweep them to the
           // configured address. Done synchronously here so the descriptors are used
           // before the event is freed; only the resulting tx bytes are broadcast async.
-          this.handleSpendableOutputs((event as any).outputs);
+          // If we can't sweep yet (no address set / build failed), ask LDK to REPLAY the
+          // event so it retries once an address is set — funds aren't dropped.
+          if (!this.handleSpendableOutputs((event as any).outputs)) replayEvent = true;
         }
 
-        return Result_NoneReplayEventZ.constructor_ok();
+        return replayEvent
+          ? Result_NoneReplayEventZ.constructor_err(ReplayEvent.constructor_new())
+          : Result_NoneReplayEventZ.constructor_ok();
       }
     });
 
@@ -1036,15 +1042,17 @@ export class LibreListenerWallet {
    * Builds the sweep tx synchronously (the descriptors are only valid within the event), then
    * broadcasts the plain tx bytes async. No-op (with a warning) if no sweep address is set.
    */
-  private handleSpendableOutputs(descriptors: any[]): void {
-    if (!descriptors || descriptors.length === 0) return;
+  // Returns true if handled (swept or nothing to do), false if LDK should replay the event
+  // later (e.g. no sweep address set yet, or the tx build failed) so funds aren't dropped.
+  private handleSpendableOutputs(descriptors: any[]): boolean {
+    if (!descriptors || descriptors.length === 0) return true;
     if (!this.sweepDestinationScript) {
-      this.logger?.warn(`[Sweep] ${descriptors.length} claimable output(s) from a channel close — set a sweep address to recover them.`);
-      return;
+      this.logger?.warn(`[Sweep] ${descriptors.length} claimable output(s) from a channel close — set a sweep address to recover them (will retry).`);
+      return false;
     }
     if (!this.keysManager || !this.syncClient) {
       this.logger?.error("[Sweep] Wallet not running; cannot sweep spendable outputs.");
-      return;
+      return false;
     }
     let txBytes: Uint8Array;
     try {
@@ -1058,17 +1066,18 @@ export class LibreListenerWallet {
       );
       if (!res.is_ok()) {
         this.logger?.error(`[Sweep] spend_spendable_outputs failed: ${(res as any).err?.toString?.() ?? "unknown error"}`);
-        return;
+        return false;
       }
       txBytes = (res as any).res as Uint8Array;
     } catch (e: any) {
       this.logger?.error(`[Sweep] Failed to build sweep tx: ${e?.message ?? e}`);
-      return;
+      return false;
     }
     this.syncClient
       .broadcastTransaction(txBytes)
       .then(() => this.logger?.info(`[Sweep] Broadcast a sweep of ${descriptors.length} force-close output(s) to your address.`))
       .catch((e: any) => this.logger?.error(`[Sweep] Broadcast failed: ${e?.message ?? e}`));
+    return true;
   }
 
   // --- Peer Connection Adapter ---

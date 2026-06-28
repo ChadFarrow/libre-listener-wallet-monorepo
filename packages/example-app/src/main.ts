@@ -77,6 +77,7 @@ import { dbNameForNetwork, migrateStorage, META_DB_NAME, ACTIVE_NETWORK_KEY } fr
 import { rgsUrlForNetwork } from "./core/rgs-config";
 import { driveButtonView, shouldArmGestureReconnect } from "./core/drive-ui";
 import { assessStartReadiness } from "./core/wallet-readiness";
+import { addressToScriptPubKey } from "./core/address-script";
 let storage!: IndexedDBStorageProvider; // assigned in the init IIFE via refreshWalletForNetwork
 
 // Persist the active network to the meta DB so off-page code (SW, simulate-offline)
@@ -294,6 +295,36 @@ const createInvoiceBtn = document.getElementById("create-invoice-btn") as HTMLBu
 const receiveInvoiceContainer = document.getElementById("receive-invoice-container") as HTMLDivElement;
 const receiveInvoiceStr = document.getElementById("receive-invoice-str") as HTMLTextAreaElement;
 const copyReceiveInvoiceBtn = document.getElementById("copy-receive-invoice-btn") as HTMLButtonElement;
+
+// On-chain sweep address: where force-closed funds get reclaimed (Event_SpendableOutputs).
+const sweepAddressInput = document.getElementById("sweep-address") as HTMLInputElement;
+const sweepAddressStatus = document.getElementById("sweep-address-status") as HTMLSpanElement;
+const SWEEP_ADDRESS_KEY = "libre_sweep_address";
+
+// Validate the address, persist it, and (if the node is running) push it to the wallet.
+// Returns the decoded scriptPubKey, or null if empty/invalid.
+function applySweepAddress(): Uint8Array | null {
+  const addr = sweepAddressInput.value.trim();
+  if (!addr) {
+    localStorage.removeItem(SWEEP_ADDRESS_KEY);
+    if (wallet) wallet.setSweepDestination(undefined);
+    sweepAddressStatus.textContent = "";
+    return null;
+  }
+  try {
+    const script = addressToScriptPubKey(addr);
+    localStorage.setItem(SWEEP_ADDRESS_KEY, addr);
+    if (wallet) wallet.setSweepDestination(script);
+    sweepAddressStatus.textContent = "✓ sweep address set";
+    return script;
+  } catch (e) {
+    sweepAddressStatus.textContent = `✗ ${e instanceof Error ? e.message : "invalid address"}`;
+    return null;
+  }
+}
+
+sweepAddressInput.value = localStorage.getItem(SWEEP_ADDRESS_KEY) || "";
+sweepAddressInput.addEventListener("change", () => { applySweepAddress(); });
 
 // NWC Elements
 
@@ -557,6 +588,8 @@ startNodeBtn.addEventListener("click", async () => {
 
     await wallet.start();
     isNodeRunning = true;
+    // Apply the saved on-chain sweep address so a force-close auto-recovers funds.
+    applySweepAddress();
     // Event-driven backup status + Drive auto-sync (replaces 2s polling).
     wallet.onStateChanged(onWalletStateChanged);
     onWalletStateChanged();

@@ -23,6 +23,9 @@ importers:
       '@libre/shared':
         specifier: workspace:*
         version: link:../shared
+      '@scure/base':
+        specifier: ^2.0.0
+        version: 2.0.0
       nostr-tools:
         specifier: ^2.7.2
         version: 2.23.8(typescript@5.9.3)

@@ -233,6 +233,8 @@ export class LibreListenerWallet {
   private desiredPeers: Map<string, { host: string; port: number }> = new Map();
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
+  // scriptPubKey to sweep force-close outputs to (Event_SpendableOutputs). Set by the app.
+  private sweepDestinationScript?: Uint8Array;
   private registryCache?: LspProvider[];
   private eventListeners: ((event: Event) => void)[] = [];
   public nwc: NwcManager;
@@ -621,6 +623,11 @@ export class LibreListenerWallet {
           this.broadcastNodeAnnouncement();
         } else if (name === "Event_PaymentClaimed") {
           this.logger?.info(`[LDK Event] Payment claimed!`);
+        } else if (name === "Event_SpendableOutputs") {
+          // A channel close left on-chain outputs we can claim. Sweep them to the
+          // configured address. Done synchronously here so the descriptors are used
+          // before the event is freed; only the resulting tx bytes are broadcast async.
+          this.handleSpendableOutputs((event as any).outputs);
         }
 
         return Result_NoneReplayEventZ.constructor_ok();
@@ -1017,6 +1024,51 @@ export class LibreListenerWallet {
 
   getConnectedPeers(): string[] {
     return Array.from(this.connectedPeers.keys());
+  }
+
+  /** Set the on-chain scriptPubKey to sweep force-closed funds to. Pass undefined to clear. */
+  setSweepDestination(scriptPubKey?: Uint8Array): void {
+    this.sweepDestinationScript = scriptPubKey && scriptPubKey.length > 0 ? scriptPubKey : undefined;
+  }
+
+  /**
+   * Handle Event_SpendableOutputs: a channel close produced on-chain outputs we can claim.
+   * Builds the sweep tx synchronously (the descriptors are only valid within the event), then
+   * broadcasts the plain tx bytes async. No-op (with a warning) if no sweep address is set.
+   */
+  private handleSpendableOutputs(descriptors: any[]): void {
+    if (!descriptors || descriptors.length === 0) return;
+    if (!this.sweepDestinationScript) {
+      this.logger?.warn(`[Sweep] ${descriptors.length} claimable output(s) from a channel close — set a sweep address to recover them.`);
+      return;
+    }
+    if (!this.keysManager || !this.syncClient) {
+      this.logger?.error("[Sweep] Wallet not running; cannot sweep spendable outputs.");
+      return;
+    }
+    let txBytes: Uint8Array;
+    try {
+      const feerate = this.syncClient.getFeeRate(ConfirmationTarget.LDKConfirmationTarget_OutputSpendingFee);
+      const res = this.keysManager.as_OutputSpender().spend_spendable_outputs(
+        descriptors,
+        [], // sweep everything to the destination (no extra outputs)
+        this.sweepDestinationScript,
+        feerate,
+        Option_u32Z.constructor_none(),
+      );
+      if (!res.is_ok()) {
+        this.logger?.error(`[Sweep] spend_spendable_outputs failed: ${(res as any).err?.toString?.() ?? "unknown error"}`);
+        return;
+      }
+      txBytes = (res as any).res as Uint8Array;
+    } catch (e: any) {
+      this.logger?.error(`[Sweep] Failed to build sweep tx: ${e?.message ?? e}`);
+      return;
+    }
+    this.syncClient
+      .broadcastTransaction(txBytes)
+      .then(() => this.logger?.info(`[Sweep] Broadcast a sweep of ${descriptors.length} force-close output(s) to your address.`))
+      .catch((e: any) => this.logger?.error(`[Sweep] Broadcast failed: ${e?.message ?? e}`));
   }
 
   // --- Peer Connection Adapter ---

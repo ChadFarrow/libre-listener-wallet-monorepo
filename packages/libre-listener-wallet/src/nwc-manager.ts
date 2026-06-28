@@ -37,6 +37,10 @@ export class NwcManager {
   private walletPrivKeyHex?: string;
   private walletPubkey?: string;
   private pendingPayments: Map<string, { resolve: (preimage: string) => void; reject: (err: Error) => void }> = new Map();
+  // Who initiated each outbound payment (by payment-hash hex), so we can send a NIP-47
+  // payment_sent notification on settlement — even if the synchronous response already
+  // timed out on the client. This is what clears the false "timeout" failure in apps.
+  private paymentContexts: Map<string, { clientPubkey: string; relayUrl: string; amountMsat: number }> = new Map();
   private active: boolean = false;
   // Per-client request serialization so the spending-limit check-and-update is atomic.
   private requestChains: Map<string, Promise<void>> = new Map();
@@ -90,29 +94,57 @@ export class NwcManager {
 
     // Register LDK event listener to capture payment status resolutions
     this.wallet.addEventListener((event: Event) => {
-      const name = event.constructor.name;
+      // Keep the LDK `instanceof` checks in this thin edge; the testable logic lives in
+      // handlePaymentSettled/handlePaymentFailed (so notifications are unit-testable
+      // without a real payment).
       if (event instanceof Event_PaymentSent) {
         const hashHex = bytesToHex(event.payment_hash);
         const preimageHex = bytesToHex(event.payment_preimage);
-        const resolver = this.pendingPayments.get(hashHex);
-        if (resolver) {
-          resolver.resolve(preimageHex);
-          this.pendingPayments.delete(hashHex);
-        }
+        const feePaidMsat = event.fee_paid_msat instanceof Option_u64Z_Some ? Number(event.fee_paid_msat.some) : 0;
+        void this.handlePaymentSettled(hashHex, preimageHex, feePaidMsat);
       } else if (event instanceof Event_PaymentFailed) {
-        let hashHex: string | undefined;
         if (event.payment_hash instanceof Option_ThirtyTwoBytesZ_Some) {
-          hashHex = bytesToHex(event.payment_hash.some);
-        }
-        if (hashHex) {
-          const resolver = this.pendingPayments.get(hashHex);
-          if (resolver) {
-            resolver.reject(new Error("LDK payment execution failed"));
-            this.pendingPayments.delete(hashHex);
-          }
+          this.handlePaymentFailed(bytesToHex(event.payment_hash.some));
         }
       }
     });
+  }
+
+  /**
+   * A tracked outbound payment settled. Resolve any synchronous waiter AND publish a
+   * NIP-47 `payment_sent` notification to the initiating client — the notification fires
+   * independently, so a client whose request already timed out still learns it succeeded.
+   */
+  private async handlePaymentSettled(paymentHashHex: string, preimageHex: string, feePaidMsat: number): Promise<void> {
+    const resolver = this.pendingPayments.get(paymentHashHex);
+    if (resolver) {
+      resolver.resolve(preimageHex);
+      this.pendingPayments.delete(paymentHashHex);
+    }
+    const ctx = this.paymentContexts.get(paymentHashHex);
+    if (ctx) {
+      this.paymentContexts.delete(paymentHashHex);
+      try {
+        await this.sendNotification(ctx.clientPubkey, ctx.relayUrl, "payment_sent", {
+          payment_hash: paymentHashHex,
+          preimage: preimageHex,
+          amount: ctx.amountMsat,
+          fees_paid: feePaidMsat,
+        });
+      } catch (e: any) {
+        this.logger?.error(`[NWC] Failed to publish payment_sent notification: ${e?.message || e}`);
+      }
+    }
+  }
+
+  /** A tracked outbound payment failed. Reject any waiter and drop its notification context. */
+  private handlePaymentFailed(paymentHashHex: string): void {
+    const resolver = this.pendingPayments.get(paymentHashHex);
+    if (resolver) {
+      resolver.reject(new Error("LDK payment execution failed"));
+      this.pendingPayments.delete(paymentHashHex);
+    }
+    this.paymentContexts.delete(paymentHashHex);
   }
 
   async createConnection(name: string, options?: { spendingLimitSats?: number; relayUrl?: string }): Promise<string> {
@@ -233,8 +265,10 @@ export class NwcManager {
     try {
       const infoEvent = finalizeEvent({
         kind: 13194,
-        content: "pay_invoice pay_keysend make_invoice get_balance get_info",
-        tags: [],
+        content: "pay_invoice pay_keysend make_invoice get_balance get_info notifications",
+        // NIP-47: supported notification types are listed in a `notifications` tag so
+        // clients know to subscribe for async settlement updates.
+        tags: [["notifications", "payment_sent"]],
         created_at: Math.floor(Date.now() / 1000),
       }, hexToBytes(this.walletPrivKeyHex!));
       await relay.publish(infoEvent);
@@ -336,7 +370,8 @@ export class NwcManager {
           block_height: bestBlock.get_height(),
           // Block hashes are displayed big-endian; LDK returns internal little-endian.
           block_hash: bytesToHex(Uint8Array.from(bestBlock.get_block_hash()).reverse()),
-          methods: ["pay_invoice", "pay_keysend", "make_invoice", "get_balance", "get_info"]
+          methods: ["pay_invoice", "pay_keysend", "make_invoice", "get_balance", "get_info"],
+          notifications: ["payment_sent"]
         };
         await this.sendResultResponse(event, "get_info", result, relayUrl, rpcReq.id);
 
@@ -410,9 +445,11 @@ export class NwcManager {
         const paymentId = getSecureRandomBytes(32);
         const retryStrategy = Retry.constructor_attempts(10);
 
+        const payInvoiceHashHex = bytesToHex(paymentHash);
         const promise = new Promise<string>((resolve, reject) => {
-          this.pendingPayments.set(bytesToHex(paymentHash), { resolve, reject });
+          this.pendingPayments.set(payInvoiceHashHex, { resolve, reject });
         });
+        this.paymentContexts.set(payInvoiceHashHex, { clientPubkey: event.pubkey, relayUrl, amountMsat: Number(amtOpt.some) });
 
         const sendRes = this.wallet.getChannelManager()!.send_payment(
           paymentHash,
@@ -423,7 +460,8 @@ export class NwcManager {
         );
 
         if (!sendRes.is_ok()) {
-          this.pendingPayments.delete(bytesToHex(paymentHash));
+          this.pendingPayments.delete(payInvoiceHashHex);
+          this.paymentContexts.delete(payInvoiceHashHex);
           throw new Error(`LDK send_payment failed: ${(sendRes as any).err?.toString() || "Route not found"}`);
         }
 
@@ -461,6 +499,7 @@ export class NwcManager {
         const settled = new Promise<string>((resolve, reject) => {
           this.pendingPayments.set(keysendHashHex, { resolve, reject });
         });
+        this.paymentContexts.set(keysendHashHex, { clientPubkey: event.pubkey, relayUrl, amountMsat: Number(amountMsat) });
 
         // The wallet owns the keysend construction (TLVs, onion, route, send).
         const sendRes = await this.wallet.sendKeysendPayment({
@@ -471,6 +510,7 @@ export class NwcManager {
         });
         if (!sendRes.ok) {
           this.pendingPayments.delete(keysendHashHex);
+          this.paymentContexts.delete(keysendHashHex);
           throw new Error(`Keysend failed to initiate: ${sendRes.error}`);
         }
 
@@ -486,6 +526,33 @@ export class NwcManager {
     } catch (err: any) {
       await this.sendErrorResponse(event, "INTERNAL_ERROR", err.message || "Failed to execute request", relayUrl, rpcReq.id);
     }
+  }
+
+  /**
+   * Publish a NIP-47 notification (kind 23196, NIP-04 encrypted) to a client. Unlike a
+   * response, it carries no `e`-tag — it isn't tied to a specific request, which is exactly
+   * why it can deliver a late settlement to a client that already gave up on its request.
+   */
+  private async sendNotification(
+    clientPubkey: string,
+    relayUrl: string,
+    notificationType: string,
+    notification: any
+  ): Promise<void> {
+    const relay = this.relays.get(relayUrl);
+    if (!relay) return;
+
+    const plaintext = JSON.stringify({ notification_type: notificationType, notification });
+    const encrypted = await nip04.encrypt(this.walletPrivKeyHex!, clientPubkey, plaintext);
+
+    const event = finalizeEvent({
+      kind: 23196,
+      tags: [["p", clientPubkey]],
+      content: encrypted,
+      created_at: Math.floor(Date.now() / 1000),
+    }, hexToBytes(this.walletPrivKeyHex!));
+
+    await relay.publish(event);
   }
 
   private async sendResultResponse(

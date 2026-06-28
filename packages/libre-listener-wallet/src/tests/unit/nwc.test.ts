@@ -6,6 +6,8 @@ import { bytesToHex, hexToBytes } from "../../storage-cache";
 import { nwcRequestSchema } from "@libre/shared";
 import {
   Event_PaymentSent,
+  Event_PaymentFailed,
+  Option_ThirtyTwoBytesZ_Some,
   Bolt11Invoice,
   Option_u64Z_Some,
   UtilMethods,
@@ -332,7 +334,9 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       await handlePromise3;
 
       expect(mockPublish).toHaveBeenCalled();
-      const successCall3 = mockPublish.mock.calls[0][0];
+      // Find the kind-23195 response (a payment_sent notification may also publish on settle).
+      const successCall3 = mockPublish.mock.calls.map((c) => c[0]).find((e: any) => e.kind === 23195);
+      expect(successCall3).toBeDefined();
       const res3Plain = await nip04.decrypt(clientSecretHex, walletPubkeyHex, successCall3.content);
       const res3Obj = JSON.parse(res3Plain);
       expect(res3Obj.id).toBe(reqId3);
@@ -491,6 +495,111 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       expect(obj.result.invoice).toBe("lnbc10u1pfakeinvoice");
       expect(obj.result.payment_hash).toBeDefined();
       expect(obj.result.preimage).toBeUndefined();
+    });
+  });
+
+  describe("NIP-47 Notifications (payment_sent)", () => {
+    const RELAY = "wss://relay.test.io";
+
+    // Push a connection with a known secret, mock the channel manager, and start so a
+    // relay (mockRelay) is connected. Returns the client/wallet keys for de/encryption.
+    async function setupConnAndStart() {
+      const clientSecretBytes = generateSecretKey();
+      const clientSecretHex = bytesToHex(clientSecretBytes);
+      const clientPubkeyHex = getPublicKey(clientSecretBytes);
+      nwc["connections"].push({
+        name: "Notif App",
+        clientPubkey: clientPubkeyHex,
+        secret: clientSecretHex,
+        spendingLimitSats: 0,
+        spentTodaySats: 0,
+        lastSpentTimestamp: Date.now(),
+        createdAt: Date.now(),
+        enabled: true,
+        relayUrl: RELAY,
+      });
+      await nwc["saveConnections"]();
+      const mockChannelManager = {
+        current_best_block: () => ({ get_height: () => 100, get_block_hash: () => new Uint8Array(32) }),
+        get_our_node_id: () => new Uint8Array(33),
+        list_channels: () => [],
+      };
+      vi.spyOn(wallet, "getChannelManager").mockReturnValue(mockChannelManager as any);
+      await nwc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      return { clientSecretHex, clientPubkeyHex, walletPubkeyHex: nwc["walletPubkey"]! };
+    }
+
+    const fireSent = (hashHex: string, preimageHex: string) => {
+      const ev = Object.create(Event_PaymentSent.prototype);
+      ev.payment_hash = hexToBytes(hashHex);
+      ev.payment_preimage = hexToBytes(preimageHex);
+      wallet["eventListeners"].forEach((l: any) => l(ev));
+    };
+
+    const fireFailed = (hashHex: string) => {
+      const ev = Object.create(Event_PaymentFailed.prototype);
+      ev.payment_hash = Option_ThirtyTwoBytesZ_Some.constructor_some(hexToBytes(hashHex));
+      wallet["eventListeners"].forEach((l: any) => l(ev));
+    };
+
+    const findKind = (kind: number) =>
+      mockPublish.mock.calls.map((c) => c[0]).find((e: any) => e.kind === kind);
+
+    it("publishes a kind-23196 payment_sent notification to the initiating client on settle", async () => {
+      const { clientSecretHex, clientPubkeyHex, walletPubkeyHex } = await setupConnAndStart();
+      const hashHex = bytesToHex(new Uint8Array(32).fill(9));
+      const preimageHex = bytesToHex(new Uint8Array(32).fill(7));
+
+      // Simulate the request handler having registered the initiating client for this hash.
+      nwc["paymentContexts"].set(hashHex, { clientPubkey: clientPubkeyHex, relayUrl: RELAY, amountMsat: 5000 });
+
+      fireSent(hashHex, preimageHex);
+      await new Promise((r) => setTimeout(r, 50));
+
+      const notif = findKind(23196);
+      expect(notif).toBeDefined();
+      expect(notif.tags).toContainEqual(["p", clientPubkeyHex]);
+      const plain = await nip04.decrypt(clientSecretHex, walletPubkeyHex, notif.content);
+      const obj = JSON.parse(plain);
+      expect(obj.notification_type).toBe("payment_sent");
+      expect(obj.notification.payment_hash).toBe(hashHex);
+      expect(obj.notification.preimage).toBe(preimageHex);
+      expect(obj.notification.amount).toBe(5000);
+      // Settlement context is one-shot — cleared after notifying.
+      expect(nwc["paymentContexts"].has(hashHex)).toBe(false);
+    });
+
+    it("advertises the notifications capability in the kind-13194 info event", async () => {
+      await setupConnAndStart();
+      const info = findKind(13194);
+      expect(info).toBeDefined();
+      expect(info.content).toContain("notifications");
+      expect(info.tags).toContainEqual(["notifications", "payment_sent"]);
+    });
+
+    it("advertises notifications in the get_info result", async () => {
+      const { clientSecretHex, clientPubkeyHex, walletPubkeyHex } = await setupConnAndStart();
+      const payload = JSON.stringify({ jsonrpc: "2.0", id: "gi-1", method: "get_info", params: {} });
+      const enc = await nip04.encrypt(clientSecretHex, walletPubkeyHex, payload);
+      await subHandler!({ kind: 23194, pubkey: clientPubkeyHex, content: enc, id: "gi-evt" });
+
+      const resp = findKind(23195);
+      expect(resp).toBeDefined();
+      const obj = JSON.parse(await nip04.decrypt(clientSecretHex, walletPubkeyHex, resp.content));
+      expect(obj.result.notifications).toContain("payment_sent");
+    });
+
+    it("publishes no notification and clears context on payment failure", async () => {
+      const { clientPubkeyHex } = await setupConnAndStart();
+      const hashHex = bytesToHex(new Uint8Array(32).fill(3));
+      nwc["paymentContexts"].set(hashHex, { clientPubkey: clientPubkeyHex, relayUrl: RELAY, amountMsat: 5000 });
+
+      fireFailed(hashHex);
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(findKind(23196)).toBeUndefined();
+      expect(nwc["paymentContexts"].has(hashHex)).toBe(false);
     });
   });
 });

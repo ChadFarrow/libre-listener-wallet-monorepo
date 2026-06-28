@@ -578,12 +578,13 @@ export class LibreListenerWallet {
           this.logger?.info(`[LDK Event] PaymentClaimable for hash: ${paymentHash}`);
           this.storage.getItem(`preimage_${paymentHash}`).then((preimageHex) => {
             if (preimageHex) {
-              this.logger?.info(`[LDK Event] Claiming payment with preimage: ${preimageHex}`);
+              // Never log the preimage itself (key-isolation guardrail: no preimages in logs).
+              this.logger?.info(`[LDK Event] Claiming payment for hash ${paymentHash}`);
               this.channelManager!.claim_funds(hexToBytes(preimageHex));
             } else {
               const preimageOpt = event.purpose.preimage();
               if (preimageOpt instanceof Option_ThirtyTwoBytesZ_Some) {
-                this.logger?.info(`[LDK Event] Claiming payment with preimage from purpose: ${bytesToHex(preimageOpt.some)}`);
+                this.logger?.info(`[LDK Event] Claiming payment for hash ${paymentHash} (preimage from purpose)`);
                 this.channelManager!.claim_funds(preimageOpt.some);
               } else {
                 this.logger?.warn(`[LDK Event] Preimage unknown for hash: ${paymentHash}`);

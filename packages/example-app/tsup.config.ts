@@ -10,6 +10,9 @@ export default defineConfig({
   sourcemap: true,
   clean: false,
   platform: "browser",
-  noExternal: ["@libre/listener-wallet", "@libre/shared", "lightningdevkit", "nostr-tools", "zod"],
+  // Everything the SW needs must be BUNDLED — a browser ServiceWorker can't resolve bare
+  // specifiers. @scure/base (pulled in via nostr-tools) must be here or the SW fails to
+  // evaluate ("ServiceWorker script evaluation failed").
+  noExternal: ["@libre/listener-wallet", "@libre/shared", "lightningdevkit", "nostr-tools", "zod", "@scure/base"],
   external: ["crypto"]
 });

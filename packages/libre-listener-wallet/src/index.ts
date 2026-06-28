@@ -236,6 +236,9 @@ export class LibreListenerWallet {
   private reconnectAttempts: Map<string, number> = new Map();
   // scriptPubKey to sweep force-close outputs to (Event_SpendableOutputs). Set by the app.
   private sweepDestinationScript?: Uint8Array;
+  // Whether we've already warned about claimable outputs with no sweep address — avoids
+  // spamming the log every ~1s while the event replays. Reset when the destination changes.
+  private sweepWarningShown = false;
   private registryCache?: LspProvider[];
   private eventListeners: ((event: Event) => void)[] = [];
   public nwc: NwcManager;
@@ -1035,6 +1038,7 @@ export class LibreListenerWallet {
   /** Set the on-chain scriptPubKey to sweep force-closed funds to. Pass undefined to clear. */
   setSweepDestination(scriptPubKey?: Uint8Array): void {
     this.sweepDestinationScript = scriptPubKey && scriptPubKey.length > 0 ? scriptPubKey : undefined;
+    this.sweepWarningShown = false; // a destination change is worth a fresh warning if still unset
   }
 
   /**
@@ -1047,7 +1051,10 @@ export class LibreListenerWallet {
   private handleSpendableOutputs(descriptors: any[]): boolean {
     if (!descriptors || descriptors.length === 0) return true;
     if (!this.sweepDestinationScript) {
-      this.logger?.warn(`[Sweep] ${descriptors.length} claimable output(s) from a channel close — set a sweep address to recover them (will retry).`);
+      if (!this.sweepWarningShown) {
+        this.logger?.warn(`[Sweep] ${descriptors.length} claimable output(s) from a channel close — set a sweep address to recover them (will retry).`);
+        this.sweepWarningShown = true; // suppress the ~1s replay spam until the destination changes
+      }
       return false;
     }
     if (!this.keysManager || !this.syncClient) {

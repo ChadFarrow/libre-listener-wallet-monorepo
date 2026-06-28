@@ -75,6 +75,7 @@ import { initV4V, setV4VEnabled } from "./v4v";
 import { ensurePersistentStorage } from "./core/persistent-storage";
 import { dbNameForNetwork, migrateStorage, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 import { rgsUrlForNetwork } from "./core/rgs-config";
+import { driveButtonView } from "./core/drive-ui";
 let storage!: IndexedDBStorageProvider; // assigned in the init IIFE via refreshWalletForNetwork
 
 // Persist the active network to the meta DB so off-page code (SW, simulate-offline)
@@ -963,6 +964,11 @@ function updateDriveStatus(text?: string) {
   } else {
     driveStatusEl.textContent = drive.isConnected() ? "connected ✓" : "not connected";
   }
+  // Reflect connection state on the button itself (label + color), so it's obvious
+  // at a glance — not just the small status text beside it.
+  const view = driveButtonView(drive.isConnected());
+  connectDriveBtn.textContent = view.label;
+  connectDriveBtn.className = view.className;
 }
 
 // Connect Drive, feeding the remembered account email as a login_hint so a silent

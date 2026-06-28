@@ -350,6 +350,16 @@ textarea:disabled {
   box-shadow: 0 4px 12px hsla(0, 80%, 55%, 0.3);
 }
 
+.btn-success {
+  background: var(--color-success);
+  color: white;
+}
+
+.btn-success:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px hsla(142, 70%, 45%, 0.3);
+}
+
 .btn-sm {
   padding: 6px 12px;
   font-size: 0.8rem;

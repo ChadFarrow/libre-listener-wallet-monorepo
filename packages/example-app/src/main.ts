@@ -965,6 +965,17 @@ function updateDriveStatus(text?: string) {
   }
 }
 
+// Connect Drive, feeding the remembered account email as a login_hint so a silent
+// reconnect on a later load reuses the existing session without a popup. Persists the
+// email after a successful connect for next time. All three connect sites go through this.
+const DRIVE_HINT_KEY = "libre_drive_hint";
+async function connectDrive(clientId: string, opts: { silent?: boolean } = {}): Promise<void> {
+  const hint = localStorage.getItem(DRIVE_HINT_KEY) || undefined;
+  await drive.connect(clientId, { ...opts, hint });
+  const email = drive.getConnectedEmail();
+  if (email) localStorage.setItem(DRIVE_HINT_KEY, email);
+}
+
 // Client ID is baked in via VITE_GOOGLE_CLIENT_ID (.env.local). If it's missing,
 // connect will report it rather than offering a paste field.
 updateDriveStatus();
@@ -977,7 +988,7 @@ connectDriveBtn.addEventListener("click", async () => {
   }
   try {
     updateDriveStatus("connecting…");
-    await drive.connect(clientId);
+    await connectDrive(clientId);
     updateDriveStatus();
     appendLog("[SYSTEM] Connected to Google Drive.", "system");
     maybeCatchUpDriveSync();
@@ -994,7 +1005,7 @@ async function tryAutoConnectDrive(): Promise<void> {
   if (!clientId) return;
   try {
     updateDriveStatus("connecting…");
-    await drive.connect(clientId, { silent: true });
+    await connectDrive(clientId, { silent: true });
     updateDriveStatus();
     appendLog("[SYSTEM] Auto-connected to Google Drive.", "system");
     maybeCatchUpDriveSync();
@@ -1086,7 +1097,7 @@ restoreDriveBtn.addEventListener("click", async () => {
         appendLog("[ERROR] No Google OAuth Client ID configured — set VITE_GOOGLE_CLIENT_ID in .env.local.", "error");
         return;
       }
-      await drive.connect(clientId);
+      await connectDrive(clientId);
       updateDriveStatus();
     }
     const blob = await drive.downloadBackup(networkSelect.value);

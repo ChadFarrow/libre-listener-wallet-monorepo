@@ -4,7 +4,51 @@
 // is short-lived and kept only in memory (never persisted).
 
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
+// 'email' lets us read the account address after consent and reuse it as a
+// login_hint for silent reconnect on later loads (so the user isn't re-prompted
+// every session). Scopes are space-separated for the GIS token client.
+const AUTH_SCOPES = `${DRIVE_SCOPE} email`;
 const GIS_SRC = "https://accounts.google.com/gsi/client";
+
+let connectedEmail: string | null = null;
+
+/** Email of the connected account, learned from the 'email' scope. Persist this and
+ *  feed it back as `hint` on silent reconnect. Null until a connect succeeds. */
+export function getConnectedEmail(): string | null {
+  return connectedEmail;
+}
+
+/**
+ * Pure builder for the GIS token-client config. Silent reconnect uses
+ * `prompt: 'none'` plus a `login_hint` (the remembered email) so an existing
+ * Google session is reused without a popup; interactive uses `prompt: ''` (UI only
+ * if needed). Exported for testing.
+ */
+export function buildTokenClientConfig(
+  clientId: string,
+  opts: { silent?: boolean; hint?: string } = {}
+): { client_id: string; scope: string; prompt: string; hint?: string } {
+  const cfg: { client_id: string; scope: string; prompt: string; hint?: string } = {
+    client_id: clientId,
+    scope: AUTH_SCOPES,
+    prompt: opts.silent ? "none" : "",
+  };
+  if (opts.hint) cfg.hint = opts.hint;
+  return cfg;
+}
+
+async function fetchAccountEmail(token: string): Promise<string | null> {
+  try {
+    const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return typeof data.email === "string" ? data.email : null;
+  } catch {
+    return null;
+  }
+}
 
 // One backup file PER NETWORK so a regtest sync can't clobber the mainnet backup.
 export function backupFilename(network: string): string {
@@ -27,6 +71,7 @@ export function isConnected(): boolean {
 
 export function disconnect(): void {
   accessToken = null;
+  connectedEmail = null;
 }
 
 export async function loadGis(): Promise<void> {
@@ -50,25 +95,28 @@ export async function loadGis(): Promise<void> {
   });
 }
 
-export async function connect(clientId: string, opts: { silent?: boolean } = {}): Promise<void> {
+export async function connect(clientId: string, opts: { silent?: boolean; hint?: string } = {}): Promise<void> {
   if (!clientId) throw new Error("Missing Google Client ID");
   await loadGis();
   const google = (window as any).google;
   if (!google?.accounts?.oauth2) throw new Error("Google Identity Services not available");
   await new Promise<void>((resolve, reject) => {
     const tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: DRIVE_SCOPE,
-      // 'none' attempts a silent token (no popup) using an existing Google session +
-      // prior consent — used for auto-connect on load; '' shows UI only if needed.
-      prompt: opts.silent ? "none" : "",
+      ...buildTokenClientConfig(clientId, opts),
       callback: (resp: any) => {
         if (resp.error) {
           reject(new Error(`OAuth error: ${resp.error}`));
           return;
         }
-        accessToken = resp.access_token;
-        resolve();
+        const token: string = resp.access_token;
+        accessToken = token;
+        // Best-effort: learn the account email to use as a login_hint next time.
+        // Never blocks connect success — a failed lookup just means no hint.
+        fetchAccountEmail(token)
+          .then((email) => {
+            if (email) connectedEmail = email;
+          })
+          .finally(() => resolve());
       },
       error_callback: (err: any) => reject(new Error(err?.type || "OAuth token error")),
     });

@@ -75,7 +75,7 @@ import { initV4V, setV4VEnabled } from "./v4v";
 import { ensurePersistentStorage } from "./core/persistent-storage";
 import { dbNameForNetwork, migrateStorage, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 import { rgsUrlForNetwork } from "./core/rgs-config";
-import { driveButtonView } from "./core/drive-ui";
+import { driveButtonView, shouldArmGestureReconnect } from "./core/drive-ui";
 let storage!: IndexedDBStorageProvider; // assigned in the init IIFE via refreshWalletForNetwork
 
 // Persist the active network to the meta DB so off-page code (SW, simulate-offline)
@@ -979,7 +979,13 @@ async function connectDrive(clientId: string, opts: { silent?: boolean } = {}): 
   const hint = localStorage.getItem(DRIVE_HINT_KEY) || undefined;
   await drive.connect(clientId, { ...opts, hint });
   const email = drive.getConnectedEmail();
-  if (email) localStorage.setItem(DRIVE_HINT_KEY, email);
+  if (email) {
+    localStorage.setItem(DRIVE_HINT_KEY, email);
+    appendLog(`[SYSTEM] Drive: remembered ${email} for silent reconnect.`, "system");
+  } else {
+    // No email ⇒ no login_hint next time ⇒ silent reconnect will keep failing.
+    appendLog("[WARN] Drive connected but could not read the account email (userinfo) — silent reconnect won't work. Check the consent screen granted the email permission.", "warn");
+  }
 }
 
 // Client ID is baked in via VITE_GOOGLE_CLIENT_ID (.env.local). If it's missing,
@@ -1015,10 +1021,45 @@ async function tryAutoConnectDrive(): Promise<void> {
     updateDriveStatus();
     appendLog("[SYSTEM] Auto-connected to Google Drive.", "system");
     maybeCatchUpDriveSync();
-  } catch {
+  } catch (e) {
     updateDriveStatus("not connected");
-    appendLog("[SYSTEM] Google Drive: silent reconnect unavailable — click Connect Drive.", "system");
+    const hadHint = !!localStorage.getItem(DRIVE_HINT_KEY);
+    const reason = e instanceof Error ? e.message : String(e);
+    appendLog(
+      `[SYSTEM] Google Drive: silent reconnect unavailable (hint=${hadHint ? "set" : "none"}; ${reason}) — retrying on first interaction, or click Connect Drive.`,
+      "system"
+    );
+    armDriveGestureReconnect();
   }
+}
+
+// GIS's OAuth token model needs a user gesture to mint a token (a page-load attempt
+// fails with popup_failed_to_open), so the load-time silent reconnect can't work on
+// its own. If we have a remembered account, retry the silent reconnect on the user's
+// FIRST interaction — that gesture satisfies the token flow, reconnecting Drive with
+// no dedicated "Connect Drive" click and (with prompt:'none' + hint) no popup.
+function armDriveGestureReconnect(): void {
+  if (!shouldArmGestureReconnect(drive.isConnected(), localStorage.getItem(DRIVE_HINT_KEY))) return;
+  const onFirstGesture = async () => {
+    window.removeEventListener("pointerdown", onFirstGesture);
+    window.removeEventListener("keydown", onFirstGesture);
+    if (drive.isConnected()) return;
+    const clientId = resolveClientId();
+    if (!clientId) return;
+    try {
+      await connectDrive(clientId, { silent: true });
+      updateDriveStatus();
+      if (drive.isConnected()) {
+        appendLog("[SYSTEM] Auto-connected to Google Drive on first interaction.", "system");
+        maybeCatchUpDriveSync();
+      }
+    } catch (e) {
+      // Still no silent token (expired session / blocked cookies) — fall back to the button.
+      appendLog(`[SYSTEM] Google Drive still needs a manual connect (${e instanceof Error ? e.message : e}).`, "system");
+    }
+  };
+  window.addEventListener("pointerdown", onFirstGesture);
+  window.addEventListener("keydown", onFirstGesture);
 }
 
 // Best-effort: if Drive is connected, sync the seed-encrypted backup and verify

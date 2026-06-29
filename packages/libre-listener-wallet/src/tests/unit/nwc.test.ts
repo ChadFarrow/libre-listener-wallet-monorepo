@@ -48,10 +48,12 @@ beforeAll(async () => {
 const mockPublish = vi.fn();
 const mockSubscribeClose = vi.fn();
 let subHandler: ((event: any) => Promise<void>) | null = null;
+let subCloseHandler: ((reason: string) => void) | null = null;
 
 const mockRelay = {
   subscribe: vi.fn().mockImplementation((filters, handlers) => {
     subHandler = handlers.onevent;
+    subCloseHandler = handlers.onclose;
     return {
       close: mockSubscribeClose,
     };
@@ -79,6 +81,7 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     subHandler = null;
+    subCloseHandler = null;
     mockStorage = {};
     storageProvider = {
       getItem: async (key) => mockStorage[key] || null,
@@ -648,6 +651,92 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       await expect(
         nwc["awaitWithTimeout"](new Promise(() => {}), 20, new Error("payment still in flight"))
       ).rejects.toThrow("payment still in flight");
+    });
+  });
+
+  describe("Relay resilience (request dedup + reconnect-on-drop)", () => {
+    const RELAY = "wss://relay.test.io";
+
+    function pushConnAndMockMgr() {
+      const clientSecretBytes = generateSecretKey();
+      const clientSecretHex = bytesToHex(clientSecretBytes);
+      const clientPubkeyHex = getPublicKey(clientSecretBytes);
+      nwc["connections"].push({
+        name: "Resilience App",
+        clientPubkey: clientPubkeyHex,
+        secret: clientSecretHex,
+        spendingLimitSats: 0,
+        spentTodaySats: 0,
+        lastSpentTimestamp: Date.now(),
+        createdAt: Date.now(),
+        enabled: true,
+        relayUrl: RELAY,
+      });
+      vi.spyOn(wallet, "getChannelManager").mockReturnValue({
+        current_best_block: () => ({ get_height: () => 100, get_block_hash: () => new Uint8Array(32) }),
+        get_our_node_id: () => new Uint8Array(33),
+        list_channels: () => [],
+      } as any);
+      return { clientSecretHex, clientPubkeyHex };
+    }
+
+    // A relay can deliver the same request event more than once (redelivery on
+    // resubscribe after a reconnect). Processing it twice would, for a payment,
+    // pay twice — so a duplicate event id must be handled at most once.
+    it("processes a duplicate request (same event id) only once", async () => {
+      const { clientSecretHex, clientPubkeyHex } = pushConnAndMockMgr();
+      await nwc["saveConnections"]();
+      await nwc.start();
+      await new Promise((r) => setTimeout(r, 50));
+
+      const walletPubkeyHex = nwc["walletPubkey"]!;
+      const enc = await nip04.encrypt(
+        clientSecretHex,
+        walletPubkeyHex,
+        JSON.stringify({ jsonrpc: "2.0", id: "dup-1", method: "get_info", params: {} })
+      );
+      const event = { kind: 23194, pubkey: clientPubkeyHex, content: enc, id: "evt-dup-1" };
+
+      mockPublish.mockClear();
+      await subHandler!(event);
+      await subHandler!(event); // same id again
+
+      const responses = mockPublish.mock.calls.map((c) => c[0]).filter((e: any) => e.kind === 23195);
+      expect(responses).toHaveLength(1);
+    });
+
+    it("redials a dropped relay with backoff while active, and stop() cancels pending redials", async () => {
+      vi.useFakeTimers();
+      try {
+        pushConnAndMockMgr();
+        await nwc["saveConnections"]();
+        await nwc.start();
+        // Flush the initial connectRelay() microtask chain (connect → publish → subscribe).
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+
+        const relayConnect = vi.mocked(Relay.connect);
+        const afterStart = relayConnect.mock.calls.length;
+        expect(afterStart).toBeGreaterThanOrEqual(1);
+        expect(subCloseHandler).not.toBeNull();
+
+        // The relay connection drops.
+        subCloseHandler!("connection closed");
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        // No immediate redial — it waits for the backoff window.
+        expect(relayConnect.mock.calls.length).toBe(afterStart);
+
+        // After the first backoff (1000ms) it reconnects.
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(relayConnect.mock.calls.length).toBe(afterStart + 1);
+
+        // Drop again, then stop before the next backoff elapses → no further redial.
+        subCloseHandler!("connection closed");
+        await nwc.stop();
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(relayConnect.mock.calls.length).toBe(afterStart + 1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

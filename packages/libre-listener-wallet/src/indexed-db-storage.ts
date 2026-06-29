@@ -44,39 +44,48 @@ export class IndexedDBStorageProvider implements SecureStorageProvider {
     }
   }
 
+  // Resolve a write only once its transaction has durably COMMITTED, not when
+  // the request fires `success` (which happens before commit). A write that
+  // succeeds but whose transaction later aborts/fails would otherwise be
+  // reported as persisted while being silently rolled back — the storage
+  // inconsistency that lets a Lightning node act on channel state it never
+  // committed. `onComplete`/`onerror`/`onabort` live on the transaction, so the
+  // promise tracks the commit boundary; the request handler only captures a
+  // more specific error for the rejection.
+  private commitWrite(
+    mutate: (store: IDBObjectStore) => IDBRequest,
+  ): Promise<void> {
+    return this.getDB().then(
+      (db) =>
+        new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(this.storeName, "readwrite");
+          const req = mutate(tx.objectStore(this.storeName));
+          let reqError: DOMException | null = null;
+          req.onerror = () => {
+            reqError = req.error;
+          };
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(reqError ?? tx.error);
+          tx.onabort = () =>
+            reject(
+              reqError ?? tx.error ?? new Error("IndexedDB transaction aborted"),
+            );
+        }),
+    );
+  }
+
   async setItem(key: string, value: string): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.storeName, "readwrite");
-      const store = tx.objectStore(this.storeName);
-      const req = store.put(value, key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+    return this.commitWrite((store) => store.put(value, key));
   }
 
   async removeItem(key: string): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.storeName, "readwrite");
-      const store = tx.objectStore(this.storeName);
-      const req = store.delete(key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+    return this.commitWrite((store) => store.delete(key));
   }
 
   // Erase all keys in the store — used to start a fresh wallet (clears seed,
   // channel manager, channel monitors, and the LDK key index).
   async clear(): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.storeName, "readwrite");
-      const store = tx.objectStore(this.storeName);
-      const req = store.clear();
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+    return this.commitWrite((store) => store.clear());
   }
 
   // Enumerate every key in the store — used by app-layer migration to copy a full

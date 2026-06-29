@@ -25,7 +25,12 @@ import {
 } from "lightningdevkit";
 import { bytesToHex, hexToBytes } from "./storage-cache";
 import { getSecureRandomBytes } from "./crypto-utils";
+import { reconnectDelayMs } from "./peer-reconnect";
 import type { LibreListenerWallet, Logger, SecureStorageProvider } from "./index";
+
+// Cap on remembered request event ids (FIFO eviction). Bounds memory while still
+// catching the realistic duplicates: a relay redelivering recent events on resubscribe.
+const MAX_HANDLED_EVENT_IDS = 2000;
 
 // Cap how long a pay request blocks awaiting settlement. Generous (normal multi-hop
 // settles in seconds) so the synchronous response still works for healthy payments; the
@@ -55,6 +60,14 @@ export class NwcManager {
   private active: boolean = false;
   // Per-client request serialization so the spending-limit check-and-update is atomic.
   private requestChains: Map<string, Promise<void>> = new Map();
+  // Request event ids already handled, so a redelivered event (e.g. on resubscribe
+  // after a reconnect) is not processed — and paid — twice. FIFO-bounded.
+  private handledEventIds: Set<string> = new Set();
+  private handledEventOrder: string[] = [];
+  // Relay auto-reconnect: a dropped relay otherwise silently stops NWC requests
+  // until a full node restart. Redial with exponential backoff while active.
+  private reconnectAttempts: Map<string, number> = new Map();
+  private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private requestListeners: ((result: { eventId: string; method: string; success: boolean; error?: string }) => void)[] = [];
 
   constructor(wallet: LibreListenerWallet, deps: { logger?: Logger; storage: SecureStorageProvider; network: string }) {
@@ -285,6 +298,13 @@ export class NwcManager {
     if (!this.active) return;
     this.active = false;
 
+    // Cancel any pending relay redials so a backoff timer can't fire after stop.
+    for (const timer of this.reconnectTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reconnectTimers.clear();
+    this.reconnectAttempts.clear();
+
     for (const sub of this.subs.values()) {
       try {
         sub.close();
@@ -310,6 +330,8 @@ export class NwcManager {
     this.logger?.info(`[NWC] Connecting to Nostr relay: ${relayUrl}`);
     const relay = await Relay.connect(relayUrl);
     this.relays.set(relayUrl, relay);
+    // A connection succeeded — reset the backoff for this relay.
+    this.reconnectAttempts.delete(relayUrl);
 
     // Publish NIP-47 info event (kind 13194) to advertise supported methods
     try {
@@ -342,13 +364,63 @@ export class NwcManager {
       },
       onclose: (reason) => {
         this.logger?.warn(`[NWC] Subscription closed for relay ${relayUrl}: ${reason}`);
+        // The relay connection dropped. Drop the stale handles and redial with
+        // backoff while active, so we don't silently stop receiving NWC requests.
+        this.relays.delete(relayUrl);
+        this.subs.delete(relayUrl);
+        this.scheduleRelayReconnect(relayUrl);
       }
     });
 
     this.subs.set(relayUrl, sub);
   }
 
+  private scheduleRelayReconnect(relayUrl: string): void {
+    if (!this.active) return;
+    if (this.reconnectTimers.has(relayUrl)) return; // a redial is already pending
+    // Only redial a relay an enabled connection still needs.
+    const stillNeeded = this.connections.some((c) => c.enabled && c.relayUrl === relayUrl);
+    if (!stillNeeded) return;
+
+    const attempt = (this.reconnectAttempts.get(relayUrl) ?? 0) + 1;
+    this.reconnectAttempts.set(relayUrl, attempt);
+    const delay = reconnectDelayMs(attempt);
+    this.logger?.info(`[NWC] Relay ${relayUrl} dropped; reconnecting in ${delay}ms (attempt ${attempt})`);
+
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(relayUrl);
+      if (!this.active) return;
+      this.connectRelay(relayUrl).catch((err: any) => {
+        this.logger?.error(`[NWC] Relay reconnect to ${relayUrl} failed: ${err?.message || err}`);
+        this.scheduleRelayReconnect(relayUrl);
+      });
+    }, delay);
+    this.reconnectTimers.set(relayUrl, timer);
+  }
+
+  private markEventHandled(eventId: string): void {
+    this.handledEventIds.add(eventId);
+    this.handledEventOrder.push(eventId);
+    if (this.handledEventOrder.length > MAX_HANDLED_EVENT_IDS) {
+      const evicted = this.handledEventOrder.shift()!;
+      this.handledEventIds.delete(evicted);
+    }
+  }
+
   private async handleNwcRequest(event: any, relayUrl: string): Promise<void> {
+    // Deduplicate by event id. The same request can be delivered more than once (a relay
+    // redelivering recent events on resubscribe after a reconnect); processing a pay_*
+    // request twice would pay twice. The check-and-mark is synchronous (no await before
+    // markEventHandled) so two near-simultaneous deliveries can't both slip through.
+    const eventId = event?.id;
+    if (eventId) {
+      if (this.handledEventIds.has(eventId)) {
+        this.logger?.info(`[NWC] Ignoring duplicate request event ${eventId}`);
+        return;
+      }
+      this.markEventHandled(eventId);
+    }
+
     // Serialize requests per client so the spending-limit check-and-update is atomic —
     // concurrent requests from one client must not both pass the limit check before
     // either records its spend (TOCTOU race).

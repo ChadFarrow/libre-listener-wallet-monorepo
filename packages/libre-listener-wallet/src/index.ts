@@ -1300,6 +1300,15 @@ export class LibreListenerWallet {
   async purchaseLSPS1Capacity(options: {
     amountSats: number;
     lsp: LspProvider;
+    // Desired channel lease duration in blocks. Clamped to the LSP's advertised
+    // [min_channel_expiry_blocks, max_channel_expiry_blocks]. Defaults to the LSP's
+    // MAX (the longest lease on offer) — an infrequently-online listener wallet wants
+    // the longest guaranteed lifetime per channel-open fee, not the shortest.
+    channelExpiryBlocks?: number;
+    // Request an announced (public) channel. Defaults false (private). A browser node
+    // has no reachable address to advertise, so private is correct here; exposed only
+    // for completeness/parity with the spec.
+    announceChannel?: boolean;
   }): Promise<string> {
     if (!this.channelManager) {
       throw new Error("Wallet is not running");
@@ -1322,6 +1331,16 @@ export class LibreListenerWallet {
       throw new Error(`Requested amount ${amountSats} sat is outside LSP bounds [${infoRes.min_channel_balance_sat}, ${infoRes.max_channel_balance_sat}]`);
     }
 
+    // Choose the lease duration: caller's request clamped to the LSP's bounds,
+    // defaulting to the longest lease offered (max guaranteed channel lifetime).
+    const minExpiry = infoRes.min_channel_expiry_blocks;
+    const maxExpiry = infoRes.max_channel_expiry_blocks;
+    const requestedExpiry = options.channelExpiryBlocks ?? maxExpiry;
+    const channelExpiryBlocks = Math.min(maxExpiry, Math.max(minExpiry, requestedExpiry));
+    if (options.channelExpiryBlocks != null && channelExpiryBlocks !== options.channelExpiryBlocks) {
+      this.logger?.info(`[LSPS1] Requested lease ${options.channelExpiryBlocks} blocks clamped to LSP bounds [${minExpiry}, ${maxExpiry}] → ${channelExpiryBlocks}`);
+    }
+
     // b. Create order
     const orderRes = await lspsClient.request<Lsps1CreateOrderParams, Lsps1CreateOrderResponse>(
       "lsps1.create_order",
@@ -1329,13 +1348,20 @@ export class LibreListenerWallet {
         lsp_balance_sat: amountSatStr,
         client_balance_sat: "0",
         client_node_id: bytesToHex(this.channelManager.get_our_node_id()),
-        channel_expiry_blocks: infoRes.min_channel_expiry_blocks,
-        announce_channel: false,
+        channel_expiry_blocks: channelExpiryBlocks,
+        announce_channel: options.announceChannel ?? false,
       }
     );
 
-    this.logger?.info(`[LSPS1] Order placed successfully: ${orderRes.order_id}. Pay invoice: ${orderRes.invoice}`);
-    return orderRes.invoice;
+    // The dev LSP returns a flat `invoice`; spec-compliant LSPs (bLIP-51) nest it at
+    // `payment.bolt11.invoice`. Accept whichever is present.
+    const invoice = orderRes.invoice ?? orderRes.payment?.bolt11?.invoice;
+    if (!invoice) {
+      throw new Error("LSPS1 create_order response missing payment invoice");
+    }
+
+    this.logger?.info(`[LSPS1] Order placed successfully: ${orderRes.order_id} (lease ${channelExpiryBlocks} blocks). Pay invoice: ${invoice}`);
+    return invoice;
   }
 
   // --- Value-for-Value Keysend & Splits Implementation ---

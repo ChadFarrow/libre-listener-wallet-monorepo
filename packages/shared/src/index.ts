@@ -124,9 +124,18 @@ export interface Lsps1CreateOrderResponse {
   order_id: string;
   lsp_balance_sat: string;
   client_balance_sat: string;
-  payment_value_msat: string;
-  payment_addr: string;
-  invoice: string;
+  payment_value_msat?: string;
+  payment_addr?: string;
+  // Flat invoice field as returned by the regtest dev LSP. Spec-compliant LSPs
+  // (bLIP-51) instead nest it at `payment.bolt11.invoice` — see `payment` below.
+  // Consumers should read whichever is present.
+  invoice?: string;
+  // Spec (bLIP-51) shape: the BOLT11 to pay lives under payment.bolt11.invoice.
+  payment?: {
+    bolt11?: {
+      invoice?: string;
+    };
+  };
 }
 
 export * from "./v4v-utils";

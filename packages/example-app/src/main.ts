@@ -120,6 +120,7 @@ const wsBridgeUrlInput = document.getElementById("ws-bridge-url") as HTMLInputEl
 const lspConnStrInput = document.getElementById("lsp-conn-str") as HTMLInputElement;
 const lspApiUrlInput = document.getElementById("lsp-api-url") as HTMLInputElement;
 const nodeIdVal = document.getElementById("node-id-val") as HTMLSpanElement;
+const copyNodeIdBtn = document.getElementById("copy-node-id-btn") as HTMLButtonElement;
 const restoreBanner = document.getElementById("restore-banner") as HTMLDivElement;
 const balanceSpendableEl = document.getElementById("balance-spendable") as HTMLSpanElement;
 const balanceReceivableEl = document.getElementById("balance-receivable") as HTMLSpanElement;
@@ -258,7 +259,11 @@ async function migrateLegacyStorageOnce(selectedNetwork: string): Promise<void> 
     restoreBanner.classList.remove("hidden");
   }
   if (autostart && readiness.canStart) {
-    autoConnectMode = true; // also reconnect the configured peer after start
+    // Only auto-reconnect the peer if we already have a channel to keep alive. A
+    // wallet with no channel state (a fresh/stranger wallet) starts but does NOT
+    // peer — peering then is pointless and just loads the configured node with
+    // every visitor. With a channel, reconnecting keeps it sendable across reloads.
+    autoConnectMode = hasChannelState;
     appendLog("[SYSTEM] Auto-starting node…", "system");
     startNodeBtn.click();
   }
@@ -795,6 +800,17 @@ requestJitBtn.addEventListener("click", async () => {
 
 copyJitInvoiceBtn.addEventListener("click", () => copyToClipboard(jitInvoiceStr.value, "JIT Invoice copied to clipboard."));
 
+// Copy the wallet's node id (pubkey) — this is what you paste into your node's
+// `openchannel --node_key=` to open a channel to the browser wallet.
+copyNodeIdBtn.addEventListener("click", () => {
+  const id = nodeIdVal.innerText.trim();
+  if (!id || id === "-") {
+    appendLog("[ERROR] Start the node first — the Node ID appears once it's running.", "error");
+    return;
+  }
+  copyToClipboard(id, "Node ID copied — paste it into your node's openchannel.");
+});
+
 createInvoiceBtn.addEventListener("click", async () => {
   if (!wallet || !isNodeRunning) return;
   try {
@@ -989,7 +1005,11 @@ createWalletBtn.addEventListener("click", async () => {
     await storage.setItem("wallet_created_new", "1");
     pendingSeed = null; // consumed
     justCreated = true;
-    autoConnectMode = true; // also connect the configured peer after start (mirrors auto-start path)
+    // A brand-new wallet has no channel, so do NOT auto-connect the peer — otherwise
+    // every visitor who creates a wallet silently peers to the configured node. The
+    // user clicks "Connect Peer" explicitly when they're ready to open their first
+    // channel. Auto-reconnect only kicks in once channel state exists (see load path).
+    autoConnectMode = false;
     createWalletFields.classList.add("hidden");
     nodeIdVal.innerText = "-";
     createWalletStatus.textContent = "Wallet created — starting node…";

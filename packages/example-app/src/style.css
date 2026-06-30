@@ -226,6 +226,27 @@ h1 {
   white-space: nowrap;
 }
 
+/* Node ID tile gets extra width + an inline Copy button */
+.stat-tile-wide {
+  grid-column: span 2;
+}
+
+.stat-id-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stat-id-row .stat-value {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.stat-id-row .btn {
+  flex: 0 0 auto;
+}
+
 .stat-strip-footer {
   display: flex;
   flex-wrap: wrap;

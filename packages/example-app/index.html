@@ -31,9 +31,12 @@
       <section class="setup-zone">
         <!-- Live status strip: at-a-glance node/balance readout -->
         <div class="stat-grid">
-          <div class="stat-tile">
-            <span class="stat-label">Node ID</span>
-            <span id="node-id-val" class="stat-value select-all">-</span>
+          <div class="stat-tile stat-tile-wide">
+            <span class="stat-label">Node ID (give this to your node to open a channel)</span>
+            <div class="stat-id-row">
+              <span id="node-id-val" class="stat-value select-all">-</span>
+              <button id="copy-node-id-btn" class="btn btn-secondary btn-sm" title="Copy Node ID">Copy</button>
+            </div>
           </div>
           <div class="stat-tile">
             <span class="stat-label">Peers</span>
@@ -119,16 +122,30 @@
               <input type="text" id="esplora-url-input" value="http://127.0.0.1:3002" />
             </div>
 
+            <!-- Peer / node connection: how the browser reaches a Lightning node -->
+            <div class="form-group" style="border-top: 1px dashed var(--border-color); padding-top: 16px;">
+              <label>Lightning node — preset</label>
+              <select id="lsp-preset">
+                <option value="custom">Custom (enter your own node)</option>
+                <option value="megalith">Megalith LSP (mainnet)</option>
+              </select>
+              <p class="help-text">Picks a known node and fills the connection below. Channels stay private.</p>
+            </div>
             <div class="form-group">
-              <label>WebSocket Bridge URL</label>
+              <label>Node connection (pubkey@host:port)</label>
+              <input type="text" id="lsp-conn-str" value="02bdafbf7a60765a9ab4673350c1b5954449e290f498d1ff3a77c58eb7cebfbf24@127.0.0.1:9735" />
+            </div>
+            <div class="form-group">
+              <label>WebSocket bridge URL</label>
               <input type="text" id="ws-bridge-url" value="ws://127.0.0.1:8081" />
-              <p class="help-text">Browser → LN node bridge (auto-set by Network).</p>
+              <p class="help-text">A browser can't dial a raw node — the wallet connects through this websockify (TCP→WebSocket) bridge, which forwards to the node above. To use your OWN node, run a bridge in front of it and put its <code>wss://</code> URL here.</p>
             </div>
 
             <div class="button-row">
               <button id="start-node-btn" class="btn btn-glow">Start Node</button>
               <button id="stop-node-btn" class="btn btn-danger" disabled>Stop Node</button>
             </div>
+            <button id="connect-lsp-btn" class="btn btn-primary" disabled style="width: 100%; margin-top: 12px;">Connect Peer (peer the nodes before opening a channel)</button>
             <label class="checkbox-row" style="display: flex; align-items: center; gap: 8px; margin-top: 12px;">
               <input type="checkbox" id="autostart-checkbox" checked />
               <span>Auto-start node on load</span>
@@ -170,26 +187,14 @@
       <h2 class="zone-heading">Protocol &amp; Feature Tests</h2>
 
       <main class="dashboard-grid">
-        <!-- LSP Connections -->
+        <!-- LSP service (JIT API). The node you peer with is set in the Node panel above. -->
         <section class="card glass-card">
-          <h2>1. LSP Peer Connection</h2>
-          <div class="form-group">
-            <label>LSP Preset</label>
-            <select id="lsp-preset">
-              <option value="custom">Custom / Dev (manual entry)</option>
-              <option value="megalith">Megalith LSP (mainnet)</option>
-            </select>
-            <span class="help-text">Picks a known LSP and fills the fields below. Channels stay private.</span>
-          </div>
-          <div class="form-group">
-            <label>LSP Connection String (pubkey@host:port)</label>
-            <input type="text" id="lsp-conn-str" value="02bdafbf7a60765a9ab4673350c1b5954449e290f498d1ff3a77c58eb7cebfbf24@127.0.0.1:9735" />
-          </div>
+          <h2>1. LSP Service (JIT API)</h2>
           <div class="form-group">
             <label>LSP JSON-RPC HTTP API</label>
             <input type="text" id="lsp-api-url" value="http://127.0.0.1:9099/lsps2" />
+            <p class="help-text">Endpoint for the LSPS2 / LSPS1 JIT requests below. The node you peer with (and the bridge) is set in the <strong>Node</strong> panel above.</p>
           </div>
-          <button id="connect-lsp-btn" class="btn btn-primary" disabled>Connect Peer</button>
         </section>
 
         <!-- Section 3: LSPS2 JIT Channel -->

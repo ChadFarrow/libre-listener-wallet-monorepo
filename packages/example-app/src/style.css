@@ -175,6 +175,90 @@ h1 {
   grid-column: 1 / -1;
 }
 
+/* Focused top zone: wallet & node setup */
+.setup-zone {
+  margin-bottom: 40px;
+  padding: 24px;
+  background: hsla(263, 40%, 12%, 0.25);
+  border: 1px solid var(--border-glow);
+  border-radius: var(--radius-lg);
+}
+
+.setup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+}
+
+/* Live status strip */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  background: hsla(240, 10%, 4%, 0.4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+
+.stat-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  color: var(--color-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-strip-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.stat-strip-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.stat-strip-actions .help-text {
+  margin-top: 0;
+  max-width: 360px;
+}
+
+/* Divider heading above the test grid */
+.zone-heading {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
 /* Cards & Glassmorphism */
 .card {
   background: var(--bg-glass);
@@ -201,7 +285,6 @@ h1 {
 }
 
 .card:hover {
-  transform: translateY(-4px);
   border-color: var(--border-glow);
   box-shadow: var(--shadow-glow);
 }
@@ -587,10 +670,16 @@ select {
     padding: 20px 16px;
   }
   
-  .dashboard-grid {
+  .dashboard-grid,
+  .setup-grid,
+  .stat-grid {
     grid-template-columns: 1fr;
   }
-  
+
+  .setup-zone {
+    padding: 16px;
+  }
+
   h1 {
     font-size: 1.8rem;
   }

@@ -421,21 +421,21 @@ function refreshWalletView(): void {
 // fail and the user should Sync gossip first.
 function renderGraphStatus(): void {
   if (!wallet || !isNodeRunning) {
-    gossipStatusEl.textContent = "Graph: 0 channels";
+    gossipStatusEl.textContent = "0 channels";
     return;
   }
   try {
     const ng = wallet.getNetworkGraph();
     if (!ng) {
-      gossipStatusEl.textContent = "Graph: unavailable";
+      gossipStatusEl.textContent = "unavailable";
       return;
     }
     const readOnly = ng.read_only();
     const count = readOnly.list_channels().length;
     readOnly.free(); // ReadOnlyNetworkGraph holds a read lock that must be freed.
-    gossipStatusEl.textContent = `Graph: ${count.toLocaleString()} channels`;
+    gossipStatusEl.textContent = `${count.toLocaleString()} channels`;
   } catch (e) {
-    gossipStatusEl.textContent = "Graph: unavailable";
+    gossipStatusEl.textContent = "unavailable";
     appendLog(`[WARN] renderGraphStatus failed: ${e instanceof Error ? e.message : e}`, "warn");
   }
 }

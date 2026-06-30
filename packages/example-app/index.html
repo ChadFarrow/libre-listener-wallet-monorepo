@@ -114,42 +114,44 @@
                 <option value="signet">signet (Mutinynet)</option>
                 <option value="regtest">regtest (local docker)</option>
               </select>
-              <p class="help-text">Switching network auto-fills the Esplora, bridge, and peer fields.</p>
-            </div>
-
-            <div class="form-group">
-              <label>Esplora (Electrs) Sync URL</label>
-              <input type="text" id="esplora-url-input" value="http://127.0.0.1:3002" />
-            </div>
-
-            <!-- Peer / node connection: how the browser reaches a Lightning node -->
-            <div class="form-group" style="border-top: 1px dashed var(--border-color); padding-top: 16px;">
-              <label>Lightning node — preset</label>
-              <select id="lsp-preset">
-                <option value="custom">Custom (enter your own node)</option>
-                <option value="megalith">Megalith LSP (mainnet)</option>
-              </select>
-              <p class="help-text">Picks a known node and fills the connection below. Channels stay private.</p>
-            </div>
-            <div class="form-group">
-              <label>Node connection (pubkey@host:port)</label>
-              <input type="text" id="lsp-conn-str" value="02bdafbf7a60765a9ab4673350c1b5954449e290f498d1ff3a77c58eb7cebfbf24@127.0.0.1:9735" />
-            </div>
-            <div class="form-group">
-              <label>WebSocket bridge URL</label>
-              <input type="text" id="ws-bridge-url" value="ws://127.0.0.1:8081" />
-              <p class="help-text">A browser can't dial a raw node — the wallet connects through this websockify (TCP→WebSocket) bridge, which forwards to the node above. To use your OWN node, run a bridge in front of it and put its <code>wss://</code> URL here.</p>
             </div>
 
             <div class="button-row">
               <button id="start-node-btn" class="btn btn-glow">Start Node</button>
               <button id="stop-node-btn" class="btn btn-danger" disabled>Stop Node</button>
             </div>
-            <button id="connect-lsp-btn" class="btn btn-primary" disabled style="width: 100%; margin-top: 12px;">Connect Peer (peer the nodes before opening a channel)</button>
+            <button id="connect-lsp-btn" class="btn btn-primary" disabled style="width: 100%; margin-top: 12px;">Connect Peer</button>
+            <p class="help-text">Peer with your node before opening a channel — a fresh wallet doesn't auto-peer.</p>
             <label class="checkbox-row" style="display: flex; align-items: center; gap: 8px; margin-top: 12px;">
               <input type="checkbox" id="autostart-checkbox" checked />
               <span>Auto-start node on load</span>
             </label>
+
+            <!-- Set-once endpoints/peer config — tucked away so the panel stays simple -->
+            <details class="advanced-settings">
+              <summary>Connection settings</summary>
+              <div class="form-group" style="margin-top: 16px;">
+                <label>Lightning node — preset</label>
+                <select id="lsp-preset">
+                  <option value="custom">Custom (enter your own node)</option>
+                  <option value="megalith">Megalith LSP (mainnet)</option>
+                </select>
+                <p class="help-text">Picks a known node and fills the connection below. Switching Network also auto-fills these.</p>
+              </div>
+              <div class="form-group">
+                <label>Node connection (pubkey@host:port)</label>
+                <input type="text" id="lsp-conn-str" value="02bdafbf7a60765a9ab4673350c1b5954449e290f498d1ff3a77c58eb7cebfbf24@127.0.0.1:9735" />
+              </div>
+              <div class="form-group">
+                <label>WebSocket bridge URL</label>
+                <input type="text" id="ws-bridge-url" value="ws://127.0.0.1:8081" />
+                <p class="help-text">A browser can't dial a raw node — the wallet connects through this websockify (TCP→WebSocket) bridge, which forwards to the node above. To use your OWN node, run a bridge in front of it and put its <code>wss://</code> URL here.</p>
+              </div>
+              <div class="form-group">
+                <label>Esplora (Electrs) Sync URL</label>
+                <input type="text" id="esplora-url-input" value="http://127.0.0.1:3002" />
+              </div>
+            </details>
           </section>
 
           <!-- Backup & Recovery -->

@@ -268,6 +268,37 @@ h1 {
   max-width: 360px;
 }
 
+/* Collapsible "Connection settings" inside the Node panel */
+.advanced-settings {
+  margin-top: 20px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 16px;
+}
+
+.advanced-settings > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  list-style: none;
+  user-select: none;
+}
+
+.advanced-settings > summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-settings > summary::before {
+  content: "▸ ";
+  color: var(--color-accent);
+}
+
+.advanced-settings[open] > summary::before {
+  content: "▾ ";
+}
+
 /* Divider heading above the test grid */
 .zone-heading {
   font-size: 1.1rem;

@@ -174,6 +174,14 @@
         <section class="card glass-card">
           <h2>1. LSP Peer Connection</h2>
           <div class="form-group">
+            <label>LSP Preset</label>
+            <select id="lsp-preset">
+              <option value="custom">Custom / Dev (manual entry)</option>
+              <option value="megalith">Megalith LSP (mainnet)</option>
+            </select>
+            <span class="help-text">Picks a known LSP and fills the fields below. Channels stay private.</span>
+          </div>
+          <div class="form-group">
             <label>LSP Connection String (pubkey@host:port)</label>
             <input type="text" id="lsp-conn-str" value="02bdafbf7a60765a9ab4673350c1b5954449e290f498d1ff3a77c58eb7cebfbf24@127.0.0.1:9735" />
           </div>
@@ -210,6 +218,17 @@
           <div class="form-group">
             <label>Requested Channel Balance (Satoshi)</label>
             <input type="number" id="lsps1-amount" value="100000" min="50000" />
+          </div>
+          <div class="form-group">
+            <label>Channel Lease Duration</label>
+            <select id="lsps1-lease">
+              <option value="">Longest available (recommended)</option>
+              <option value="4320">~1 month</option>
+              <option value="12960">~3 months</option>
+              <option value="25920">~6 months</option>
+              <option value="52560">~12 months</option>
+            </select>
+            <span class="help-text">A leased channel can't be force-closed by the LSP before it expires. Longer leases cost more up front but avoid repeat channel-open fees — better for occasional use. Clamped to what the LSP offers.</span>
           </div>
           <button id="purchase-lsps1-btn" class="btn btn-primary" disabled>Order Capacity</button>
 

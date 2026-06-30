@@ -280,11 +280,38 @@ const jitInvoiceContainer = document.getElementById("jit-invoice-container") as 
 const jitInvoiceStr = document.getElementById("jit-invoice-str") as HTMLTextAreaElement;
 const copyJitInvoiceBtn = document.getElementById("copy-jit-invoice-btn") as HTMLButtonElement;
 
+const lspPresetSelect = document.getElementById("lsp-preset") as HTMLSelectElement;
 const purchaseLsps1Btn = document.getElementById("purchase-lsps1-btn") as HTMLButtonElement;
 const lsps1AmountInput = document.getElementById("lsps1-amount") as HTMLInputElement;
+const lsps1LeaseSelect = document.getElementById("lsps1-lease") as HTMLSelectElement;
 const lsps1InvoiceContainer = document.getElementById("lsps1-invoice-container") as HTMLDivElement;
 const lsps1InvoiceStr = document.getElementById("lsps1-invoice-str") as HTMLTextAreaElement;
 const copyLsps1InvoiceBtn = document.getElementById("copy-lsps1-invoice-btn") as HTMLButtonElement;
+
+// Known LSPs the app can one-click fill. Channels are always requested PRIVATE
+// (a browser node has no reachable address to announce), which is also all ZEUS
+// allows — public channels aren't needed for an outgoing/listener wallet.
+// NOTE: Megalith exposes LSPS1 over a REST binding; the peer connection below is
+// verified, but ordering capacity against the live endpoint may need the REST
+// transport (the current client speaks single-endpoint JSON-RPC).
+const LSP_PRESETS: Record<string, { connStr: string; apiUrl: string }> = {
+  megalith: {
+    connStr:
+      "038a9e56512ec98da2b5789761f7af8f280baf98a09282360cd6ff1381b5e889bf@64.23.162.51:9735",
+    apiUrl: "https://lsp1.megalith-node.com/api/lsps1/v1",
+  },
+};
+
+lspPresetSelect.addEventListener("change", () => {
+  const preset = LSP_PRESETS[lspPresetSelect.value];
+  if (!preset) return; // "custom" — leave the fields as the user set them
+  lspConnStrInput.value = preset.connStr;
+  lspApiUrlInput.value = preset.apiUrl;
+  appendLog(
+    `[SYSTEM] LSP preset "${lspPresetSelect.value}" selected; connection fields filled (private channel).`,
+    "system"
+  );
+});
 
 
 
@@ -807,10 +834,18 @@ purchaseLsps1Btn.addEventListener("click", async () => {
       protocols: ["lsps1" as const],
     };
 
-    appendLog(`[LSPS1] Purchasing ${amountSats} sats inbound capacity...`, "system");
+    // Empty value = "Longest available" → let the SDK default to the LSP's max lease.
+    const leaseRaw = lsps1LeaseSelect.value.trim();
+    const channelExpiryBlocks = leaseRaw ? parseInt(leaseRaw, 10) : undefined;
+
+    appendLog(
+      `[LSPS1] Purchasing ${amountSats} sats inbound capacity${channelExpiryBlocks ? ` (~${channelExpiryBlocks} block lease)` : " (longest lease)"}...`,
+      "system"
+    );
     const invoice = await wallet.purchaseLSPS1Capacity({
       amountSats,
       lsp,
+      ...(channelExpiryBlocks !== undefined ? { channelExpiryBlocks } : {}),
     });
 
     appendLog(`[LSPS1] Order placed! Pay invoice: ${invoice.substring(0, 30)}...`, "system");

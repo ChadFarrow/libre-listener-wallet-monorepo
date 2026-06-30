@@ -1,0 +1,30 @@
+# Guard the funded production origin (push to master auto-deploys to GitHub Pages).
+# Hard-block the push if a persisted storage invariant changed; warn if any
+# storage-layer file is touched. See .claude/plans and the storage-contract tests.
+
+if ! pnpm check:storage; then
+  echo ""
+  echo "❌ Storage contract test FAILED — a persisted storage invariant changed."
+  echo "   This can orphan the funded mainnet channel (force-close) or break"
+  echo "   decryption of existing backups (lost recovery path)."
+  echo ""
+  echo "   • If unintended: revert the storage-layer change."
+  echo "   • If intended:   write a migration, update the storage-contract test in"
+  echo "                    the same commit, then push again."
+  echo "   • To override this once (you accept the risk):  git push --no-verify"
+  echo ""
+  exit 1
+fi
+
+# Soft, non-blocking reminder when storage-layer implementation files change even if
+# the invariants held — these are the changes to test on regtest/local before they
+# reach the funded origin.
+range="@{push}..HEAD"
+changed=$(git diff --name-only "$range" 2>/dev/null) || changed=$(git diff --name-only "origin/master..HEAD" 2>/dev/null) || changed=""
+if printf '%s\n' "$changed" | grep -qE 'storage-namespace|indexed-db-storage|storage-cache|state-backup|persistent-storage|service-worker|backup-keys'; then
+  echo ""
+  echo "⚠️  Storage-layer files changed in this push. The contract test passed, but"
+  echo "    test these on regtest/local BEFORE they hit production — push to master"
+  echo "    auto-deploys to the funded wallet origin."
+  echo ""
+fi

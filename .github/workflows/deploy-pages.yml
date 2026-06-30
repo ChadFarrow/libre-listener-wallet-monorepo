@@ -43,6 +43,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Backstop: refuse to deploy to the funded origin if a persisted storage
+      # invariant changed (renamed key / DB name / backup format). On failure the
+      # build job fails, the deploy job (needs: build) never runs, and production
+      # stays on the last good build. Catches a --no-verify push or a clone without
+      # the husky pre-push hook. Unit-only — no docker needed.
+      - name: Storage contract check
+        run: pnpm check:storage
       - name: Build workspace deps + example-app
         env:
           VITE_MAINNET_PEER: ${{ vars.VITE_MAINNET_PEER }}

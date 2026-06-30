@@ -6,9 +6,12 @@
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",
-    "lint": "turbo run lint"
+    "lint": "turbo run lint",
+    "check:storage": "pnpm --filter @libre/listener-wallet exec vitest run src/tests/unit/storage-contract.test.ts && pnpm --filter @libre/example-app exec vitest run src/core/storage-contract.test.ts",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "husky": "^9.1.7",
     "turbo": "^2.0.4",
     "typescript": "^5.4.5"
   },

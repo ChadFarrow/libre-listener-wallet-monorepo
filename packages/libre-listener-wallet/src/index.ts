@@ -93,6 +93,7 @@ import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
 import { IndexedDBStorageProvider } from "./indexed-db-storage";
 import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayload } from "./state-backup";
+import { BACKUP_DIRECT_KEYS } from "./backup-keys";
 import { reconnectDelayMs } from "./peer-reconnect";
 
 export { IndexedDBStorageProvider };
@@ -912,8 +913,8 @@ export class LibreListenerWallet {
     }
 
     const entries: Record<string, string> = {};
-    // Direct (non-KVStore) keys written by the wallet itself.
-    const directKeys = ["ldk_seed", "channel_manager", "network_graph", "scorer", "ldk_keys_index", "state_version"];
+    // Direct (non-KVStore) keys written by the wallet itself. Pinned in backup-keys.ts.
+    const directKeys = BACKUP_DIRECT_KEYS;
     for (const k of directKeys) {
       const v = await this.storage.getItem(k);
       if (v !== null) entries[k] = v;

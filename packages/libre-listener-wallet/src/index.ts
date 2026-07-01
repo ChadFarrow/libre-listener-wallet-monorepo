@@ -77,6 +77,12 @@ import {
   ReplayEvent,
   Option_ThirtyTwoBytesZ_Some,
   Event_PaymentClaimable,
+  Event_OpenChannelRequest,
+  Event_PendingHTLCsForwardable,
+  Event_ChannelPending,
+  Event_ChannelReady,
+  Event_PaymentClaimed,
+  Event_SpendableOutputs,
   Result_ThirtyTwoBytesNoneZ_OK,
   PaymentParameters,
   RouteParameters,
@@ -569,6 +575,13 @@ export class LibreListenerWallet {
 
     const eventHandler = EventHandler.new_impl({
       handle_event: (event: Event) => {
+        // Dispatch with `instanceof`, NOT `event.constructor.name`: the production
+        // (Vite/esbuild) build minifies the LDK binding class names (e.g. to "Fzt"),
+        // so a `name === "Event_..."` string check silently fails on the deployed PWA
+        // and NO event handler runs — the node receives an OpenChannelRequest/payment
+        // but never accepts/claims it. `instanceof` compares the imported class
+        // reference, which survives minification. (Worked in `pnpm dev` because dev
+        // isn't minified — a nasty prod-only trap.)
         const name = event.constructor.name;
         this.logger?.info(`[LDK Event] Received event: ${name}`);
         let replayEvent = false; // ask LDK to re-deliver this event if we couldn't fully handle it
@@ -599,7 +612,7 @@ export class LibreListenerWallet {
               }
             }
           });
-        } else if (name === "Event_OpenChannelRequest") {
+        } else if (event instanceof Event_OpenChannelRequest) {
           const tempChanId = (event as any).temporary_channel_id;
           const counterparty = (event as any).counterparty_node_id;
           const counterpartyHex = bytesToHex(counterparty);
@@ -619,17 +632,17 @@ export class LibreListenerWallet {
             res = this.channelManager!.accept_inbound_channel(tempChanId, counterparty, 0n);
           }
           this.logger?.info(`[LDK Event] accept_inbound_channel result: ${res.is_ok()}`);
-        } else if (name === "Event_PendingHTLCsForwardable") {
+        } else if (event instanceof Event_PendingHTLCsForwardable) {
           this.logger?.info("[LDK Event] PendingHTLCsForwardable received. Processing forwards...");
           this.channelManager!.process_pending_htlc_forwards();
-        } else if (name === "Event_ChannelPending") {
+        } else if (event instanceof Event_ChannelPending) {
           this.logger?.info(`[LDK Event] Channel pending!`);
-        } else if (name === "Event_ChannelReady") {
+        } else if (event instanceof Event_ChannelReady) {
           this.logger?.info(`[LDK Event] Channel ready!`);
           this.broadcastNodeAnnouncement();
-        } else if (name === "Event_PaymentClaimed") {
+        } else if (event instanceof Event_PaymentClaimed) {
           this.logger?.info(`[LDK Event] Payment claimed!`);
-        } else if (name === "Event_SpendableOutputs") {
+        } else if (event instanceof Event_SpendableOutputs) {
           // A channel close left on-chain outputs we can claim. Sweep them to the
           // configured address. Done synchronously here so the descriptors are used
           // before the event is freed; only the resulting tx bytes are broadcast async.

@@ -1174,10 +1174,23 @@ export class LibreListenerWallet {
       // The current connection for this peer dropped — keep it alive by redialing.
       this.scheduleReconnect(desc.peerPubkey);
     }
-    if (this.peerManager) {
-      const sdkDescriptor = SocketDescriptor.new_impl(desc);
-      this.peerManager.socket_disconnected(sdkDescriptor);
-      this.peerManager.process_events();
+    // Inform LDK the socket closed — but OUTSIDE this call stack. LDK invokes our
+    // SocketDescriptor.disconnect_socket() re-entrantly from within timer_tick_occurred()/
+    // process_events() when it drops a stale peer, so calling back into PeerManager here
+    // synchronously triggers "already borrowed: BorrowMutError" -> a WASM `unreachable`
+    // trap (surfaces on the minified PWA as "unreachable executed"), which kills
+    // auto-reconnect for good. Deferring to a microtask lets the in-flight PeerManager call
+    // unwind and release its borrow first. socket_disconnected after an LDK-initiated
+    // disconnect is a documented no-op, so this is safe for both the LDK-initiated and the
+    // transport-drop (onclose/onerror) paths.
+    const pm = this.peerManager;
+    if (pm) {
+      queueMicrotask(() => {
+        // stop() frees this.peerManager; skip if the node was torn down or restarted.
+        if (this.peerManager !== pm) return;
+        pm.socket_disconnected(SocketDescriptor.new_impl(desc));
+        pm.process_events();
+      });
     }
   }
 

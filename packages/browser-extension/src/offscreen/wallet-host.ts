@@ -13,6 +13,7 @@ import { parseConfig, serializeConfig, CONFIG_KEY, type ExtensionConfig } from "
 import { createWebSocketStreamProvider } from "../core/ws-provider";
 import { PaymentTracker } from "./payment-tracker";
 import { payBolt11 } from "./pay-invoice";
+import { restoreBlockReason } from "./restore-guard";
 import type { WalletRpc } from "../core/webln-mapping";
 
 const KEYSEND_TIMEOUT_MS = 90_000;
@@ -32,6 +33,7 @@ export class WalletHost implements WalletRpc {
   private tracker?: PaymentTracker;
   private meta: SecureStorageProvider;
   private emit: HostEvent;
+  private restoring = false; // serializes restoreWallet against a concurrent (double-click) call
 
   constructor(emit: HostEvent = () => {}) {
     this.meta = new IndexedDBStorageProvider(META_DB_NAME);
@@ -203,23 +205,41 @@ export class WalletHost implements WalletRpc {
   // Restore from an encrypted backup envelope. importState writes seed + channel state + network
   // (and enforces the network match), so the readiness guard is satisfied afterwards.
   async restoreWallet(envelope: string, secret: string): Promise<{ nodeId: string; network: string }> {
-    // Peek the backup's network so we open/point at the right DB before importing.
-    const probe = await this.buildWallet();
-    const verified = await probe.verifyBackup(envelope, secret);
-    if (!verified.ok) throw new Error("Backup could not be decrypted with that secret.");
-    if (verified.network) {
-      await this.meta.setItem(ACTIVE_NETWORK_KEY, verified.network);
+    // Refuse to restore under a running node or a concurrent restore (see restore-guard).
+    const early = restoreBlockReason({ running: !!this.wallet, restoring: this.restoring, targetHasChannelState: false });
+    if (early) throw new Error(early);
+    this.restoring = true;
+    try {
+      // Peek the backup's network so we open/point at the right DB before importing.
+      const probe = await this.buildWallet();
+      const verified = await probe.verifyBackup(envelope, secret);
+      if (!verified.ok) throw new Error("Backup could not be decrypted with that secret.");
+      // Refuse to overwrite an existing funded wallet on the target network — check BEFORE moving
+      // the active-network pointer, so a refused restore leaves no side effects.
+      const targetNetwork = verified.network || (await this.activeNetwork());
+      const targetStorage = this.storageForNetwork(targetNetwork);
+      const funded = restoreBlockReason({
+        running: false,
+        restoring: false,
+        targetHasChannelState: !!(await targetStorage.getItem(CHANNEL_MANAGER_KEY)),
+      });
+      if (funded) throw new Error(funded);
+      if (verified.network) {
+        await this.meta.setItem(ACTIVE_NETWORK_KEY, verified.network);
+      }
+      // Rebuild against the (now correct) network DB and import.
+      const wallet = await this.buildWallet();
+      await wallet.importState(envelope, secret);
+      this.wallet = wallet;
+      this.tracker = new PaymentTracker(wallet);
+      await wallet.start();
+      await this.startNwc();
+      void wallet.syncGossip().catch(() => {});
+      this.emit("state-changed");
+      return this.currentNode();
+    } finally {
+      this.restoring = false;
     }
-    // Rebuild against the (now correct) network DB and import.
-    const wallet = await this.buildWallet();
-    await wallet.importState(envelope, secret);
-    this.wallet = wallet;
-    this.tracker = new PaymentTracker(wallet);
-    await wallet.start();
-    await this.startNwc();
-    void wallet.syncGossip().catch(() => {});
-    this.emit("state-changed");
-    return this.currentNode();
   }
 
   async exportBackup(): Promise<string> {

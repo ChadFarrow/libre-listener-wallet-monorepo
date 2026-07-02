@@ -6,6 +6,7 @@ import {
   Event_PaymentFailed,
   Option_ThirtyTwoBytesZ_Some,
 } from "lightningdevkit";
+import { settlementPendingMessage } from "../core/settlement-pending";
 
 // Awaits outbound-payment settlement by payment hash, resolving with the preimage on
 // Event_PaymentSent and rejecting on Event_PaymentFailed. This mirrors the pendingPayments
@@ -37,10 +38,7 @@ export class PaymentTracker {
     });
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<string>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error("Payment initiated but not yet settled; it may still complete.")),
-        ms
-      );
+      timer = setTimeout(() => reject(new Error(settlementPendingMessage())), ms);
     });
     return Promise.race([settled, timeout]).finally(() => {
       clearTimeout(timer!);

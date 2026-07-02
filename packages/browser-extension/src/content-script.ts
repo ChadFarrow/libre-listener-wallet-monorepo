@@ -1,4 +1,5 @@
 import { MSG, type RpcResponse } from "./core/messages";
+import { isAllowedWeblnMethod } from "./core/webln-gate";
 import { WEBLN_MSG_SOURCE, type InpageRequest, type InpageResponse } from "./core/inpage-protocol";
 
 // Runs in the page's ISOLATED world at document_start. Two jobs:
@@ -40,6 +41,13 @@ window.addEventListener("message", (event: MessageEvent) => {
     };
     window.postMessage(response, pageOrigin);
   };
+
+  // Defense-in-depth: never relay a non-WebLN method to the background (the background gate is the
+  // authoritative check, but there's no reason to forward a control-plane method name from a page).
+  if (!isAllowedWeblnMethod(data.method)) {
+    respond({ ok: false, error: `WebLN method not permitted: ${data.method}` });
+    return;
+  }
 
   chrome.runtime
     .sendMessage({

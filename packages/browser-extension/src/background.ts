@@ -2,7 +2,9 @@ import { MSG, newId, type RpcResponse } from "./core/messages";
 import { PermissionStore } from "./core/permission-store";
 import { chromeKV } from "./core/chrome-kv";
 import { normalizeSendPayment, spendAmountSats } from "./core/webln-mapping";
+import { isAllowedWeblnMethod } from "./core/webln-gate";
 import { invoiceAmountSats } from "./core/bolt11-amount";
+import { isSettlementPending } from "./core/settlement-pending";
 import { buildAuthUrl, parseTokenFromRedirect } from "./core/drive-oauth";
 import {
   uploadBackup,
@@ -184,6 +186,13 @@ async function ensureEnabled(origin: string): Promise<void> {
 // ---- WebLN permission gate ----
 
 async function handleWebln(origin: string, method: string, params: any): Promise<any> {
+  // Trust boundary: a page may ONLY invoke the WebLN provider surface. Never forward an arbitrary
+  // page-supplied method to the offscreen host — that would expose control-plane RPC (exportBackup,
+  // createWallet, nwcCreateConnection, …) to any enabled origin.
+  if (!isAllowedWeblnMethod(method)) {
+    throw new Error(`WebLN method not permitted: ${method}`);
+  }
+
   if (method === "enable") {
     await ensureEnabled(origin);
     return {};
@@ -196,15 +205,21 @@ async function handleWebln(origin: string, method: string, params: any): Promise
   }
 
   if (method === "sendPayment") {
-    // Decode the invoice amount for the cap check (background has no LDK). Authoritative payment
-    // happens in the offscreen host.
+    // Decode the invoice amount for the cap check (the background is the ONLY cap enforcer — the
+    // offscreen host does not check caps). Fail CLOSED: if we can't read the amount, refuse to pay
+    // rather than let an undecodable invoice slip past the daily cap.
     const bolt11 = normalizeSendPayment(params);
     const amt = safeInvoiceAmount(bolt11);
-    if (amt != null) await store.chargeIfWithinCap(origin, amt);
+    if (amt == null) {
+      throw new Error("Could not read the invoice amount to check the spending cap; refusing to pay.");
+    }
+    await store.chargeIfWithinCap(origin, amt);
     try {
       return await callOffscreen("sendPayment", params);
     } catch (e) {
-      if (amt != null) await store.refund(origin, amt);
+      // Refund only on a pre-initiation failure. A settlement timeout means send_payment is still
+      // in flight (Retry attempts) and likely settles — keeping the charge is the safe accounting.
+      if (!isSettlementPending((e as Error)?.message)) await store.refund(origin, amt);
       throw e;
     }
   }
@@ -215,12 +230,12 @@ async function handleWebln(origin: string, method: string, params: any): Promise
     try {
       return await callOffscreen("keysend", params);
     } catch (e) {
-      await store.refund(origin, amt);
+      if (!isSettlementPending((e as Error)?.message)) await store.refund(origin, amt);
       throw e;
     }
   }
 
-  // Read-only after enable: getInfo, makeInvoice.
+  // Read-only after enable: getInfo, makeInvoice (the allowlist above bounds this to those two).
   return await callOffscreen(method, params);
 }
 
@@ -228,7 +243,6 @@ function safeInvoiceAmount(bolt11: string): number | null {
   try {
     return invoiceAmountSats(bolt11);
   } catch {
-    // Let the offscreen host reject a malformed invoice; skip the cap pre-check.
     return null;
   }
 }

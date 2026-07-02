@@ -28,9 +28,9 @@ export interface WalletRpc {
 // to enforce the per-origin daily cap. Returns 0 for non-spending / zero-amount-unknown cases.
 export function spendAmountSats(method: string, params: any): number {
   if (method === "keysend") return toPositiveIntSats((params ?? {}).amount);
-  // sendPayment's amount is inside the BOLT11; the cap is enforced by the offscreen host after
-  // decode. We return 0 here so the background gate does not double-charge — the offscreen host
-  // performs the authoritative cap check against the decoded invoice amount.
+  // sendPayment's amount is inside the BOLT11. The background — the ONLY cap enforcer — decodes it
+  // and charges the cap directly (see handleWebln); the offscreen host performs no cap check. This
+  // path returns 0 only because the caller for sendPayment charges separately.
   return 0;
 }
 

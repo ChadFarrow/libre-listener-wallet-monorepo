@@ -16,14 +16,19 @@
       .approve { background: #7a5af5; color: #fff; }
       .deny { background: #8883; }
       .warn { color: #c0392b; font-size: 12px; margin-top: 16px; }
+      .error { color: #c0392b; font-size: 12px; margin-top: 6px; min-height: 1em; }
+      .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-weight: 400; }
+      .check input { width: auto; }
     </style>
   </head>
   <body>
     <h1>A website wants to use your wallet</h1>
     <div class="origin" id="origin">—</div>
     <label for="cap">Daily spending limit (sats)</label>
-    <input id="cap" type="number" min="0" step="1" value="10000" />
-    <div class="hint">Payments this site makes are capped per day. Set 0 for no limit.</div>
+    <input id="cap" type="number" min="1" step="1" value="10000" />
+    <div class="error" id="cap-error"></div>
+    <label class="check"><input id="unlimited" type="checkbox" /> No daily limit (unlimited spending)</label>
+    <div class="hint">Payments this site makes are capped per day unless you allow unlimited spending.</div>
     <div class="warn">Only approve sites you trust. Approved sites can request Lightning payments up to this limit without asking again.</div>
     <div class="row">
       <button class="deny" id="deny">Deny</button>

@@ -1,5 +1,6 @@
 import { command } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
+import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer } from "../core/wallet-config";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const val = (id: string) => $<HTMLInputElement>(id).value.trim();
@@ -12,11 +13,15 @@ const setMsg = (id: string, text: string, kind: "" | "ok" | "err" = "") => {
 async function loadConfig() {
   try {
     const c = await command<any>("getConfig");
-    $<HTMLSelectElement>("network").value = c.network || "mainnet";
-    $("reset-network").textContent = c.network || "mainnet";
+    const network = c.network || "mainnet";
+    $<HTMLSelectElement>("network").value = network;
+    $("reset-network").textContent = network;
+    // Fall back to the network's public defaults so the fields arrive pre-filled (mainnet ships the
+    // same bridge/RGS/peer as the PWA); a saved value always wins.
     $<HTMLInputElement>("esplora").value = c.esploraUrl || "";
-    $<HTMLInputElement>("bridge").value = c.bridgeUrl || "";
-    $<HTMLInputElement>("rgs").value = c.rapidGossipSyncUrl || "";
+    $<HTMLInputElement>("bridge").value = c.bridgeUrl || defaultBridgeUrl(network) || "";
+    $<HTMLInputElement>("rgs").value = c.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(network) || "";
+    prefillPeer(network);
   } catch (e: any) {
     setMsg("config-msg", e.message, "err");
   }
@@ -24,6 +29,22 @@ async function loadConfig() {
   $<HTMLInputElement>("google-client-id").value = (await command<string>("getGoogleClientId").catch(() => "")) || "";
   // Show the redirect URI the user must register on their OAuth client.
   $<HTMLInputElement>("redirect-uri").value = await command<string>("driveRedirectUri").catch(() => "");
+}
+
+// Pre-fill the connect-peer fields with the network's default channel peer (only when blank, so it
+// never clobbers what the user typed). Nothing auto-connects — they still click Connect peer.
+function prefillPeer(network: string) {
+  const peer = defaultPeer(network);
+  if (!peer) return;
+  const at = peer.lastIndexOf("@");
+  const colon = peer.lastIndexOf(":");
+  if (at < 0 || colon < at) return;
+  const pk = $<HTMLInputElement>("peer-pubkey");
+  const host = $<HTMLInputElement>("peer-host");
+  const port = $<HTMLInputElement>("peer-port");
+  if (!pk.value.trim()) pk.value = peer.slice(0, at);
+  if (!host.value.trim()) host.value = peer.slice(at + 1, colon);
+  if (!port.value.trim() || port.value === "9735") port.value = peer.slice(colon + 1);
 }
 
 $("save-config").addEventListener("click", async () => {

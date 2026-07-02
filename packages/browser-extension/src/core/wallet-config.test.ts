@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { parseConfig, defaultEsploraUrl } from "./wallet-config";
+import {
+  parseConfig,
+  defaultEsploraUrl,
+  defaultBridgeUrl,
+  defaultRapidGossipSyncUrl,
+  defaultPeer,
+  DEFAULT_MAINNET_PEER,
+} from "./wallet-config";
 
 describe("defaultEsploraUrl", () => {
   it("returns a defined public endpoint for every network (never undefined → no SDK crash)", () => {
@@ -11,6 +18,24 @@ describe("defaultEsploraUrl", () => {
 
   it("falls back to mainnet for an unknown network", () => {
     expect(defaultEsploraUrl("weird")).toBe("https://mempool.space/api");
+  });
+});
+
+describe("mainnet infrastructure defaults", () => {
+  it("provides a bridge, RGS, and peer for mainnet (matching the PWA infra)", () => {
+    expect(defaultBridgeUrl("mainnet")).toMatch(/^wss:\/\//);
+    expect(defaultRapidGossipSyncUrl("mainnet")).toMatch(/\/rgs\/snapshot$/);
+    expect(defaultPeer("mainnet")).toBe(DEFAULT_MAINNET_PEER);
+    // The peer is a well-formed pubkey@host:port.
+    expect(DEFAULT_MAINNET_PEER).toMatch(/^0[23][0-9a-f]{64}@[^:]+:\d+$/);
+  });
+
+  it("has no bridge/RGS/peer defaults for non-mainnet networks (BYO)", () => {
+    for (const n of ["testnet", "signet", "regtest"]) {
+      expect(defaultBridgeUrl(n)).toBeUndefined();
+      expect(defaultRapidGossipSyncUrl(n)).toBeUndefined();
+      expect(defaultPeer(n)).toBeUndefined();
+    }
   });
 });
 

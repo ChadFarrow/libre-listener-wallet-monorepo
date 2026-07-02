@@ -30,6 +30,26 @@ export function defaultEsploraUrl(network: string): string {
   }
 }
 
+// Mainnet infrastructure defaults — the SAME public endpoints the PWA ships (from its
+// VITE_MAINNET_* build vars). Not secrets: the peer pubkey and Railway/gateway URLs are public.
+// Baked in so a fresh install points at the same bridge/peer/RGS with no manual config; all are
+// overridable in Connection settings. Only mainnet has defaults (other networks are BYO).
+export const DEFAULT_MAINNET_BRIDGE = "wss://ws-bridge-production-9e2f.up.railway.app";
+export const DEFAULT_MAINNET_PEER = "028ea4e01d6f7e6d80d2d6902eda9304c4bcda78a6abfda3dee2de94ef46a302d5@45.33.65.45:9735";
+export const DEFAULT_MAINNET_RGS = "https://nwc-push-gateway-production.up.railway.app/rgs/snapshot";
+
+export function defaultBridgeUrl(network: string): string | undefined {
+  return network === "mainnet" ? DEFAULT_MAINNET_BRIDGE : undefined;
+}
+export function defaultRapidGossipSyncUrl(network: string): string | undefined {
+  return network === "mainnet" ? DEFAULT_MAINNET_RGS : undefined;
+}
+// The channel-peer address (pubkey@host:port) to pre-fill / reconnect. Explicit user action still
+// required to connect — nothing auto-dials.
+export function defaultPeer(network: string): string | undefined {
+  return network === "mainnet" ? DEFAULT_MAINNET_PEER : undefined;
+}
+
 export function parseConfig(rawJson: string | null): ExtensionConfig {
   const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v : undefined);
   if (!rawJson) return { network: "mainnet" };

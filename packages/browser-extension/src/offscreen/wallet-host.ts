@@ -9,7 +9,15 @@ import {
   META_DB_NAME,
   ACTIVE_NETWORK_KEY,
 } from "../core/storage-namespace";
-import { parseConfig, serializeConfig, defaultEsploraUrl, CONFIG_KEY, type ExtensionConfig } from "../core/wallet-config";
+import {
+  parseConfig,
+  serializeConfig,
+  defaultEsploraUrl,
+  defaultBridgeUrl,
+  defaultRapidGossipSyncUrl,
+  CONFIG_KEY,
+  type ExtensionConfig,
+} from "../core/wallet-config";
 import { createWebSocketStreamProvider } from "../core/ws-provider";
 import { PaymentTracker } from "./payment-tracker";
 import { payBolt11 } from "./pay-invoice";
@@ -103,14 +111,17 @@ export class WalletHost implements WalletRpc {
   private async buildWallet(): Promise<LibreListenerWallet> {
     const cfg = await this.getConfig();
     const storage = this.storageForNetwork(cfg.network);
-    const socketProvider = createWebSocketStreamProvider(() => cfg.bridgeUrl);
+    // Fall back to the network's public defaults so an unconfigured wallet still reaches its
+    // bridge/esplora/RGS (mainnet ships the same infra as the PWA); user config always wins.
+    const bridgeUrl = cfg.bridgeUrl || defaultBridgeUrl(cfg.network);
+    const socketProvider = createWebSocketStreamProvider(() => bridgeUrl);
     const wallet = new LibreListenerWallet({
       config: {
         network: cfg.network,
         // Always a defined string — falls back to a public per-network endpoint so start() never
         // crashes the SDK's EsploraSyncClient on an unconfigured wallet.
         esploraUrl: cfg.esploraUrl || defaultEsploraUrl(cfg.network),
-        rapidGossipSyncUrl: cfg.rapidGossipSyncUrl,
+        rapidGossipSyncUrl: cfg.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(cfg.network),
         alias: "Libre Listener Wallet",
       } as any,
       storage,

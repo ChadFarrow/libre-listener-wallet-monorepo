@@ -52,7 +52,8 @@ export async function fetchAccountEmail(token: string): Promise<string | null> {
     if (!res.ok) return null;
     const data = await res.json();
     return typeof data.email === "string" ? data.email : null;
-  } catch {
+  } catch (e) {
+    console.warn("[Drive] account email lookup failed:", (e as Error)?.message || e);
     return null;
   }
 }

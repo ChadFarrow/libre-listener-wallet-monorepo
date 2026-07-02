@@ -62,8 +62,15 @@ async function dispatch(method: string, params: any): Promise<any> {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.kind !== MSG.WALLET_RPC) return; // not ours
+  // Only the background router may drive the privileged wallet RPC. A message from any other
+  // context — notably a content script (which carries a `tab`) — must never reach the dispatcher
+  // directly, or it would bypass the background's WebLN permission gate.
+  if (sender?.id !== chrome.runtime.id || sender?.tab) {
+    sendResponse({ id: msg.id, ok: false, error: "Unauthorized wallet RPC sender" } satisfies RpcResponse);
+    return true;
+  }
   void dispatch(msg.method, msg.params).then(
     (result) => sendResponse({ id: msg.id, ok: true, result } satisfies RpcResponse),
     (err) => sendResponse({ id: msg.id, ok: false, error: err?.message || String(err) } satisfies RpcResponse)

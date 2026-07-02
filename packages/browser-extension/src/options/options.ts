@@ -61,7 +61,10 @@ $("connect-peer").addEventListener("click", async () => {
 });
 
 async function loadGrants() {
-  const grants = await command<any[]>("listGrants").catch(() => []);
+  const grants = await command<any[]>("listGrants").catch((e) => {
+    console.warn("[Options] listGrants failed:", e?.message || e);
+    return [];
+  });
   const body = $("grants").querySelector("tbody")!;
   body.innerHTML = "";
   if (!grants.length) {

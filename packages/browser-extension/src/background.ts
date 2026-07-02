@@ -180,7 +180,8 @@ async function ensureEnabled(origin: string): Promise<void> {
   if (await store.isEnabled(origin)) return;
   const decision = await requestApproval(origin);
   if (!decision.approved) throw new Error(`User denied wallet access for ${origin}`);
-  await store.grant(origin, { spendingLimitSats: decision.spendingLimitSats });
+  // The grant is persisted by the APPROVAL_DECISION handler before it resolves this promise, so the
+  // approval survives an SW restart mid-prompt. Nothing more to do here.
 }
 
 // ---- WebLN permission gate ----
@@ -249,20 +250,36 @@ function safeInvoiceAmount(bolt11: string): number | null {
 
 // ---- Router ----
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const reply = (p: Promise<any>) =>
     void p.then(
       (result) => sendResponse({ id: msg?.id, ok: true, result } as RpcResponse),
       (err) => sendResponse({ id: msg?.id, ok: false, error: err?.message || String(err) } as RpcResponse)
     );
 
+  // Every message must come from our own extension. The privileged control-plane (WALLET_COMMAND,
+  // APPROVAL_DECISION) additionally must come from an extension PAGE (popup/options/approval) — a
+  // content script carries a `tab`, so this blocks a content script from driving control-plane
+  // commands or forging an approval decision. WEBLN_REQUEST legitimately comes from a content
+  // script (it carries the stamped origin and is subject to the permission gate).
+  const fromExtension = sender?.id === chrome.runtime.id;
+  const fromExtensionPage = fromExtension && !sender?.tab;
+
   switch (msg?.kind) {
     case MSG.WEBLN_REQUEST:
+      if (!fromExtension) {
+        sendResponse({ id: msg?.id, ok: false, error: "Unauthorized sender" } as RpcResponse);
+        return true;
+      }
       // Origin is stamped by the content-script (trusted), never taken from the page.
       reply(handleWebln(msg.origin, msg.method, msg.params));
       return true;
 
     case MSG.WALLET_COMMAND:
+      if (!fromExtensionPage) {
+        sendResponse({ id: msg?.id, ok: false, error: "Unauthorized sender" } as RpcResponse);
+        return true;
+      }
       // Trusted control-plane from popup/options. Permission commands are owned by the background
       // (the permission store lives here); everything else forwards to the offscreen host.
       if (msg.command === "listGrants") {
@@ -293,12 +310,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return true;
 
     case MSG.APPROVAL_DECISION: {
-      const p = pendingApprovals.get(msg.id);
-      if (p) {
-        pendingApprovals.delete(msg.id);
-        p.resolve({ approved: !!msg.approved, spendingLimitSats: Number(msg.spendingLimitSats) || 0 });
+      if (!fromExtensionPage) {
+        sendResponse({ id: msg?.id, ok: false, error: "Unauthorized sender" } as RpcResponse);
+        return true;
       }
-      sendResponse({ id: msg.id, ok: true } as RpcResponse);
+      const approved = !!msg.approved;
+      const spendingLimitSats = Number(msg.spendingLimitSats) || 0;
+      // Persist the grant HERE (not only in the enable() promise): the MV3 SW can be reaped while
+      // the approval window is open, dropping the in-memory pending promise. Granting on the
+      // decision makes the approval durable — a retry of enable() then finds the grant. Requires
+      // the approval page to send its origin.
+      const finish = async () => {
+        if (approved && msg.origin) await store.grant(msg.origin, { spendingLimitSats });
+        const p = pendingApprovals.get(msg.id);
+        if (p) {
+          pendingApprovals.delete(msg.id);
+          p.resolve({ approved, spendingLimitSats });
+        }
+      };
+      reply(finish());
       return true;
     }
 

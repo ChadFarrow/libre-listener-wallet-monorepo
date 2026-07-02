@@ -9,7 +9,7 @@ import {
   META_DB_NAME,
   ACTIVE_NETWORK_KEY,
 } from "../core/storage-namespace";
-import { parseConfig, serializeConfig, CONFIG_KEY, type ExtensionConfig } from "../core/wallet-config";
+import { parseConfig, serializeConfig, defaultEsploraUrl, CONFIG_KEY, type ExtensionConfig } from "../core/wallet-config";
 import { createWebSocketStreamProvider } from "../core/ws-provider";
 import { PaymentTracker } from "./payment-tracker";
 import { payBolt11 } from "./pay-invoice";
@@ -107,7 +107,9 @@ export class WalletHost implements WalletRpc {
     const wallet = new LibreListenerWallet({
       config: {
         network: cfg.network,
-        esploraUrl: cfg.esploraUrl,
+        // Always a defined string — falls back to a public per-network endpoint so start() never
+        // crashes the SDK's EsploraSyncClient on an unconfigured wallet.
+        esploraUrl: cfg.esploraUrl || defaultEsploraUrl(cfg.network),
         rapidGossipSyncUrl: cfg.rapidGossipSyncUrl,
         alias: "Libre Listener Wallet",
       } as any,
@@ -154,35 +156,33 @@ export class WalletHost implements WalletRpc {
         "This seed has no channel state. Restore from a backup before starting — starting a stateless node can force-close existing channels."
       );
     }
-    this.wallet = await this.buildWallet();
-    this.tracker = new PaymentTracker(this.wallet);
-    await this.wallet.start();
-    await this.startNwc();
+    const wallet = await this.buildWallet();
+    this.wallet = wallet;
+    this.tracker = new PaymentTracker(wallet);
+    try {
+      // start() already brings NWC up (nwc.init()+start()) — do NOT init it again here, or a second
+      // LDK event listener gets registered and every payment event is processed twice.
+      await wallet.start();
+    } catch (e) {
+      // Don't leave a half-built wallet assigned — otherwise setConfig ("stop the node first")
+      // stays blocked and the user can't fix a bad config after a failed start.
+      this.wallet = undefined;
+      this.tracker = undefined;
+      throw e;
+    }
     // Warm the routing graph best-effort (mainnet only serves RGS snapshots).
-    void this.wallet.syncGossip().catch(() => {});
+    void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
     this.emit("state-changed");
     return this.currentNode();
   }
 
   async stopNode(): Promise<void> {
     if (this.wallet) {
-      await this.wallet.nwc.stop().catch(() => {});
+      await this.wallet.nwc.stop().catch((e) => console.warn("[NWC] stop failed:", e?.message || e));
       await this.wallet.stop();
       this.wallet = undefined;
       this.tracker = undefined;
       this.emit("state-changed");
-    }
-  }
-
-  // Bring the NWC (Nostr Wallet Connect) manager up so existing pairings reconnect their relays
-  // and the wallet answers NIP-47 requests. Best-effort: a relay outage must not block node start.
-  private async startNwc(): Promise<void> {
-    if (!this.wallet) return;
-    try {
-      await this.wallet.nwc.init();
-      await this.wallet.nwc.start();
-    } catch (e) {
-      console.warn("[NWC] failed to start", e);
     }
   }
 
@@ -232,9 +232,9 @@ export class WalletHost implements WalletRpc {
       await wallet.importState(envelope, secret);
       this.wallet = wallet;
       this.tracker = new PaymentTracker(wallet);
+      // start() brings NWC up; no separate init (avoids a duplicate LDK event listener).
       await wallet.start();
-      await this.startNwc();
-      void wallet.syncGossip().catch(() => {});
+      void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
       this.emit("state-changed");
       return this.currentNode();
     } finally {

@@ -12,8 +12,10 @@ const id = qs.get("id") || "";
 document.getElementById("origin")!.textContent = origin;
 
 function send(approved: boolean, spendingLimitSats: number): void {
+  // Include the origin so the background can persist the grant on the decision itself (durable
+  // across an MV3 service-worker restart while this window was open).
   void chrome.runtime
-    .sendMessage({ kind: MSG.APPROVAL_DECISION, id, approved, spendingLimitSats })
+    .sendMessage({ kind: MSG.APPROVAL_DECISION, id, origin, approved, spendingLimitSats })
     .finally(() => window.close());
 }
 

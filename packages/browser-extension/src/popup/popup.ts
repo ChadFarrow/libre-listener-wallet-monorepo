@@ -139,7 +139,10 @@ $("copy-nwc").addEventListener("click", async () => {
 });
 
 async function refreshNwcList() {
-  const list = await command<any[]>("nwcListConnections").catch(() => []);
+  const list = await command<any[]>("nwcListConnections").catch((e) => {
+    console.warn("[Popup] nwcListConnections failed:", e?.message || e);
+    return [];
+  });
   const box = $("nwc-list");
   box.innerHTML = "";
   for (const c of list) {
@@ -179,7 +182,10 @@ $("export").addEventListener("click", async () => {
 });
 
 async function refreshDriveStatus() {
-  const s = await command<{ connected: boolean; email: string | null }>("driveStatus").catch(() => null);
+  const s = await command<{ connected: boolean; email: string | null }>("driveStatus").catch((e) => {
+    console.warn("[Popup] driveStatus failed:", e?.message || e);
+    return null;
+  });
   if (!s) return;
   $("drive-status").textContent = s.connected
     ? `Google Drive: connected${s.email ? ` (${s.email})` : ""} — auto-syncing`

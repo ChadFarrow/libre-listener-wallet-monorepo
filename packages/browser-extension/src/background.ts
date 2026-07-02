@@ -3,6 +3,14 @@ import { PermissionStore } from "./core/permission-store";
 import { chromeKV } from "./core/chrome-kv";
 import { normalizeSendPayment, spendAmountSats } from "./core/webln-mapping";
 import { invoiceAmountSats } from "./core/bolt11-amount";
+import { buildAuthUrl, parseTokenFromRedirect } from "./core/drive-oauth";
+import {
+  uploadBackup,
+  downloadBackup,
+  listBackupNetworks,
+  pickRestoreNetwork,
+  fetchAccountEmail,
+} from "./core/drive-rest";
 
 // The background service worker is a THIN, restartable router + permission gate. It never hosts
 // the node (that's the offscreen document) — it can be killed at ~30s idle and respawn without
@@ -44,6 +52,97 @@ async function callOffscreen(method: string, params?: any): Promise<any> {
   if (!resp.ok) throw new Error(resp.error || "Wallet host error");
   return resp.result;
 }
+
+// ---- Google Drive backup ----
+//
+// The OAuth token flow (chrome.identity) and the Drive REST calls live here in the background;
+// the ENCRYPTED backup envelope is produced by the offscreen wallet host (`exportBackup`), so the
+// raw seed never reaches this context — only the ciphertext is uploaded (key-isolation guardrail).
+// The access token is short-lived and held in memory only (the SW may be killed; we re-auth).
+
+// The OAuth client ID is a GLOBAL, network-agnostic extension setting (not per-wallet config), so
+// it lives in chrome.storage.local and can be set without stopping the node.
+const DRIVE_EMAIL_KEY = "drive_account_email";
+const GOOGLE_CLIENT_ID_KEY = "google_client_id";
+let driveToken: { value: string; expiresAt: number } | null = null;
+
+function driveConnected(): boolean {
+  return !!driveToken && driveToken.expiresAt > Date.now();
+}
+
+async function acquireDriveToken(interactive: boolean): Promise<string> {
+  const clientId = await chromeKV.get(GOOGLE_CLIENT_ID_KEY);
+  if (!clientId) throw new Error("Set your Google OAuth Client ID in the extension's settings first.");
+  const redirectUri = chrome.identity.getRedirectURL();
+  const hint = (await chromeKV.get(DRIVE_EMAIL_KEY)) || undefined;
+  const authUrl = buildAuthUrl(clientId, redirectUri, {
+    hint,
+    // Silent reconnect reuses an existing Google session without UI; interactive shows consent.
+    prompt: interactive ? undefined : "none",
+  });
+  const redirect = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive });
+  const { accessToken, expiresInSec } = parseTokenFromRedirect(redirect || undefined);
+  // Expire a minute early so a call never races the real expiry.
+  driveToken = { value: accessToken, expiresAt: Date.now() + (expiresInSec - 60) * 1000 };
+  void fetchAccountEmail(accessToken).then((email) => {
+    if (email) void chromeKV.set(DRIVE_EMAIL_KEY, email);
+  });
+  return accessToken;
+}
+
+async function ensureDriveToken(): Promise<string> {
+  if (driveConnected()) return driveToken!.value;
+  // Try a silent reconnect against an existing Google session before surfacing an error.
+  return acquireDriveToken(false);
+}
+
+async function driveConnect(): Promise<{ email: string | null }> {
+  await acquireDriveToken(true);
+  return { email: (await chromeKV.get(DRIVE_EMAIL_KEY)) ?? null };
+}
+
+async function driveStatus(): Promise<{ connected: boolean; email: string | null }> {
+  return { connected: driveConnected(), email: (await chromeKV.get(DRIVE_EMAIL_KEY)) ?? null };
+}
+
+function driveDisconnect(): { connected: boolean } {
+  driveToken = null;
+  return { connected: false };
+}
+
+async function driveBackupNow(): Promise<{ network: string }> {
+  const token = await ensureDriveToken();
+  const envelope: string = await callOffscreen("exportBackup");
+  const state = await callOffscreen("getState");
+  await uploadBackup(token, envelope, state.network);
+  return { network: state.network };
+}
+
+async function driveRestore(secret: string): Promise<any> {
+  if (!secret) throw new Error("Enter your recovery seed to restore from Drive.");
+  const token = await ensureDriveToken();
+  const networks = await listBackupNetworks(token);
+  const network = pickRestoreNetwork(networks);
+  if (!network) throw new Error("No backup found in this Google account.");
+  const envelope = await downloadBackup(token, network);
+  if (!envelope) throw new Error("Backup file could not be downloaded.");
+  return callOffscreen("restoreWallet", { envelope, secret });
+}
+
+// Auto-sync: when the wallet's persisted state advances (a channel opened, a payment settled) and
+// Drive is connected, push a fresh encrypted backup, debounced. Mirrors the PWA — restorability is
+// prioritized over Drive-write count. A silent-token failure just skips this round.
+let autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.kind === MSG.WALLET_EVENT && msg.event === "state-changed" && driveConnected()) {
+    if (autoSyncTimer) clearTimeout(autoSyncTimer);
+    autoSyncTimer = setTimeout(() => {
+      autoSyncTimer = null;
+      void driveBackupNow().catch((e) => console.warn("[Drive] auto-sync failed:", e?.message || e));
+    }, 5000);
+  }
+  return false; // never the responder for events
+});
 
 // ---- Approval prompts ----
 
@@ -158,6 +257,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         reply(store.revoke(msg.params.origin));
       } else if (msg.command === "setGrantLimit") {
         reply(store.grant(msg.params.origin, { spendingLimitSats: Number(msg.params.spendingLimitSats) || 0 }));
+      } else if (msg.command === "driveConnect") {
+        reply(driveConnect());
+      } else if (msg.command === "driveStatus") {
+        reply(driveStatus());
+      } else if (msg.command === "driveDisconnect") {
+        reply(Promise.resolve(driveDisconnect()));
+      } else if (msg.command === "driveBackupNow") {
+        reply(driveBackupNow());
+      } else if (msg.command === "driveRestore") {
+        reply(driveRestore(msg.params?.secret));
+      } else if (msg.command === "driveRedirectUri") {
+        reply(Promise.resolve(chrome.identity.getRedirectURL()));
+      } else if (msg.command === "getGoogleClientId") {
+        reply(chromeKV.get(GOOGLE_CLIENT_ID_KEY));
+      } else if (msg.command === "setGoogleClientId") {
+        reply(chromeKV.set(GOOGLE_CLIENT_ID_KEY, String(msg.params?.clientId || "")));
       } else {
         reply(callOffscreen(msg.command, msg.params));
       }

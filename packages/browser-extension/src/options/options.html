@@ -40,6 +40,20 @@
     <button id="save-config">Save settings</button>
     <div class="msg" id="config-msg"></div>
 
+    <h2>Google Drive backup</h2>
+    <p class="hint">
+      Optional: encrypted backups auto-sync to your Drive's private app folder. Create a Google
+      OAuth <b>Web application</b> client, add the redirect URI below to its authorized redirect
+      URIs, and paste the client ID here. Nothing but the already-encrypted backup ever leaves the
+      extension.
+    </p>
+    <label>Authorized redirect URI <span class="hint">(register this on your OAuth client)</span></label>
+    <input id="redirect-uri" readonly />
+    <label>Google OAuth Client ID</label>
+    <input id="google-client-id" placeholder="…apps.googleusercontent.com" />
+    <button id="save-drive">Save Drive settings</button>
+    <div class="msg" id="drive-msg"></div>
+
     <h2>Connect a peer</h2>
     <p class="hint">A browser node dials out to open a channel. pubkey@host:port</p>
     <div class="peer-row">

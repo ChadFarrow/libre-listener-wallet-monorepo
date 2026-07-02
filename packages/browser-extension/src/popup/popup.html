@@ -7,8 +7,10 @@
       :root { color-scheme: light dark; --accent: #7a5af5; }
       body { font: 13px/1.5 system-ui, sans-serif; margin: 0; width: 340px; padding: 14px; }
       h1 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
-      .dot { width: 9px; height: 9px; border-radius: 50%; background: #999; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #999; flex: none; }
       .dot.on { background: #2ecc71; }
+      .status-line { font-size: 11px; color: #888; margin: -4px 0 8px 17px; }
+      .status-line.on { color: #2ecc71; }
       .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
       .tile { background: #8881; border-radius: 8px; padding: 8px; }
       .tile .k { color: #888; font-size: 11px; }
@@ -16,23 +18,31 @@
       .nodeid { font-family: monospace; font-size: 10px; word-break: break-all; background: #8881; padding: 6px; border-radius: 6px; }
       button { padding: 8px 10px; border-radius: 8px; border: 0; font-weight: 600; cursor: pointer; background: var(--accent); color: #fff; }
       button.ghost { background: #8882; color: inherit; }
+      button:disabled { opacity: 0.5; cursor: default; }
       .row { display: flex; gap: 8px; margin-top: 8px; }
       .row > * { flex: 1; }
       input, textarea { width: 100%; box-sizing: border-box; padding: 7px; border-radius: 7px; border: 1px solid #8884; font: inherit; }
       textarea { resize: vertical; min-height: 54px; font-family: monospace; font-size: 10px; }
+      details { border-top: 1px solid #8883; margin-top: 12px; padding-top: 8px; }
+      summary { cursor: pointer; font-weight: 600; font-size: 13px; }
       section { border-top: 1px solid #8883; margin-top: 12px; padding-top: 10px; }
       .seed { font-family: monospace; font-size: 11px; word-break: break-all; background: rgba(122,90,245,0.12); padding: 8px; border-radius: 8px; }
       label { display: block; margin: 8px 0 4px; font-weight: 600; }
+      .hint { color: #888; font-size: 11px; font-weight: 400; }
       .msg { margin-top: 8px; font-size: 12px; }
       .msg.err { color: #c0392b; }
       .msg.ok { color: #2ecc71; }
       .hidden { display: none; }
       a { color: var(--accent); cursor: pointer; }
       .foot { margin-top: 12px; text-align: right; font-size: 12px; }
+      .nwc-item { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 6px; }
+      .nwc-item .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .two { display: flex; gap: 8px; } .two > * { flex: 1; }
     </style>
   </head>
   <body>
     <h1><span class="dot" id="dot"></span> Libre Listener Wallet <span id="net" style="color:#888;font-weight:400"></span></h1>
+    <div class="status-line" id="status-line">—</div>
 
     <!-- Running / existing wallet -->
     <div id="wallet-view" class="hidden">
@@ -48,10 +58,62 @@
         <button id="start">Start</button>
         <button id="stop" class="ghost">Stop</button>
       </div>
-      <div class="row">
-        <button id="export" class="ghost">Export backup</button>
-      </div>
-      <textarea id="backup-out" class="hidden" readonly></textarea>
+
+      <!-- Open a channel: connect a peer, or hand out the node id so a peer opens to you -->
+      <details id="channel-details">
+        <summary>Open a channel</summary>
+        <p class="hint">A browser node can't be dialed. Either dial a peer that will open a channel back, or copy your Node ID above and open a channel to it from your own node.</p>
+        <input id="peer-pubkey" placeholder="peer pubkey (66 hex)" />
+        <div class="two" style="margin-top:8px">
+          <input id="peer-host" placeholder="host" />
+          <input id="peer-port" placeholder="port" value="9735" style="max-width:80px" />
+        </div>
+        <button id="connect-peer" style="margin-top:8px;width:100%">Connect peer</button>
+        <div class="msg" id="peer-msg"></div>
+      </details>
+
+      <!-- Top up: receive over an existing channel -->
+      <details id="receive-details">
+        <summary>Top up (receive)</summary>
+        <p class="hint">Generates an invoice to receive sats into your inbound capacity. Open a channel first if Receivable is 0.</p>
+        <div class="two">
+          <input id="invoice-amount" type="number" min="1" placeholder="amount (sats)" />
+          <input id="invoice-memo" placeholder="memo (optional)" />
+        </div>
+        <button id="create-invoice" style="margin-top:8px;width:100%">Create invoice</button>
+        <textarea id="invoice-out" class="hidden" readonly></textarea>
+        <button id="copy-invoice" class="ghost hidden" style="margin-top:8px;width:100%">Copy invoice</button>
+        <div class="msg" id="receive-msg"></div>
+      </details>
+
+      <!-- Nostr Wallet Connect: pairing string for external apps -->
+      <details id="nwc-details">
+        <summary>Nostr Wallet Connect (NWC)</summary>
+        <p class="hint">Create a pairing string to connect a nostr app (Alby, Damus, …) to this wallet.</p>
+        <div class="two">
+          <input id="nwc-name" placeholder="app name" />
+          <input id="nwc-limit" type="number" min="0" placeholder="daily cap (sats, 0 = ∞)" />
+        </div>
+        <button id="create-nwc" style="margin-top:8px;width:100%">Create connection</button>
+        <textarea id="nwc-out" class="hidden" readonly></textarea>
+        <button id="copy-nwc" class="ghost hidden" style="margin-top:8px;width:100%">Copy connection URI</button>
+        <div id="nwc-list"></div>
+        <div class="msg" id="nwc-msg"></div>
+      </details>
+
+      <!-- Backup: manual export + Google Drive -->
+      <details id="backup-details">
+        <summary>Backup</summary>
+        <p class="hint">Your seed is inside an encrypted backup. Save it, or sync it to Google Drive.</p>
+        <button id="export" class="ghost" style="width:100%">Export encrypted backup</button>
+        <textarea id="backup-out" class="hidden" readonly></textarea>
+        <div id="drive-status" class="hint" style="margin-top:10px">Google Drive: not connected</div>
+        <div class="row">
+          <button id="drive-connect">Connect Drive</button>
+          <button id="drive-backup-now" class="ghost">Back up now</button>
+        </div>
+        <div class="msg" id="backup-msg"></div>
+      </details>
     </div>
 
     <!-- No wallet yet -->
@@ -70,11 +132,13 @@
       </section>
 
       <section id="restore-panel" class="hidden">
-        <label>Encrypted backup</label>
-        <textarea id="restore-env" placeholder="paste backup envelope JSON"></textarea>
-        <label>Seed or passphrase</label>
+        <label>Recovery seed (or passphrase)</label>
         <input id="restore-secret" type="password" placeholder="64-hex seed or passphrase" />
-        <button id="restore-confirm" style="margin-top:8px">Restore wallet</button>
+        <button id="restore-drive" style="margin-top:8px;width:100%">Restore from Google Drive</button>
+        <p class="hint" style="margin:10px 0 4px">…or paste an encrypted backup manually:</p>
+        <textarea id="restore-env" placeholder="paste backup envelope JSON (optional)"></textarea>
+        <button id="restore-confirm" class="ghost" style="margin-top:8px;width:100%">Restore from pasted backup</button>
+        <div class="msg" id="restore-msg"></div>
       </section>
     </div>
 

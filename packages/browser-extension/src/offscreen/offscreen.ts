@@ -49,6 +49,14 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.syncGossip();
     case "getBalance":
       return host.getBalanceSats();
+    case "createInvoice":
+      return host.createInvoice(params.amountSats, params.memo, params.expirySeconds);
+    case "nwcCreateConnection":
+      return host.nwcCreateConnection(params.name, params);
+    case "nwcListConnections":
+      return host.nwcListConnections();
+    case "nwcDeleteConnection":
+      return host.nwcDeleteConnection(params.clientPubkey);
     default:
       throw new Error(`Unknown wallet RPC method: ${method}`);
   }

@@ -18,6 +18,10 @@ async function loadConfig() {
   } catch (e: any) {
     setMsg("config-msg", e.message, "err");
   }
+  // Drive settings are global (not per-network wallet config).
+  $<HTMLInputElement>("google-client-id").value = (await command<string>("getGoogleClientId").catch(() => "")) || "";
+  // Show the redirect URI the user must register on their OAuth client.
+  $<HTMLInputElement>("redirect-uri").value = await command<string>("driveRedirectUri").catch(() => "");
 }
 
 $("save-config").addEventListener("click", async () => {
@@ -31,6 +35,15 @@ $("save-config").addEventListener("click", async () => {
     setMsg("config-msg", "Saved", "ok");
   } catch (e: any) {
     setMsg("config-msg", e.message, "err");
+  }
+});
+
+$("save-drive").addEventListener("click", async () => {
+  try {
+    await command("setGoogleClientId", { clientId: val("google-client-id") });
+    setMsg("drive-msg", "Saved. Open the popup → Backup → Connect Drive.", "ok");
+  } catch (e: any) {
+    setMsg("drive-msg", e.message, "err");
   }
 });
 

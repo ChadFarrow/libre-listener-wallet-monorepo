@@ -40,7 +40,28 @@ pnpm --filter @libre/browser-extension build   # → packages/browser-extension/
 
 `dist/` is a loadable unpacked extension.
 
-## Load & test manually (Chrome / Brave)
+## MVP wallet flows (popup)
+
+The toolbar popup is the whole wallet — no test scaffolding. It covers exactly the bare-minimum path:
+
+- **Create a wallet** — *Create new* reveals a fresh 32-byte seed; tick "I've saved it" → *Create wallet* (writes the seed, marks it brand-new, auto-starts).
+- **Start / stop the node** and a live **status** header (green dot + "Node running / stopped", spendable / receivable / channels / peers tiles).
+- **Open a channel** — connect a peer that will open a channel back, or copy your **Node ID** and run `openchannel --node_key=<id>` from your own node (a browser node has no dial-in socket).
+- **Top up (receive)** — generate a BOLT11 invoice to receive into inbound capacity.
+- **Nostr Wallet Connect** — create a `nostr+walletconnect://` pairing (with an optional daily cap) to connect a nostr app; revoke pairings from the same list.
+- **Back it up** — export the encrypted backup, and/or connect **Google Drive** for auto-sync (see below).
+- **Restore** — from a pasted encrypted backup, or straight from Google Drive with your seed.
+
+### Google Drive backup (optional)
+
+An MV3 extension can't load Google's remote GIS script (CSP), so it uses `chrome.identity.launchWebAuthFlow`. One-time setup:
+
+1. In Google Cloud, create an **OAuth client → Web application**.
+2. **Connection settings** (options page) shows an **Authorized redirect URI** (`https://<ext-id>.chromiumapp.org/`) — add it to the client's authorized redirect URIs.
+3. Paste the **Client ID** into *Google Drive backup → Save Drive settings*.
+4. Popup → *Backup → Connect Drive*. Encrypted backups then auto-sync (debounced) whenever wallet state advances. Only the already-encrypted envelope is uploaded — the raw seed never leaves the offscreen wallet host (the OAuth token + Drive REST live in the background; the seed never reaches it).
+
+## WebLN provider — test manually (Chrome / Brave)
 
 1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select `dist/`.
 2. Click the toolbar icon → **Create new** → save the shown seed → **Create wallet**.

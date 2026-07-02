@@ -155,6 +155,7 @@ export class WalletHost implements WalletRpc {
     this.wallet = await this.buildWallet();
     this.tracker = new PaymentTracker(this.wallet);
     await this.wallet.start();
+    await this.startNwc();
     // Warm the routing graph best-effort (mainnet only serves RGS snapshots).
     void this.wallet.syncGossip().catch(() => {});
     this.emit("state-changed");
@@ -163,10 +164,23 @@ export class WalletHost implements WalletRpc {
 
   async stopNode(): Promise<void> {
     if (this.wallet) {
+      await this.wallet.nwc.stop().catch(() => {});
       await this.wallet.stop();
       this.wallet = undefined;
       this.tracker = undefined;
       this.emit("state-changed");
+    }
+  }
+
+  // Bring the NWC (Nostr Wallet Connect) manager up so existing pairings reconnect their relays
+  // and the wallet answers NIP-47 requests. Best-effort: a relay outage must not block node start.
+  private async startNwc(): Promise<void> {
+    if (!this.wallet) return;
+    try {
+      await this.wallet.nwc.init();
+      await this.wallet.nwc.start();
+    } catch (e) {
+      console.warn("[NWC] failed to start", e);
     }
   }
 
@@ -202,6 +216,7 @@ export class WalletHost implements WalletRpc {
     this.wallet = wallet;
     this.tracker = new PaymentTracker(wallet);
     await wallet.start();
+    await this.startNwc();
     void wallet.syncGossip().catch(() => {});
     this.emit("state-changed");
     return this.currentNode();
@@ -210,6 +225,46 @@ export class WalletHost implements WalletRpc {
   async exportBackup(): Promise<string> {
     this.requireRunning();
     return this.wallet!.exportState();
+  }
+
+  // Top up: a BOLT11 invoice to receive into existing inbound capacity (open a channel first).
+  async createInvoice(amountSats: number, memo?: string, expirySeconds?: number): Promise<{ paymentRequest: string }> {
+    this.requireRunning();
+    const amt = Math.floor(Number(amountSats));
+    if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter an amount in sats greater than 0.");
+    const paymentRequest = await this.wallet!.createInvoice(amt, memo || "Libre Listener Wallet top-up", expirySeconds || 3600);
+    return { paymentRequest };
+  }
+
+  // ---- NWC (Nostr Wallet Connect) pairings ----
+
+  async nwcCreateConnection(name: string, opts?: { spendingLimitSats?: number; relayUrl?: string }): Promise<{ uri: string }> {
+    this.requireRunning();
+    const uri = await this.wallet!.nwc.createConnection(name || "Nostr Client App", {
+      spendingLimitSats: Number(opts?.spendingLimitSats) || 0,
+      relayUrl: opts?.relayUrl,
+    });
+    this.emit("state-changed");
+    return { uri };
+  }
+
+  async nwcListConnections(): Promise<Array<{ name: string; clientPubkey: string; relayUrl: string; spendingLimitSats: number; spentTodaySats?: number }>> {
+    this.requireRunning();
+    const list = await this.wallet!.nwc.listConnections();
+    // Deliberately omit each pairing's `secret` — it never leaves the offscreen host.
+    return list.map((c) => ({
+      name: c.name,
+      clientPubkey: c.clientPubkey,
+      relayUrl: c.relayUrl,
+      spendingLimitSats: c.spendingLimitSats ?? 0,
+      spentTodaySats: c.spentTodaySats ?? 0,
+    }));
+  }
+
+  async nwcDeleteConnection(clientPubkey: string): Promise<void> {
+    this.requireRunning();
+    await this.wallet!.nwc.deleteConnection(clientPubkey);
+    this.emit("state-changed");
   }
 
   async connectPeer(pubkey: string, host: string, port: number): Promise<void> {

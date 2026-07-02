@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Libre Listener Wallet",
+  "version": "0.1.0",
+  "description": "Non-custodial Bitcoin Lightning wallet. Injects a WebLN (window.webln) provider so any web app can request payments, invoices, and V4V boosts.",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Libre Listener Wallet"
+  },
+  "options_page": "options.html",
+  "permissions": ["offscreen", "storage"],
+  "host_permissions": [],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https: wss: ws://127.0.0.1:*"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inpage.js", "liblightningjs.wasm"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
+}

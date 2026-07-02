@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Libre Listener Wallet — settings</title>
+    <style>
+      :root { color-scheme: light dark; --accent: #7a5af5; }
+      body { font: 14px/1.6 system-ui, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; }
+      h1 { font-size: 18px; } h2 { font-size: 15px; margin-top: 26px; }
+      label { display: block; margin: 12px 0 4px; font-weight: 600; }
+      input, select { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #8884; font: inherit; }
+      button { padding: 9px 14px; border-radius: 8px; border: 0; font-weight: 600; cursor: pointer; background: var(--accent); color: #fff; margin-top: 14px; }
+      button.ghost { background: #8882; color: inherit; }
+      .hint { color: #888; font-size: 12px; }
+      .msg { margin-top: 10px; font-size: 13px; }
+      .msg.ok { color: #2ecc71; } .msg.err { color: #c0392b; }
+      table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+      td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid #8883; font-size: 13px; }
+      .peer-row { display: flex; gap: 8px; } .peer-row > input { flex: 1; }
+    </style>
+  </head>
+  <body>
+    <h1>Libre Listener Wallet — settings</h1>
+
+    <h2>Network & connection</h2>
+    <p class="hint">Stop the node before changing these.</p>
+    <label>Network</label>
+    <select id="network">
+      <option value="mainnet">mainnet</option>
+      <option value="testnet">testnet</option>
+      <option value="signet">signet</option>
+      <option value="regtest">regtest</option>
+    </select>
+    <label>Esplora API URL</label>
+    <input id="esplora" placeholder="https://mempool.space/api" />
+    <label>WebSocket bridge URL <span class="hint">(websockify → peer :9735)</span></label>
+    <input id="bridge" placeholder="wss://your-bridge.example/" />
+    <label>Rapid Gossip Sync URL <span class="hint">(mainnet only, for multi-hop routing)</span></label>
+    <input id="rgs" placeholder="https://…/rgs/snapshot" />
+    <button id="save-config">Save settings</button>
+    <div class="msg" id="config-msg"></div>
+
+    <h2>Connect a peer</h2>
+    <p class="hint">A browser node dials out to open a channel. pubkey@host:port</p>
+    <div class="peer-row">
+      <input id="peer-pubkey" placeholder="pubkey (66 hex)" />
+      <input id="peer-host" placeholder="host" style="max-width:120px" />
+      <input id="peer-port" placeholder="port" style="max-width:70px" value="9735" />
+    </div>
+    <button id="connect-peer" class="ghost">Connect peer</button>
+    <div class="msg" id="peer-msg"></div>
+
+    <h2>Approved sites</h2>
+    <p class="hint">Sites you've granted WebLN access, with their daily spending caps.</p>
+    <table id="grants"><tbody></tbody></table>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

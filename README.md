@@ -32,6 +32,7 @@ The repository is structured as a TypeScript monorepo managed by `pnpm` and Turb
 ## Developer & AI Agent Orientation
 
 If you are a developer or an AI coding assistant working on this codebase:
+*   See the forward-looking [**`ROADMAP.md`**](ROADMAP.md) for where the project is headed next.
 *   Read the project contracts and design roadmap located in the [**`ai/`**](ai/reference/this-monorepo/libre-listener-wallet-roadmap.md) directory.
 *   Refer to the [**`ai/prompts/primer-prompt.md`**](ai/prompts/primer-prompt.md) onboarding prompt to understand critical security constraints, port configurations, and testing rules.
 

@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Libre Listener Wallet</title>
+    <style>
+      :root { color-scheme: light dark; --accent: #7a5af5; }
+      body { font: 13px/1.5 system-ui, sans-serif; margin: 0; width: 340px; padding: 14px; }
+      h1 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #999; }
+      .dot.on { background: #2ecc71; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+      .tile { background: #8881; border-radius: 8px; padding: 8px; }
+      .tile .k { color: #888; font-size: 11px; }
+      .tile .v { font-weight: 600; font-size: 14px; }
+      .nodeid { font-family: monospace; font-size: 10px; word-break: break-all; background: #8881; padding: 6px; border-radius: 6px; }
+      button { padding: 8px 10px; border-radius: 8px; border: 0; font-weight: 600; cursor: pointer; background: var(--accent); color: #fff; }
+      button.ghost { background: #8882; color: inherit; }
+      .row { display: flex; gap: 8px; margin-top: 8px; }
+      .row > * { flex: 1; }
+      input, textarea { width: 100%; box-sizing: border-box; padding: 7px; border-radius: 7px; border: 1px solid #8884; font: inherit; }
+      textarea { resize: vertical; min-height: 54px; font-family: monospace; font-size: 10px; }
+      section { border-top: 1px solid #8883; margin-top: 12px; padding-top: 10px; }
+      .seed { font-family: monospace; font-size: 11px; word-break: break-all; background: rgba(122,90,245,0.12); padding: 8px; border-radius: 8px; }
+      label { display: block; margin: 8px 0 4px; font-weight: 600; }
+      .msg { margin-top: 8px; font-size: 12px; }
+      .msg.err { color: #c0392b; }
+      .msg.ok { color: #2ecc71; }
+      .hidden { display: none; }
+      a { color: var(--accent); cursor: pointer; }
+      .foot { margin-top: 12px; text-align: right; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1><span class="dot" id="dot"></span> Libre Listener Wallet <span id="net" style="color:#888;font-weight:400"></span></h1>
+
+    <!-- Running / existing wallet -->
+    <div id="wallet-view" class="hidden">
+      <div class="grid">
+        <div class="tile"><div class="k">Spendable</div><div class="v" id="spendable">—</div></div>
+        <div class="tile"><div class="k">Receivable</div><div class="v" id="receivable">—</div></div>
+        <div class="tile"><div class="k">Channels</div><div class="v" id="channels">—</div></div>
+        <div class="tile"><div class="k">Peers</div><div class="v" id="peers">—</div></div>
+      </div>
+      <label>Node ID <a id="copy-node">copy</a></label>
+      <div class="nodeid" id="nodeid">—</div>
+      <div class="row">
+        <button id="start">Start</button>
+        <button id="stop" class="ghost">Stop</button>
+      </div>
+      <div class="row">
+        <button id="export" class="ghost">Export backup</button>
+      </div>
+      <textarea id="backup-out" class="hidden" readonly></textarea>
+    </div>
+
+    <!-- No wallet yet -->
+    <div id="setup-view" class="hidden">
+      <p>No wallet on this network yet.</p>
+      <div class="row">
+        <button id="new-btn">Create new</button>
+        <button id="restore-btn" class="ghost">Restore</button>
+      </div>
+
+      <section id="create-panel" class="hidden">
+        <label>Your recovery seed — save it now</label>
+        <div class="seed" id="seed">—</div>
+        <label><input type="checkbox" id="saved" style="width:auto" /> I've saved my recovery seed</label>
+        <button id="create-confirm" disabled>Create wallet</button>
+      </section>
+
+      <section id="restore-panel" class="hidden">
+        <label>Encrypted backup</label>
+        <textarea id="restore-env" placeholder="paste backup envelope JSON"></textarea>
+        <label>Seed or passphrase</label>
+        <input id="restore-secret" type="password" placeholder="64-hex seed or passphrase" />
+        <button id="restore-confirm" style="margin-top:8px">Restore wallet</button>
+      </section>
+    </div>
+
+    <div class="msg" id="msg"></div>
+    <div class="foot"><a id="open-options">Connection settings ▸</a></div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

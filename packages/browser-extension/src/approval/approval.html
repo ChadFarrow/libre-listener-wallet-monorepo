@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Approve wallet access</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 20px; }
+      h1 { font-size: 16px; margin: 0 0 12px; }
+      .origin { font-weight: 600; word-break: break-all; background: rgba(122,90,245,0.12); padding: 8px 10px; border-radius: 8px; }
+      label { display: block; margin: 16px 0 6px; font-weight: 600; }
+      input { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #8884; }
+      .hint { color: #888; font-size: 12px; margin-top: 4px; }
+      .row { display: flex; gap: 10px; margin-top: 22px; }
+      button { flex: 1; padding: 10px; border-radius: 8px; border: 0; font-weight: 600; cursor: pointer; }
+      .approve { background: #7a5af5; color: #fff; }
+      .deny { background: #8883; }
+      .warn { color: #c0392b; font-size: 12px; margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>A website wants to use your wallet</h1>
+    <div class="origin" id="origin">—</div>
+    <label for="cap">Daily spending limit (sats)</label>
+    <input id="cap" type="number" min="0" step="1" value="10000" />
+    <div class="hint">Payments this site makes are capped per day. Set 0 for no limit.</div>
+    <div class="warn">Only approve sites you trust. Approved sites can request Lightning payments up to this limit without asking again.</div>
+    <div class="row">
+      <button class="deny" id="deny">Deny</button>
+      <button class="approve" id="approve">Approve</button>
+    </div>
+    <script type="module" src="approval.js"></script>
+  </body>
+</html>

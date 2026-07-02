@@ -1,6 +1,7 @@
 import { WalletHost } from "./wallet-host";
 import { handleWeblnRequest } from "../core/webln-mapping";
 import { MSG, type RpcResponse } from "../core/messages";
+import { isFromExtensionContext } from "../core/sender-guard";
 
 // The offscreen document is the ONLY long-lived context that hosts the LDK node (WASM +
 // WebSocket + timers). The background service worker is killed after ~30s idle, which would
@@ -64,10 +65,10 @@ async function dispatch(method: string, params: any): Promise<any> {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.kind !== MSG.WALLET_RPC) return; // not ours
-  // Only the background router may drive the privileged wallet RPC. A message from any other
-  // context — notably a content script (which carries a `tab`) — must never reach the dispatcher
-  // directly, or it would bypass the background's WebLN permission gate.
-  if (sender?.id !== chrome.runtime.id || sender?.tab) {
+  // Only the extension's own contexts (the background router) may drive the privileged wallet RPC.
+  // A content script — whose url is the web page, not chrome-extension:// — must never reach the
+  // dispatcher directly, or it would bypass the background's WebLN permission gate.
+  if (!isFromExtensionContext(sender, chrome.runtime.id, chrome.runtime.getURL(""))) {
     sendResponse({ id: msg.id, ok: false, error: "Unauthorized wallet RPC sender" } satisfies RpcResponse);
     return true;
   }

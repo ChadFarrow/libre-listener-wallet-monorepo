@@ -3,6 +3,7 @@ import { PermissionStore } from "./core/permission-store";
 import { chromeKV } from "./core/chrome-kv";
 import { normalizeSendPayment, spendAmountSats } from "./core/webln-mapping";
 import { isAllowedWeblnMethod } from "./core/webln-gate";
+import { isFromExtensionContext } from "./core/sender-guard";
 import { invoiceAmountSats } from "./core/bolt11-amount";
 import { isSettlementPending } from "./core/settlement-pending";
 import { buildAuthUrl, parseTokenFromRedirect } from "./core/drive-oauth";
@@ -258,12 +259,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     );
 
   // Every message must come from our own extension. The privileged control-plane (WALLET_COMMAND,
-  // APPROVAL_DECISION) additionally must come from an extension PAGE (popup/options/approval) — a
-  // content script carries a `tab`, so this blocks a content script from driving control-plane
-  // commands or forging an approval decision. WEBLN_REQUEST legitimately comes from a content
-  // script (it carries the stamped origin and is subject to the permission gate).
+  // APPROVAL_DECISION) additionally must come from one of our own pages (popup/options/approval) —
+  // identified by a chrome-extension:// url, NOT by the absence of a tab (the approval window and
+  // the options page are tab-hosted). This blocks a content script — whose url is the web page —
+  // from driving control-plane commands or forging an approval decision. WEBLN_REQUEST legitimately
+  // comes from a content script (it carries the stamped origin and is subject to the permission gate).
   const fromExtension = sender?.id === chrome.runtime.id;
-  const fromExtensionPage = fromExtension && !sender?.tab;
+  const fromExtensionPage = isFromExtensionContext(sender, chrome.runtime.id, chrome.runtime.getURL(""));
+  if ((msg?.kind === MSG.WALLET_COMMAND || msg?.kind === MSG.APPROVAL_DECISION) && !fromExtensionPage) {
+    // Diagnostic: show exactly what sender was rejected so a legit extension page isn't blocked.
+    console.warn("[Router] rejected privileged msg", msg?.kind, "sender:", { id: sender?.id, url: sender?.url, hasTab: !!sender?.tab });
+  }
 
   switch (msg?.kind) {
     case MSG.WEBLN_REQUEST:

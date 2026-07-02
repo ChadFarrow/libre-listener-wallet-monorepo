@@ -139,7 +139,10 @@
         <label>Recovery seed (or passphrase)</label>
         <input id="restore-secret" type="password" placeholder="64-hex seed or passphrase" />
         <button id="restore-drive" style="margin-top:8px;width:100%">Restore from Google Drive</button>
-        <p class="hint" style="margin:10px 0 4px">…or paste an encrypted backup manually:</p>
+        <p class="hint" style="margin:10px 0 4px">…or restore from the downloaded backup file:</p>
+        <input id="restore-file" type="file" accept=".json,application/json" style="width:100%" />
+        <button id="restore-file-btn" class="ghost" style="margin-top:8px;width:100%">Restore from file</button>
+        <p class="hint" style="margin:10px 0 4px">…or paste the encrypted backup JSON:</p>
         <textarea id="restore-env" placeholder="paste backup envelope JSON"></textarea>
         <button id="restore-confirm" class="ghost" style="margin-top:8px;width:100%">Restore from pasted backup</button>
         <div class="msg" id="restore-msg"></div>

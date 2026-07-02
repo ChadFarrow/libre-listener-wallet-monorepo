@@ -293,6 +293,34 @@ $("restore-drive").addEventListener("click", async () => {
   }
 });
 
+$("restore-file-btn").addEventListener("click", async () => {
+  const file = $<HTMLInputElement>("restore-file").files?.[0];
+  const secret = ($("restore-secret") as HTMLInputElement).value.trim();
+  if (!file) {
+    setMsg("restore-msg", "Choose your backup .json file first.", "err");
+    return;
+  }
+  if (!secret) {
+    setMsg("restore-msg", "Enter your recovery seed (it decrypts the backup).", "err");
+    return;
+  }
+  setMsg("restore-msg", "Reading backup file…");
+  try {
+    // Read the (potentially large) envelope straight from the file — no giant copy/paste needed.
+    const envelope = (await file.text()).trim();
+    if (!envelope) {
+      setMsg("restore-msg", "That file is empty.", "err");
+      return;
+    }
+    setMsg("restore-msg", "Restoring…");
+    await command("restoreWallet", { envelope, secret });
+    setMsg("restore-msg", "Wallet restored", "ok");
+    refresh();
+  } catch (e: any) {
+    setMsg("restore-msg", e.message, "err");
+  }
+});
+
 $("restore-confirm").addEventListener("click", async () => {
   const envelope = $<HTMLTextAreaElement>("restore-env").value.trim();
   const secret = ($("restore-secret") as HTMLInputElement).value.trim();

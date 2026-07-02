@@ -49,16 +49,23 @@ window.addEventListener("message", (event: MessageEvent) => {
     return;
   }
 
-  chrome.runtime
-    .sendMessage({
-      kind: MSG.WEBLN_REQUEST,
-      id: data.id,
-      origin: pageOrigin, // trusted: our own origin, not from the page message
-      method: data.method,
-      params: data.params,
-    })
-    .then(
-      (resp: RpcResponse) => respond({ ok: !!resp?.ok, result: resp?.result, error: resp?.error }),
-      (err: Error) => respond({ ok: false, error: err?.message || String(err) })
-    );
+  try {
+    chrome.runtime
+      .sendMessage({
+        kind: MSG.WEBLN_REQUEST,
+        id: data.id,
+        origin: pageOrigin, // trusted: our own origin, not from the page message
+        method: data.method,
+        params: data.params,
+      })
+      .then(
+        (resp: RpcResponse) => respond({ ok: !!resp?.ok, result: resp?.result, error: resp?.error }),
+        (err: Error) => respond({ ok: false, error: err?.message || String(err) })
+      );
+  } catch (e) {
+    // The extension was reloaded/updated, orphaning this content script ("Extension context
+    // invalidated"). Reply cleanly instead of throwing uncaught into the page — the page needs a
+    // reload to get a fresh provider connected to the new extension instance.
+    respond({ ok: false, error: "Wallet extension was reloaded — refresh this page to reconnect." });
+  }
 });

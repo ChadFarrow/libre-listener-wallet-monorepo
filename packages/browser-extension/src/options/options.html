@@ -17,6 +17,9 @@
       table { width: 100%; border-collapse: collapse; margin-top: 8px; }
       td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid #8883; font-size: 13px; }
       .peer-row { display: flex; gap: 8px; } .peer-row > input { flex: 1; }
+      .danger { margin-top: 26px; border: 1px solid #c0392b66; border-radius: 10px; padding: 4px 16px 16px; }
+      .danger h2 { color: #c0392b; }
+      button.danger-btn { background: #c0392b; }
     </style>
   </head>
   <body>
@@ -67,6 +70,17 @@
     <h2>Approved sites</h2>
     <p class="hint">Sites you've granted WebLN access, with their daily spending caps.</p>
     <table id="grants"><tbody></tbody></table>
+
+    <section class="danger">
+      <h2>Danger zone</h2>
+      <p class="hint">
+        Delete the wallet on the <b id="reset-network">current</b> network — erases its seed,
+        channel state, and monitors from this browser. <b>Any funds in a live channel will be
+        lost</b> unless you have a backup. Other networks are unaffected.
+      </p>
+      <button id="reset-wallet" class="danger-btn">Reset wallet on this network</button>
+      <div class="msg" id="reset-msg"></div>
+    </section>
 
     <script type="module" src="options.js"></script>
   </body>

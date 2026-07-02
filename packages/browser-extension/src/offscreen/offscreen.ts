@@ -42,6 +42,8 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.startNode();
     case "stopNode":
       return host.stopNode();
+    case "resetWallet":
+      return host.resetWallet();
     case "exportBackup":
       return host.exportBackup();
     case "connectPeer":

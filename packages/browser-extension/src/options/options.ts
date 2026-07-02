@@ -1,4 +1,5 @@
 import { command } from "../ui/rpc";
+import { confirmModal } from "../ui/confirm-modal";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const val = (id: string) => $<HTMLInputElement>(id).value.trim();
@@ -12,6 +13,7 @@ async function loadConfig() {
   try {
     const c = await command<any>("getConfig");
     $<HTMLSelectElement>("network").value = c.network || "mainnet";
+    $("reset-network").textContent = c.network || "mainnet";
     $<HTMLInputElement>("esplora").value = c.esploraUrl || "";
     $<HTMLInputElement>("bridge").value = c.bridgeUrl || "";
     $<HTMLInputElement>("rgs").value = c.rapidGossipSyncUrl || "";
@@ -81,6 +83,13 @@ async function loadGrants() {
     btn.className = "ghost";
     btn.style.margin = "0";
     btn.addEventListener("click", async () => {
+      const ok = await confirmModal({
+        title: "Revoke access?",
+        body: `Remove WebLN access for ${g.origin}? It will have to ask for approval again next time.`,
+        confirmLabel: "Revoke",
+        danger: true,
+      });
+      if (!ok) return;
       await command("revokeGrant", { origin: g.origin });
       loadGrants();
     });
@@ -89,6 +98,30 @@ async function loadGrants() {
     body.appendChild(tr);
   }
 }
+
+$("reset-wallet").addEventListener("click", async () => {
+  const network = $("reset-network").textContent || "this network";
+  const ok = await confirmModal({
+    title: `Delete the ${network} wallet?`,
+    body:
+      `This permanently erases the seed, channel state, and monitors for the ${network} wallet from ` +
+      `this browser. Any funds in a live channel will be lost unless you have a backup. This cannot be undone.`,
+    confirmLabel: "Delete wallet",
+    danger: true,
+  });
+  if (!ok) return;
+  const btn = $<HTMLButtonElement>("reset-wallet");
+  btn.disabled = true;
+  setMsg("reset-msg", "Deleting…");
+  try {
+    const r = await command<{ network: string }>("resetWallet");
+    setMsg("reset-msg", `Wallet on ${r.network} deleted. Open the popup to create or restore a wallet.`, "ok");
+  } catch (e: any) {
+    setMsg("reset-msg", e.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 loadConfig();
 loadGrants();

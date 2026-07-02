@@ -176,6 +176,22 @@ export class WalletHost implements WalletRpc {
     return this.currentNode();
   }
 
+  // Wipe the wallet for the active network: stop the node, then erase its IndexedDB (seed +
+  // channel state + monitors). DESTRUCTIVE — any funds in a live channel are lost; the UI gates
+  // this behind an explicit confirmation. Leaves the network pointer + saved config intact.
+  async resetWallet(): Promise<{ network: string }> {
+    const network = await this.activeNetwork();
+    if (this.wallet) {
+      await this.wallet.nwc.stop().catch((e) => console.warn("[NWC] stop failed:", e?.message || e));
+      await this.wallet.stop();
+      this.wallet = undefined;
+      this.tracker = undefined;
+    }
+    await new IndexedDBStorageProvider(dbNameForNetwork(network)).clear();
+    this.emit("state-changed");
+    return { network };
+  }
+
   async stopNode(): Promise<void> {
     if (this.wallet) {
       await this.wallet.nwc.stop().catch((e) => console.warn("[NWC] stop failed:", e?.message || e));

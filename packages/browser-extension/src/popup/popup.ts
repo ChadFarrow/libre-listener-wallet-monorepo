@@ -1,4 +1,5 @@
 import { command, onWalletEvent } from "../ui/rpc";
+import { confirmModal } from "../ui/confirm-modal";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (el: HTMLElement, on: boolean) => el.classList.toggle("hidden", !on);
@@ -157,6 +158,13 @@ async function refreshNwcList() {
     btn.className = "ghost";
     btn.style.padding = "3px 8px";
     btn.addEventListener("click", async () => {
+      const ok = await confirmModal({
+        title: "Revoke pairing?",
+        body: `Delete the NWC pairing “${c.name}”? Any app using it will lose access to this wallet.`,
+        confirmLabel: "Revoke",
+        danger: true,
+      });
+      if (!ok) return;
       await command("nwcDeleteConnection", { clientPubkey: c.clientPubkey }).catch((e) =>
         setMsg("nwc-msg", e.message, "err")
       );
@@ -228,9 +236,17 @@ $("saved").addEventListener("change", (e) => {
 });
 
 $("create-confirm").addEventListener("click", async () => {
+  // Use a seed the user pasted (bringing back a saved seed), otherwise the freshly generated one.
+  const own = ($("seed-input") as HTMLInputElement).value.trim();
+  const seedHex = own || ($("seed").textContent || "");
+  if (own && !/^[0-9a-fA-F]{64}$/.test(own)) {
+    setMsg("create-msg", "That seed isn't valid — it must be 64 hex characters (32 bytes).", "err");
+    return;
+  }
+  setMsg("create-msg", "");
   setMsg("msg", "Creating wallet & starting node…");
   try {
-    await command("createWallet", { seedHex: $("seed").textContent });
+    await command("createWallet", { seedHex });
     setMsg("msg", "Wallet created", "ok");
     refresh();
   } catch (e: any) {
@@ -245,9 +261,14 @@ $("restore-btn").addEventListener("click", () => {
 });
 
 $("restore-drive").addEventListener("click", async () => {
+  const secret = ($("restore-secret") as HTMLInputElement).value.trim();
+  if (!secret) {
+    setMsg("restore-msg", "Enter your recovery seed first.", "err");
+    return;
+  }
   setMsg("restore-msg", "Fetching backup from Google Drive…");
   try {
-    await command("driveRestore", { secret: ($("restore-secret") as HTMLInputElement).value.trim() });
+    await command("driveRestore", { secret });
     setMsg("restore-msg", "Wallet restored from Drive", "ok");
     refresh();
   } catch (e: any) {
@@ -256,12 +277,19 @@ $("restore-drive").addEventListener("click", async () => {
 });
 
 $("restore-confirm").addEventListener("click", async () => {
+  const envelope = $<HTMLTextAreaElement>("restore-env").value.trim();
+  const secret = ($("restore-secret") as HTMLInputElement).value.trim();
+  if (!envelope) {
+    setMsg("restore-msg", "Paste your encrypted backup JSON above — a seed alone can't restore channels.", "err");
+    return;
+  }
+  if (!secret) {
+    setMsg("restore-msg", "Enter your recovery seed (it decrypts the backup).", "err");
+    return;
+  }
   setMsg("restore-msg", "Restoring…");
   try {
-    await command("restoreWallet", {
-      envelope: $<HTMLTextAreaElement>("restore-env").value.trim(),
-      secret: ($("restore-secret") as HTMLInputElement).value.trim(),
-    });
+    await command("restoreWallet", { envelope, secret });
     setMsg("restore-msg", "Wallet restored", "ok");
     refresh();
   } catch (e: any) {

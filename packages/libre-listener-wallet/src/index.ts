@@ -95,7 +95,7 @@ import {
 import { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
 import { getSecureRandomBytes } from "./crypto-utils";
 import { hasRouteHint, appendRouteHints } from "./bolt11-hints";
-import { selectHintChannels, type HintableChannel } from "./hint-selection";
+import { selectHintChannels, forwardingInfoFromLdk, type HintableChannel } from "./hint-selection";
 import { EsploraSyncClient } from "./esplora-client";
 import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
@@ -812,13 +812,9 @@ export class LibreListenerWallet {
         inboundPaymentScid: scidOpt instanceof Option_u64Z_Some ? scidOpt.some : undefined,
         shortChannelId: shortOpt instanceof Option_u64Z_Some ? shortOpt.some : undefined,
         inboundCapacityMsat: ch.get_inbound_capacity_msat(),
-        forwardingInfo: fwd
-          ? {
-              feeBaseMsat: fwd.get_fee_base_msat(),
-              feeProportionalMillionths: fwd.get_fee_proportional_millionths(),
-              cltvExpiryDelta: fwd.get_cltv_expiry_delta(),
-            }
-          : undefined,
+        // See forwardingInfoFromLdk's doc comment: get_forwarding_info() always returns a
+        // truthy wrapper, even for LDK's None, so `fwd ? ... : undefined` alone is not safe.
+        forwardingInfo: forwardingInfoFromLdk(fwd),
       };
     });
   }

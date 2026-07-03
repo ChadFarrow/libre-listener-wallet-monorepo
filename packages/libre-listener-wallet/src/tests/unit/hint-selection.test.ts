@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { selectHintChannels, type HintableChannel } from "../../hint-selection";
+import { selectHintChannels, forwardingInfoFromLdk, type HintableChannel } from "../../hint-selection";
 
 const FWD = { feeBaseMsat: 1000, feeProportionalMillionths: 1, cltvExpiryDelta: 80 };
 const base: HintableChannel = {
@@ -38,5 +38,40 @@ describe("selectHintChannels", () => {
     const mk = (cap: bigint, scid: bigint): HintableChannel => ({ ...base, inboundCapacityMsat: cap, inboundPaymentScid: scid });
     const hints = selectHintChannels([mk(1n, 1n), mk(4n, 4n), mk(3n, 3n), mk(2n, 2n)]);
     expect(hints.map((h) => h.scid)).toEqual([4n, 3n, 2n]);
+  });
+});
+
+// LDK's get_forwarding_info() always returns a truthy wrapper -- even for LDK's None -- so
+// `fwd ? ... : undefined` is dead code. forwardingInfoFromLdk must detect the null-ptr case
+// (and, as a belt-and-braces fallback, a zero cltv_expiry_delta) instead of trusting truthiness.
+describe("forwardingInfoFromLdk", () => {
+  const real = { get_fee_base_msat: () => 1000, get_fee_proportional_millionths: () => 1, get_cltv_expiry_delta: () => 80 };
+
+  it("returns undefined for a null/undefined wrapper", () => {
+    expect(forwardingInfoFromLdk(null)).toBeUndefined();
+    expect(forwardingInfoFromLdk(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for a truthy wrapper with a null pointer (LDK's None), even though naive truthiness would pass", () => {
+    const noneWrapper = { ...real, ptr: 0n };
+    expect(noneWrapper).toBeTruthy(); // sanity: this is exactly the trap the naive `fwd ? ... : undefined` fell into
+    expect(forwardingInfoFromLdk(noneWrapper)).toBeUndefined();
+  });
+
+  it("also treats a numeric zero pointer as absent (bindings may use number, not bigint)", () => {
+    expect(forwardingInfoFromLdk({ ...real, ptr: 0 })).toBeUndefined();
+  });
+
+  it("belt-and-braces: treats cltv_expiry_delta === 0 as absent even with a nonzero pointer", () => {
+    const zeroCltv = { ...real, ptr: 1n, get_cltv_expiry_delta: () => 0 };
+    expect(forwardingInfoFromLdk(zeroCltv)).toBeUndefined();
+  });
+
+  it("maps a real, present forwarding info to the HintableChannel shape", () => {
+    expect(forwardingInfoFromLdk({ ...real, ptr: 1n })).toEqual({
+      feeBaseMsat: 1000,
+      feeProportionalMillionths: 1,
+      cltvExpiryDelta: 80,
+    });
   });
 });

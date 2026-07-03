@@ -1,6 +1,5 @@
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
-import { backupFilename } from "../core/drive-rest";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (el: HTMLElement, on: boolean) => el.classList.toggle("hidden", !on);
@@ -177,12 +176,29 @@ async function refreshNwcList() {
 }
 
 // ---- backup: manual export + Google Drive ----
+
+// Filename for a DOWNLOADED backup (a local label only — restore-from-file reads the contents, not
+// the name; the pinned Drive filename is separate). Includes the envelope format version + a
+// date/time stamp so multiple saved backups are distinguishable and sortable by "newest".
+function downloadBackupName(network: string, envelope: string): string {
+  let ver = "";
+  try {
+    ver = `-v${(JSON.parse(envelope).v ?? JSON.parse(envelope).version) || "?"}`;
+  } catch {
+    /* keep going without a version tag */
+  }
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `libre-wallet-backup-${network}${ver}-${stamp}.json`;
+}
+
 $("export").addEventListener("click", async () => {
   setMsg("backup-msg", "Preparing backup…");
   try {
     const env = await command<string>("exportBackup");
     const state = await command<{ network: string }>("getState").catch(() => ({ network: "mainnet" }));
-    const name = backupFilename(state.network || "mainnet");
+    const name = downloadBackupName(state.network || "mainnet", env);
     // Download the (large) encrypted envelope as a file — no giant clipboard/textarea.
     const url = URL.createObjectURL(new Blob([env], { type: "application/json" }));
     const a = document.createElement("a");

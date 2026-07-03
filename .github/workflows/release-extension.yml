@@ -8,22 +8,38 @@ on:
     tags: ["browser-extension-v*"]
   workflow_dispatch:
 
+# Default the workflow token to read-only; the release job elevates to write.
 permissions:
-  contents: write # create releases / upload assets
+  contents: read
 
 jobs:
   build-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create releases / upload assets
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      # Third-party actions pinned to a full commit SHA (supply-chain safety); the
+      # trailing comment records the human-readable version.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.10.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # Never ship an unverified extension zip: gate on lint, storage contract,
+      # typecheck, and the extension unit tests before building the release.
+      - name: Lint
+        run: pnpm --filter @libre/browser-extension lint
+      - name: Storage-contract guard
+        run: pnpm check:storage
+      - name: Typecheck
+        run: pnpm --filter @libre/browser-extension typecheck
+      - name: Unit tests
+        run: pnpm --filter @libre/browser-extension test
 
       - name: Build workspace deps + extension
         run: |
@@ -37,7 +53,7 @@ jobs:
           (cd out && zip -r ../libre-listener-wallet-extension.zip libre-listener-wallet-extension)
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: libre-listener-wallet-extension
           path: libre-listener-wallet-extension.zip

@@ -70,6 +70,23 @@ $("save-drive").addEventListener("click", async () => {
   }
 });
 
+async function loadSweep() {
+  const r = await command<{ address: string }>("getSweepAddress").catch((e) => {
+    console.warn("[Options] getSweepAddress failed:", e?.message || e);
+    return { address: "" };
+  });
+  $<HTMLInputElement>("sweep-address").value = r.address || "";
+}
+
+$("save-sweep").addEventListener("click", async () => {
+  try {
+    const r = await command<{ address: string }>("setSweepAddress", { address: val("sweep-address") });
+    setMsg("sweep-msg", r.address ? "Sweep address saved." : "Sweep address cleared.", "ok");
+  } catch (e: any) {
+    setMsg("sweep-msg", e.message, "err");
+  }
+});
+
 $("connect-peer").addEventListener("click", async () => {
   try {
     await command("connectPeer", {
@@ -146,3 +163,4 @@ $("reset-wallet").addEventListener("click", async () => {
 
 loadConfig();
 loadGrants();
+loadSweep();

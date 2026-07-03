@@ -67,6 +67,17 @@
     <button id="connect-peer" class="ghost">Connect peer</button>
     <div class="msg" id="peer-msg"></div>
 
+    <h2>Force-close recovery</h2>
+    <p class="hint">
+      If a channel ever force-closes, the wallet sweeps the reclaimed on-chain funds to this address.
+      Set a segwit address (<b>bc1q…</b> / <b>bc1p…</b>) you control — without one, force-closed funds
+      can't be recovered automatically. Can be changed anytime.
+    </p>
+    <label>On-chain sweep address</label>
+    <input id="sweep-address" placeholder="bc1q…" />
+    <button id="save-sweep">Save sweep address</button>
+    <div class="msg" id="sweep-msg"></div>
+
     <h2>Approved sites</h2>
     <p class="hint">Sites you've granted WebLN access, with their daily spending caps.</p>
     <table id="grants"><tbody></tbody></table>

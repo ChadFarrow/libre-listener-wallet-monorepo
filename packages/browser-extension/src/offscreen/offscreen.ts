@@ -48,6 +48,10 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.exportBackup();
     case "exportBackupBlob":
       return host.exportBackupBlob();
+    case "getSweepAddress":
+      return host.getSweepAddress();
+    case "setSweepAddress":
+      return host.setSweepAddress(params?.address ?? "");
     case "connectPeer":
       return host.connectPeer(params.pubkey, params.host, params.port);
     case "syncGossip":

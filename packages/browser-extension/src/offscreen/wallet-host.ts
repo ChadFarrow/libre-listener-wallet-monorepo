@@ -23,6 +23,7 @@ import { PaymentTracker } from "./payment-tracker";
 import { payBolt11 } from "./pay-invoice";
 import { restoreBlockReason } from "./restore-guard";
 import { downloadBackupName } from "../core/backup-name";
+import { addressToScriptPubKey } from "../core/address-script";
 import type { WalletRpc } from "../core/webln-mapping";
 
 const KEYSEND_TIMEOUT_MS = 90_000;
@@ -31,6 +32,7 @@ const KEYSEND_TIMEOUT_MS = 90_000;
 const CHANNEL_MANAGER_KEY = "channel_manager";
 const SEED_KEY = "ldk_seed";
 const CREATED_NEW_KEY = "wallet_created_new"; // provenance marker: this seed was created fresh here
+const SWEEP_ADDRESS_KEY = "libre_sweep_address"; // on-chain address to recover force-closed funds
 
 export type HostEvent = (event: string, payload?: any) => void;
 
@@ -182,6 +184,7 @@ export class WalletHost implements WalletRpc {
       this.tracker = undefined;
       throw e;
     }
+    await this.applySweepAddress();
     // Warm the routing graph best-effort (mainnet only serves RGS snapshots).
     void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
     this.emit("state-changed");
@@ -262,6 +265,7 @@ export class WalletHost implements WalletRpc {
       this.tracker = new PaymentTracker(wallet);
       // start() brings NWC up; no separate init (avoids a duplicate LDK event listener).
       await wallet.start();
+      await this.applySweepAddress();
       void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
       this.emit("state-changed");
       return this.currentNode();
@@ -273,6 +277,38 @@ export class WalletHost implements WalletRpc {
   async exportBackup(): Promise<string> {
     this.requireRunning();
     return this.wallet!.exportState();
+  }
+
+  // ---- Force-close recovery: on-chain sweep address ----
+
+  async getSweepAddress(): Promise<{ address: string }> {
+    const storage = this.storageForNetwork(await this.activeNetwork());
+    return { address: (await storage.getItem(SWEEP_ADDRESS_KEY)) || "" };
+  }
+
+  // Persist the on-chain address force-closed funds sweep to, and push it to the running node so a
+  // close event (Event_SpendableOutputs) can recover funds. Validates by decoding — a bad address
+  // throws before anything is saved. An empty string clears it.
+  async setSweepAddress(address: string): Promise<{ address: string }> {
+    const addr = (address || "").trim();
+    if (addr) addressToScriptPubKey(addr); // throws on an invalid address
+    const storage = this.storageForNetwork(await this.activeNetwork());
+    if (addr) await storage.setItem(SWEEP_ADDRESS_KEY, addr);
+    else await storage.removeItem(SWEEP_ADDRESS_KEY);
+    if (this.wallet) this.wallet.setSweepDestination(addr ? addressToScriptPubKey(addr) : undefined);
+    return { address: addr };
+  }
+
+  // Push the persisted sweep address into the node (called on start). Best-effort: a bad/missing
+  // address just means no auto-sweep until the user sets a valid one.
+  private async applySweepAddress(): Promise<void> {
+    try {
+      const storage = this.storageForNetwork(await this.activeNetwork());
+      const addr = (await storage.getItem(SWEEP_ADDRESS_KEY))?.trim();
+      if (addr && this.wallet) this.wallet.setSweepDestination(addressToScriptPubKey(addr));
+    } catch (e) {
+      console.warn("[Sweep] could not apply saved sweep address:", (e as Error)?.message || e);
+    }
   }
 
   // Export the backup as a Blob URL the background can hand to chrome.downloads (a service worker

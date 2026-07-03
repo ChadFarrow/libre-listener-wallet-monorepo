@@ -26,6 +26,9 @@ importers:
       '@libre/shared':
         specifier: workspace:*
         version: link:../shared
+      '@scure/base':
+        specifier: ^2.0.0
+        version: 2.0.0
       lightningdevkit:
         specifier: ^0.1.0
         version: 0.1.0

@@ -139,12 +139,11 @@ async function driveRestore(secret: string): Promise<any> {
 // A service worker can't create Blob URLs, so the offscreen document mints one and we hand it to
 // chrome.downloads. Zero setup (no Google), off by default.
 const AUTO_DOWNLOAD_KEY = "auto_download_backup";
-// The node emits state-changed every ~30s from routine persistence, so a debounce isn't enough —
-// throttle to at most one auto-backup per interval. It overwrites one rolling file, so a wipe loses
-// at most this much recent state (deliberate wipes should still use the manual download first).
-const AUTO_DOWNLOAD_MIN_INTERVAL_MS = 5 * 60 * 1000;
+// It overwrites ONE rolling file, so keeping it current is cheap on file count — debounce just long
+// enough to coalesce a burst of state changes into one write, so the saved copy is essentially
+// always up to date (minimizing the "restore behind → force-close" window).
+const AUTO_DOWNLOAD_DEBOUNCE_MS = 8_000;
 let autoDownloadTimer: ReturnType<typeof setTimeout> | null = null;
-let lastAutoDownloadAt = 0;
 
 async function autoDownloadBackup(): Promise<void> {
   const { url, filename } = await callOffscreen("exportBackupBlob");
@@ -162,17 +161,13 @@ async function autoDownloadBackup(): Promise<void> {
 }
 
 function scheduleAutoDownload(): void {
-  if (autoDownloadTimer) return; // one already pending — coalesce this burst of state changes
   void chromeKV.get(AUTO_DOWNLOAD_KEY).then((enabled) => {
-    if (enabled !== "1" || autoDownloadTimer) return;
-    const elapsed = Date.now() - lastAutoDownloadAt;
-    // If we're past the interval, take a fresh backup after a short settle; else wait out the interval.
-    const delay = elapsed >= AUTO_DOWNLOAD_MIN_INTERVAL_MS ? 10_000 : AUTO_DOWNLOAD_MIN_INTERVAL_MS - elapsed;
+    if (enabled !== "1") return;
+    if (autoDownloadTimer) clearTimeout(autoDownloadTimer);
     autoDownloadTimer = setTimeout(() => {
       autoDownloadTimer = null;
-      lastAutoDownloadAt = Date.now();
       void autoDownloadBackup().catch((e) => console.warn("[Backup] auto-download failed:", e?.message || e));
-    }, delay);
+    }, AUTO_DOWNLOAD_DEBOUNCE_MS);
   });
 }
 

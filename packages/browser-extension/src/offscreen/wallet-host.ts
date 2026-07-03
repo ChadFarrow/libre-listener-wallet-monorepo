@@ -21,8 +21,7 @@ import {
   CONFIG_KEY,
   type ExtensionConfig,
 } from "../core/wallet-config";
-import { AUTO_START_KEY, autoStartPlan, connectWithRetry } from "../core/auto-start";
-import { chromeKV } from "../core/chrome-kv";
+import { autoStartPlan, connectWithRetry } from "../core/auto-start";
 import { createWebSocketStreamProvider } from "../core/ws-provider";
 import { PaymentTracker } from "./payment-tracker";
 import { payBolt11 } from "./pay-invoice";
@@ -209,17 +208,20 @@ export class WalletHost implements WalletRpc {
     return this.currentNode();
   }
 
-  // Boot-time auto-start: called once when the offscreen document loads. NEVER throws — a
-  // failed or skipped auto-start leaves the host stopped and the popup's manual Start working.
-  // The plan mirrors the PWA's assessStartReadiness: a stateless non-created-here seed is a
-  // silent skip here AND still a hard error in startNode() (two layers against the
-  // empty-node-force-closes-the-channel failure).
-  async autoStart(): Promise<void> {
+  // Boot-time auto-start: invoked (via the autoStart RPC) by the background right after it
+  // creates this offscreen document. NEVER throws — a failed or skipped auto-start leaves the
+  // host stopped and the popup's manual Start working. `flagRaw` is the raw auto_start value
+  // read by the BACKGROUND: offscreen documents only get chrome.runtime, chrome.storage is
+  // literally undefined here (reading it in this context killed auto-start on every launch —
+  // pinned by runtime-only-apis.test.ts). The plan mirrors the PWA's assessStartReadiness: a
+  // stateless non-created-here seed is a silent skip here AND still a hard error in startNode()
+  // (two layers against the empty-node-force-closes-the-channel failure).
+  async autoStart(flagRaw: string | null): Promise<void> {
     try {
       const network = await this.activeNetwork();
       const storage = this.storageForNetwork(network);
       const plan = autoStartPlan({
-        flagRaw: await chromeKV.get(AUTO_START_KEY),
+        flagRaw,
         hasSeed: !!(await storage.getItem(SEED_KEY)),
         hasChannelState: !!(await storage.getItem(CHANNEL_MANAGER_KEY)),
         createdNew: !!(await storage.getItem(CREATED_NEW_KEY)),

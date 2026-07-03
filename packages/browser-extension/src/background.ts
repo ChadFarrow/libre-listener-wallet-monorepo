@@ -37,6 +37,15 @@ async function ensureOffscreen(): Promise<void> {
         reasons: [chrome.offscreen.Reason.WORKERS],
         justification: "Runs the Lightning (LDK) node: WASM, the WebSocket peer connection, and background sync timers.",
       })
+      .then(() => {
+        // The document was just created — kick auto-start. One hook covers EVERY creation path
+        // (onStartup, onInstalled, a popup command, a WebLN request). The flag is read HERE
+        // because offscreen documents only get chrome.runtime — chrome.storage is undefined
+        // there (reading it in the offscreen host silently killed auto-start; pinned by
+        // offscreen/runtime-only-apis.test.ts). Fire-and-forget: auto-start must never delay
+        // the RPC that triggered the creation.
+        void triggerAutoStart().catch((e: any) => console.warn("[AutoStart] trigger failed:", e?.message || e));
+      })
       .catch((e: unknown) => {
         // A concurrent caller may have created it first.
         if (!String(e).includes("single offscreen")) throw e;
@@ -48,11 +57,24 @@ async function ensureOffscreen(): Promise<void> {
   await creating;
 }
 
+// Read the persisted auto_start flag on the offscreen document's behalf and hand it over. The
+// document is guaranteed to exist here (called from ensureOffscreen's creation path), so this
+// sends directly rather than re-entering ensureOffscreen.
+async function triggerAutoStart(): Promise<void> {
+  const flagRaw = await chromeKV.get(AUTO_START_KEY);
+  const resp: RpcResponse = await chrome.runtime.sendMessage({
+    kind: MSG.WALLET_RPC,
+    id: newId(),
+    method: "autoStart",
+    params: { flagRaw },
+  });
+  if (resp && !resp.ok) throw new Error(resp.error || "autoStart RPC failed");
+}
+
 // ---- Auto-start ----
 //
-// Bring the wallet up on browser launch and extension install/update. The offscreen document's
-// boot runs host.autoStart() (which reads the persisted flag and readiness markers), so the only
-// job here is making sure the document exists.
+// Bring the wallet up on browser launch and extension install/update: ensureOffscreen()'s
+// creation hook fires the autoStart RPC into the freshly created document.
 chrome.runtime.onStartup.addListener(() => {
   void ensureOffscreen().catch((e: any) => console.warn("[AutoStart] ensureOffscreen failed:", e?.message || e));
 });

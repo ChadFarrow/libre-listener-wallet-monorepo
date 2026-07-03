@@ -40,6 +40,11 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.restoreWallet(params.envelope, params.secret);
     case "startNode":
       return host.startNode();
+    case "autoStart":
+      // Fired by the background right after it creates this document (every creation path goes
+      // through its ensureOffscreen). The background reads the auto_start flag and passes it in —
+      // chrome.storage is undefined in offscreen documents, so this context can't read it itself.
+      return host.autoStart(params?.flagRaw ?? null);
     case "stopNode":
       return host.stopNode();
     case "resetWallet":
@@ -87,7 +92,3 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // async response
 });
 
-// Auto-start: the node comes up whenever this document is created — browser launch (the
-// background's onStartup → ensureOffscreen), an extension install/update, or a lazy creation
-// for an incoming WebLN request. autoStart() is non-throwing and enforces the readiness plan.
-void host.autoStart();

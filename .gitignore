@@ -9,3 +9,5 @@ docker-data
 ai/private
 packages/example-app/public/service-worker.js
 packages/example-app/public/service-worker.js.map
+# macOS Finder metadata
+.DS_Store

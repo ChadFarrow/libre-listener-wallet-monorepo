@@ -15,9 +15,14 @@ import {
   defaultEsploraUrl,
   defaultBridgeUrl,
   defaultRapidGossipSyncUrl,
+  defaultPeer,
+  parsePeerString,
+  formatPeerString,
   CONFIG_KEY,
   type ExtensionConfig,
 } from "../core/wallet-config";
+import { AUTO_START_KEY, autoStartPlan, connectWithRetry } from "../core/auto-start";
+import { chromeKV } from "../core/chrome-kv";
 import { createWebSocketStreamProvider } from "../core/ws-provider";
 import { PaymentTracker } from "./payment-tracker";
 import { payBolt11 } from "./pay-invoice";
@@ -153,10 +158,23 @@ export class WalletHost implements WalletRpc {
   // if it was created brand-new here. A stateless restored/injected seed that auto-starts would
   // bootstrap an empty ChannelManager, connect the peer, and force-close the real channel on
   // channel_reestablish — the exact mainnet failure documented in the SDK gotchas.
+
+  // Serialize concurrent start calls (autoStart racing a popup Start click must not build two
+  // wallets over the same storage).
+  private startingPromise?: Promise<{ nodeId: string; network: string }>;
+
   async startNode(): Promise<{ nodeId: string; network: string }> {
+    if (this.startingPromise) return this.startingPromise;
     if (this.wallet && this.wallet.status() === "Running") {
       return this.currentNode();
     }
+    this.startingPromise = this.doStartNode().finally(() => {
+      this.startingPromise = undefined;
+    });
+    return this.startingPromise;
+  }
+
+  private async doStartNode(): Promise<{ nodeId: string; network: string }> {
     const network = await this.activeNetwork();
     const storage = this.storageForNetwork(network);
     const hasSeed = !!(await storage.getItem(SEED_KEY));
@@ -189,6 +207,57 @@ export class WalletHost implements WalletRpc {
     void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
     this.emit("state-changed");
     return this.currentNode();
+  }
+
+  // Boot-time auto-start: called once when the offscreen document loads. NEVER throws — a
+  // failed or skipped auto-start leaves the host stopped and the popup's manual Start working.
+  // The plan mirrors the PWA's assessStartReadiness: a stateless non-created-here seed is a
+  // silent skip here AND still a hard error in startNode() (two layers against the
+  // empty-node-force-closes-the-channel failure).
+  async autoStart(): Promise<void> {
+    try {
+      const network = await this.activeNetwork();
+      const storage = this.storageForNetwork(network);
+      const plan = autoStartPlan({
+        flagRaw: await chromeKV.get(AUTO_START_KEY),
+        hasSeed: !!(await storage.getItem(SEED_KEY)),
+        hasChannelState: !!(await storage.getItem(CHANNEL_MANAGER_KEY)),
+        createdNew: !!(await storage.getItem(CREATED_NEW_KEY)),
+      });
+      if (!plan.start) {
+        console.log(`[AutoStart] skipped: ${plan.reason}`);
+        return;
+      }
+      await this.startNode();
+      if (!plan.connectPeer) return;
+
+      const cfg = await this.getConfig();
+      const peerStr = cfg.peer || defaultPeer(network);
+      if (!peerStr) {
+        console.warn("[AutoStart] no saved or default peer for this network — skipping peer connect");
+        return;
+      }
+      const { pubkey, host, port } = parsePeerString(peerStr);
+      const wallet = this.wallet; // abort the retry loop if stop()/restore swaps the instance
+      const connected = await connectWithRetry(
+        async () => {
+          await wallet!.connectPeer(pubkey, host, port);
+        },
+        {
+          shouldContinue: () => this.wallet === wallet && !!wallet && wallet.status() === "Running",
+          onAttemptFailed: (n, e) =>
+            console.warn(`[AutoStart] peer connect attempt ${n} failed:`, (e as Error)?.message || e),
+        }
+      );
+      if (connected) {
+        this.emit("state-changed");
+        console.log("[AutoStart] node running, peer connected");
+      } else {
+        console.warn("[AutoStart] peer connect gave up — use Connect peer in the popup");
+      }
+    } catch (e) {
+      console.warn("[AutoStart] failed:", (e as Error)?.message || e);
+    }
   }
 
   // Wipe the wallet for the active network: stop the node, then erase its IndexedDB (seed +
@@ -368,7 +437,25 @@ export class WalletHost implements WalletRpc {
   async connectPeer(pubkey: string, host: string, port: number): Promise<void> {
     this.requireRunning();
     await this.wallet!.connectPeer(pubkey, host, port);
+    await this.savePeer(pubkey, host, port);
     this.emit("state-changed");
+  }
+
+  // Remember the last successfully connected peer so auto-start can redial it. Written directly
+  // to the network's config JSON (setConfig refuses while the node runs — this is an internal,
+  // non-destructive single-field update). Best-effort: a persist failure must not fail the
+  // connect that already succeeded.
+  private async savePeer(pubkey: string, host: string, port: number): Promise<void> {
+    try {
+      const network = await this.activeNetwork();
+      const storage = this.storageForNetwork(network);
+      const cfg = parseConfig(await storage.getItem(CONFIG_KEY));
+      cfg.network = network as ExtensionConfig["network"];
+      cfg.peer = formatPeerString(pubkey, host, port);
+      await storage.setItem(CONFIG_KEY, serializeConfig(cfg));
+    } catch (e) {
+      console.warn("[Peer] could not persist last-connected peer:", (e as Error)?.message || e);
+    }
   }
 
   async syncGossip(): Promise<void> {

@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Libre Listener Wallet",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1uxfHP0/06lLYWFSKFsge0OQyNeaT+3Aq40yV0M6yzD8pUcNHEg+6UQelyh0cB/nlhjJ9jy7uPLIj6O5NcxWLSCx37067ExJAAG7miOSanMv3pPksMBV5OWumABKnwmgILUmWe76OkFHvMhj1SJ3gVbwA0iT2I24Ii7Qy0k+jdpsqzaz9BM/jTVwKXyhbnKUgeJtIvI8W77emgBn1Myl79n1N02OJl2UXWMizpipTPBM2rBg9BDRtpcPg9mqRkJ9G+oixEKDYMpCW+bp47dR46y4+WWe4EbQl7AW2gHnMaOEuJvwKwDasQE2CWItGtmTPXIXB123IFPfbKpFu/P6ZQIDAQAB",
   "description": "Non-custodial Bitcoin Lightning wallet. Injects a WebLN (window.webln) provider so any web app can request payments, invoices, and V4V boosts.",
   "minimum_chrome_version": "116",
   "background": {
@@ -13,23 +14,41 @@
     "default_title": "Libre Listener Wallet"
   },
   "options_page": "options.html",
-  "permissions": ["offscreen", "storage", "identity", "downloads"],
-  "host_permissions": ["https://www.googleapis.com/*"],
+  "permissions": [
+    "offscreen",
+    "storage",
+    "identity",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://www.googleapis.com/*"
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https: wss: ws://127.0.0.1:*"
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content-script.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["inpage.js", "liblightningjs.wasm"],
-      "matches": ["http://*/*", "https://*/*"]
+      "resources": [
+        "inpage.js",
+        "liblightningjs.wasm"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ]
     }
   ]
 }

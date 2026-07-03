@@ -840,6 +840,18 @@ export class LibreListenerWallet {
     }
   }
 
+  // Flush ONLY the channel manager — the irreplaceable, backed-up state. Used before an export so
+  // the backup is current without re-serializing the ~20MB network graph (which isn't backed up).
+  private async persistChannelManagerState(): Promise<void> {
+    if (this.channelManager) {
+      try {
+        await this.storage.setItem("channel_manager", bytesToHex(this.channelManager.write()));
+      } catch (err) {
+        this.logger?.error(`Failed to save channel manager: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+  }
+
   async stop(): Promise<void> {
     if (!this.isRunning) {
       this.logger?.warn("Wallet is not running");
@@ -916,9 +928,10 @@ export class LibreListenerWallet {
   }
 
   async exportState(opts?: { passphrase?: string }): Promise<string> {
-    // Flush the latest in-memory manager/graph/scorer so the backup is current.
+    // Flush the latest channel manager so the backup is current — but NOT the ~20MB network graph
+    // (it isn't backed up; it re-syncs from RGS on restore), so exporting stays cheap.
     if (this.isRunning) {
-      await this.persistManagerState();
+      await this.persistChannelManagerState();
     }
     const seedHex = await this.storage.getItem("ldk_seed");
     if (!seedHex) {

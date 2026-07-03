@@ -113,17 +113,12 @@ describe("storage contract: backup envelope is forward-restorable", () => {
 
 // --- Backup direct-key set ------------------------------------------------------
 // exportState() copies exactly these top-level keys into the backup (then appends
-// the monitor keys from ldk_keys_index). Dropping one silently produces an
-// incomplete, unrestorable backup.
+// the monitor keys from ldk_keys_index). Dropping an IRREPLACEABLE one silently
+// produces an incomplete, unrestorable backup. network_graph/scorer are intentionally
+// NOT here — they're re-derivable (RGS re-sync) and bundling the ~20MB graph made
+// backups huge; older backups that contain them still restore (see the golden tests).
 describe("storage contract: backup direct-key set", () => {
-  it("includes the seed + every piece of channel state", () => {
-    expect([...BACKUP_DIRECT_KEYS]).toEqual([
-      "ldk_seed",
-      "channel_manager",
-      "network_graph",
-      "scorer",
-      "ldk_keys_index",
-      "state_version",
-    ]);
+  it("includes the seed + every piece of irreplaceable channel state (and not the re-derivable graph/scorer)", () => {
+    expect([...BACKUP_DIRECT_KEYS]).toEqual(["ldk_seed", "channel_manager", "ldk_keys_index", "state_version"]);
   });
 });

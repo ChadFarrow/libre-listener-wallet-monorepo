@@ -23,4 +23,26 @@ describe("addressToScriptPubKey", () => {
     expect(() => addressToScriptPubKey("not-an-address")).toThrow();
     expect(() => addressToScriptPubKey("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2")).toThrow(); // legacy unsupported
   });
+
+  it("rejects a wrong-network address when a network is given", () => {
+    // A valid regtest (bcrt) address must be refused on mainnet — sweeping there
+    // would strand force-closed funds on an unspendable script.
+    expect(() =>
+      addressToScriptPubKey("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080", "mainnet"),
+    ).toThrow(/wrong network/i);
+    // And a mainnet address is refused on regtest.
+    expect(() =>
+      addressToScriptPubKey("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "regtest"),
+    ).toThrow(/wrong network/i);
+  });
+
+  it("accepts the matching network and still works with no network arg", () => {
+    expect(() =>
+      addressToScriptPubKey("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "mainnet"),
+    ).not.toThrow();
+    // Back-compat: omitting the network keeps the original permissive behavior.
+    expect(() =>
+      addressToScriptPubKey("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
+    ).not.toThrow();
+  });
 });

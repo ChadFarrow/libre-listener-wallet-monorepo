@@ -1,6 +1,7 @@
 // Nostr Wallet Connect UI: create a pairing (URI + QR), copy it, and the
 // active-pairings list with revoke. Exposes setNwcEnabled/updateNwcConnectionsList
 // for the node start/stop handlers.
+import QRCode from "qrcode";
 import { appendLog } from "./core/logger";
 import { copyToClipboard } from "./core/ui-helpers";
 import type { AppContext } from "./core/app-context";
@@ -31,16 +32,35 @@ export function initNwcUi(c: AppContext) {
       nwcQrImg.classList.add("hidden");
 
       const name = nwcConnNameInput.value.trim() || "Nostr Client App";
-      const limit = parseInt(nwcSpendingLimitInput.value, 10) || 0;
       const relayUrl = nwcRelayUrlInput.value.trim() || "wss://relay.getalby.com/v1";
 
-      appendLog(`[NWC] Creating connection pairing: "${name}" with limit: ${limit} sats on relay ${relayUrl}...`, "system");
+      // Parse the spending cap strictly. A blank/NaN field must NOT silently
+      // become an unlimited-spend pairing — require an explicit number (0 for
+      // unlimited, which we log loudly).
+      const rawLimit = nwcSpendingLimitInput.value.trim();
+      if (rawLimit === "" || !/^\d+$/.test(rawLimit)) {
+        appendLog(`[ERROR] Enter a spending limit in sats (use 0 for an explicitly unlimited pairing).`, "error");
+        return;
+      }
+      const limit = parseInt(rawLimit, 10);
+      if (limit === 0) {
+        appendLog(`[NWC] ⚠ Creating an UNLIMITED-spend pairing "${name}" (no daily cap).`, "system");
+      }
+
+      appendLog(`[NWC] Creating connection pairing: "${name}" with limit: ${limit === 0 ? "unlimited" : limit + " sats"} on relay ${relayUrl}...`, "system");
       const uri = await wallet.nwc.createConnection(name, { spendingLimitSats: limit, relayUrl });
 
       appendLog(`[NWC] Connection created successfully!`, "system");
       nwcUriStr.value = uri;
-      nwcQrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(uri)}`;
-      nwcQrImg.classList.remove("hidden");
+      // Render the QR locally. The pairing URI embeds the NWC spend-authority
+      // secret — sending it to a third-party QR image service (as this once did)
+      // hands that service full spend authority up to the cap. Keep it on-device.
+      QRCode.toDataURL(uri, { width: 150, margin: 1 })
+        .then((dataUrl) => {
+          nwcQrImg.src = dataUrl;
+          nwcQrImg.classList.remove("hidden");
+        })
+        .catch((e) => appendLog(`[NWC] Could not render QR locally: ${e?.message ?? e}`, "error"));
       nwcUriContainer.classList.remove("hidden");
 
       await updateNwcConnectionsList();
@@ -53,7 +73,7 @@ export function initNwcUi(c: AppContext) {
 
   copyNwcUriBtn.addEventListener("click", () => {
     if (!nwcUriStr.value) return;
-    copyToClipboard(nwcUriStr.value, "NWC Connection URI copied to clipboard.");
+    void copyToClipboard(nwcUriStr.value, "NWC Connection URI copied to clipboard.");
   });
 }
 

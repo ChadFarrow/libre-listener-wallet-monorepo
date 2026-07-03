@@ -27,7 +27,7 @@ const store = new PermissionStore(chromeKV);
 
 let creating: Promise<unknown> | null = null;
 async function ensureOffscreen(): Promise<void> {
-  // @ts-ignore hasDocument exists in Chrome 116+
+  // hasDocument exists in Chrome 116+ (optional-chained for older runtimes)
   if (await chrome.offscreen.hasDocument?.()) return;
   if (!creating) {
     creating = chrome.offscreen
@@ -196,17 +196,29 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
 // ---- Approval prompts ----
 
 interface PendingApproval {
+  origin: string;
   resolve: (d: { approved: boolean; spendingLimitSats: number }) => void;
+  promise: Promise<{ approved: boolean; spendingLimitSats: number }>;
   windowId?: number;
 }
 const pendingApprovals = new Map<string, PendingApproval>();
 
 async function requestApproval(origin: string): Promise<{ approved: boolean; spendingLimitSats: number }> {
+  // Coalesce concurrent prompts for the same origin. Without this, a hostile page
+  // calling webln.enable() in a loop spawns one focused OS popup per call — a
+  // window bomb that buries the browser and can socially-engineer an errant
+  // Approve. Reuse the in-flight prompt's promise instead.
+  for (const p of pendingApprovals.values()) {
+    if (p.origin === origin) return p.promise;
+  }
+
   const id = newId();
   const url = chrome.runtime.getURL(`approval.html?origin=${encodeURIComponent(origin)}&id=${id}`);
+  let resolveFn!: (d: { approved: boolean; spendingLimitSats: number }) => void;
   const decision = new Promise<{ approved: boolean; spendingLimitSats: number }>((resolve) => {
-    pendingApprovals.set(id, { resolve });
+    resolveFn = resolve;
   });
+  pendingApprovals.set(id, { origin, resolve: resolveFn, promise: decision });
   const win = await chrome.windows.create({ url, type: "popup", width: 400, height: 560, focused: true });
   const p = pendingApprovals.get(id);
   if (p) p.windowId = win?.id;

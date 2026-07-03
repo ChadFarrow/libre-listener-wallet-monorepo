@@ -49,39 +49,51 @@ export function initV4V(c: AppContext) {
 
     if (streamIntervalId) clearInterval(streamIntervalId);
 
-    // Send payments every 10 seconds (for testing convenience)
+    // Send payments every 10 seconds (for testing convenience). The whole body
+    // is guarded: an uncaught throw in an async interval is an unhandled
+    // rejection every tick, and a bail-out must fully stop streaming (reset the
+    // UI + null the id), not just clearInterval.
     streamIntervalId = setInterval(async () => {
-      const w = ctx.getWallet();
-      if (!w || !ctx.isRunning()) {
-        clearInterval(streamIntervalId);
-        return;
-      }
+      try {
+        const w = ctx.getWallet();
+        if (!w || !ctx.isRunning()) {
+          stopStreaming();
+          return;
+        }
 
-      const rateSatsMin = parseInt(streamRateInput.value, 10);
-      const amountSats = Math.max(1, Math.round((rateSatsMin * 10) / 60));
+        const rateSatsMin = parseInt(streamRateInput.value, 10);
+        if (!Number.isFinite(rateSatsMin) || rateSatsMin <= 0) {
+          appendLog("[V4V] Invalid streaming rate — stopping. Set a positive sats/min value.", "error");
+          stopStreaming();
+          return;
+        }
+        const amountSats = Math.max(1, Math.round((rateSatsMin * 10) / 60));
 
-      appendLog(`[V4V] Streaming ${amountSats} sats (interval: 10s)...`, "info");
+        appendLog(`[V4V] Streaming ${amountSats} sats (interval: 10s)...`, "info");
 
-      const splits = calculateSplits({
-        destinations: [
-          { destinationPubkey: CREATOR_PUBKEY, share: 90 },
-          { destinationPubkey: APP_DEV_PUBKEY, share: 10 },
-        ],
-        amountSats,
-        boostRecordTemplate: {
-          action: "stream",
-          app_name: "v4vmusic-player",
-          ts: Math.floor(audioPlayer.currentTime),
-        },
-      });
+        const splits = calculateSplits({
+          destinations: [
+            { destinationPubkey: CREATOR_PUBKEY, share: 90 },
+            { destinationPubkey: APP_DEV_PUBKEY, share: 10 },
+          ],
+          amountSats,
+          boostRecordTemplate: {
+            action: "stream",
+            app_name: "v4vmusic-player",
+            ts: Math.floor(audioPlayer.currentTime),
+          },
+        });
 
-      const res = await w.sendSplitPayments(splits);
-      if (res.ok) {
-        totalSatsStreamed += amountSats;
-        satsStreamedVal.innerText = totalSatsStreamed.toString();
-        appendLog(`[V4V] Successfully streamed ${amountSats} sats split!`, "info");
-      } else {
-        appendLog(`[V4V] Failed streaming split payment: some recipients failed. Check LDK logs.`, "error");
+        const res = await w.sendSplitPayments(splits);
+        if (res.ok) {
+          totalSatsStreamed += amountSats;
+          satsStreamedVal.innerText = totalSatsStreamed.toString();
+          appendLog(`[V4V] Successfully streamed ${amountSats} sats split!`, "info");
+        } else {
+          appendLog(`[V4V] Failed streaming split payment: some recipients failed. Check LDK logs.`, "error");
+        }
+      } catch (e: any) {
+        appendLog(`[V4V] Streaming payment error: ${e?.message ?? e}`, "error");
       }
     }, 10000);
   });

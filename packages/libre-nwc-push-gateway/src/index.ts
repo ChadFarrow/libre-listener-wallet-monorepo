@@ -7,6 +7,58 @@ export interface GatewayConfig {
   port: number;
   relayUrl?: string;
   dbPath?: string;
+  /**
+   * Allow ws:// and private/loopback/link-local relay hosts. Defaults to false:
+   * the public gateway must not be coaxed into opening outbound connections to
+   * internal services (SSRF). Enable only for local/regtest testing.
+   */
+  allowPrivateRelays?: boolean;
+  /** Hard cap on distinct relay listeners, to bound memory/FD growth. */
+  maxRelayListeners?: number;
+}
+
+const DEFAULT_MAX_RELAY_LISTENERS = 64;
+
+// Private / loopback / link-local / reserved IPv4 literals + IPv6 loopback/ULA.
+// Blocking these prevents an attacker-supplied relayUrl from making the server
+// probe internal services (e.g. cloud metadata at 169.254.169.254).
+function isPrivateHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "0.0.0.0" || h === "::1" || h === "::") return true;
+  if (h.startsWith("127.") || h.startsWith("10.") || h.startsWith("169.254.")) return true;
+  if (h.startsWith("192.168.")) return true;
+  const m = h.match(/^172\.(\d+)\./);
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
+  // IPv6 unique-local (fc00::/7) and link-local (fe80::/10)
+  if (/^f[cd][0-9a-f]{2}:/.test(h) || h.startsWith("fe80:")) return true;
+  return false;
+}
+
+/** A Nostr relay URL is acceptable to connect to (SSRF-safe unless overridden). */
+export function isSafeRelayUrl(raw: string, allowPrivate = false): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (allowPrivate) return u.protocol === "ws:" || u.protocol === "wss:";
+  if (u.protocol !== "wss:") return false; // public: require TLS
+  if (!u.hostname || isPrivateHost(u.hostname)) return false;
+  return true;
+}
+
+/** A Web Push endpoint must be an HTTPS URL to a non-private host. */
+function isSafePushEndpoint(raw: string, allowPrivate = false): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:") return false;
+  if (!allowPrivate && (!u.hostname || isPrivateHost(u.hostname))) return false;
+  return true;
 }
 
 class NostrRelayListener {
@@ -72,7 +124,9 @@ class NostrRelayListener {
     if (this.isConnected) {
       this.subscribe();
     } else {
-      this.connect();
+      // connect() handles its own errors (try/catch → scheduleReconnect), so it
+      // never rejects; void marks the fire-and-forget intentional.
+      void this.connect();
     }
   }
 
@@ -80,7 +134,7 @@ class NostrRelayListener {
     if (this.reconnectTimeout) return;
     this.reconnectTimeout = setTimeout(() => {
       this.reconnectTimeout = null;
-      this.connect();
+      void this.connect();
     }, 5000);
   }
 
@@ -114,7 +168,9 @@ export class LibreNWCPushGateway {
       host: config.host || "127.0.0.1",
       port: config.port,
       relayUrl: config.relayUrl,
-      dbPath: config.dbPath
+      dbPath: config.dbPath,
+      allowPrivateRelays: config.allowPrivateRelays ?? false,
+      maxRelayListeners: config.maxRelayListeners ?? DEFAULT_MAX_RELAY_LISTENERS,
     };
   }
 
@@ -175,6 +231,31 @@ export class LibreNWCPushGateway {
         const { walletPubkey, relayUrl, subscription } = req.body;
         if (!walletPubkey || !relayUrl || !subscription) {
           res.status(400).json({ error: "Missing required parameters" });
+          return;
+        }
+        if (typeof walletPubkey !== "string" || !/^[0-9a-f]{64,66}$/i.test(walletPubkey)) {
+          res.status(400).json({ error: "walletPubkey must be a hex-encoded key" });
+          return;
+        }
+        if (typeof relayUrl !== "string" || !isSafeRelayUrl(relayUrl, this.config.allowPrivateRelays)) {
+          res.status(400).json({ error: "relayUrl must be a wss:// URL to a public host" });
+          return;
+        }
+        if (
+          !subscription.endpoint ||
+          !subscription.keys?.p256dh ||
+          !subscription.keys?.auth ||
+          !isSafePushEndpoint(subscription.endpoint, this.config.allowPrivateRelays)
+        ) {
+          res.status(400).json({ error: "subscription must have an https endpoint and keys" });
+          return;
+        }
+        // Bound the number of distinct relays we will ever connect to.
+        if (
+          !this.listeners.has(relayUrl) &&
+          this.listeners.size >= (this.config.maxRelayListeners ?? DEFAULT_MAX_RELAY_LISTENERS)
+        ) {
+          res.status(429).json({ error: "relay listener capacity reached" });
           return;
         }
 
@@ -266,6 +347,16 @@ export class LibreNWCPushGateway {
   private ensureRelayListener(relayUrl: string) {
     let listener = this.listeners.get(relayUrl);
     if (!listener) {
+      // Defense-in-depth: never open an outbound connection to an unsafe or
+      // over-cap relay, even if a stale/hostile row reached the DB some other way.
+      if (!isSafeRelayUrl(relayUrl, this.config.allowPrivateRelays)) {
+        console.warn(`[Gateway] Refusing unsafe relay URL: ${relayUrl}`);
+        return;
+      }
+      if (this.listeners.size >= (this.config.maxRelayListeners ?? DEFAULT_MAX_RELAY_LISTENERS)) {
+        console.warn(`[Gateway] Relay listener cap reached; not connecting ${relayUrl}`);
+        return;
+      }
       listener = new NostrRelayListener(relayUrl, this);
       this.listeners.set(relayUrl, listener);
       listener.connect().catch(err => {
@@ -277,11 +368,23 @@ export class LibreNWCPushGateway {
   }
 
   async handleNwcEvent(event: any, relayUrl: string): Promise<void> {
-    const walletPubkey = event.tags.find((t: string[]) => t[0] === "p")?.[1];
+    // The relay callback runs outside any Express handler, so an unguarded throw
+    // here is an unhandled rejection. It can also fire mid-shutdown after stop()
+    // nulls the DB — bail cleanly in that case.
+    if (!this.db) return;
+    const walletPubkey = Array.isArray(event?.tags)
+      ? event.tags.find((t: string[]) => t[0] === "p")?.[1]
+      : undefined;
     if (!walletPubkey) return;
 
-    const rows = this.db.prepare("SELECT endpoint, p256dh, auth FROM subscriptions WHERE wallet_pubkey = ? AND relay_url = ?")
-      .all(walletPubkey, relayUrl) as { endpoint: string; p256dh: string; auth: string }[];
+    let rows: { endpoint: string; p256dh: string; auth: string }[];
+    try {
+      rows = this.db.prepare("SELECT endpoint, p256dh, auth FROM subscriptions WHERE wallet_pubkey = ? AND relay_url = ?")
+        .all(walletPubkey, relayUrl) as { endpoint: string; p256dh: string; auth: string }[];
+    } catch (err: any) {
+      console.error("[Gateway] handleNwcEvent DB read failed:", err?.message || err);
+      return;
+    }
 
     for (const row of rows) {
       const pushSubscription = {

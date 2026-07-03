@@ -6,15 +6,18 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "eslint src"
   },
   "dependencies": {
     "@libre/listener-wallet": "workspace:*",
     "@libre/shared": "workspace:*",
     "@scure/base": "^2.0.0",
-    "nostr-tools": "^2.7.2"
+    "nostr-tools": "^2.7.2",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@types/qrcode": "^1.5.6",
     "jsdom": "^24.0.0",
     "msw": "^2.14.6",
     "tsup": "^8.0.2",

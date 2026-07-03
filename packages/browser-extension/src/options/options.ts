@@ -129,7 +129,7 @@ async function loadGrants() {
       });
       if (!ok) return;
       await command("revokeGrant", { origin: g.origin });
-      loadGrants();
+      void loadGrants();
     });
     td.appendChild(btn);
     tr.appendChild(td);
@@ -161,6 +161,6 @@ $("reset-wallet").addEventListener("click", async () => {
   }
 });
 
-loadConfig();
-loadGrants();
-loadSweep();
+void loadConfig();
+void loadGrants();
+void loadSweep();

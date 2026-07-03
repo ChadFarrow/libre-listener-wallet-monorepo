@@ -128,6 +128,9 @@ export async function connect(clientId: string, opts: { silent?: boolean; hint?:
           .then((email) => {
             if (email) connectedEmail = email;
           })
+          .catch(() => {
+            /* best-effort email hint; a failed lookup just means no login_hint */
+          })
           .finally(() => resolve());
       },
       error_callback: (err: any) => reject(new Error(err?.type || "OAuth token error")),

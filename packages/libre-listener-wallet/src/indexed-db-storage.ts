@@ -30,18 +30,20 @@ export class IndexedDBStorageProvider implements SecureStorageProvider {
   }
 
   async getItem(key: string): Promise<string | null> {
-    try {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-        const tx = db.transaction(this.storeName, "readonly");
-        const store = tx.objectStore(this.storeName);
-        const req = store.get(key);
-        req.onsuccess = () => resolve(req.result !== undefined ? req.result : null);
-        req.onerror = () => reject(req.error);
-      });
-    } catch (e) {
-      return null;
-    }
+    // Only genuine key-absence resolves to null. A DB-open/transaction failure
+    // MUST reject, never be flattened to null: a caller like the wallet's
+    // start() reads a null `ldk_seed` as "new wallet" and would generate + write
+    // a fresh seed, silently overwriting a funded wallet whose storage was only
+    // transiently unavailable (quota pressure, blocked upgrade, corruption
+    // recovery). Swallowing the error here is also a no-silent-catch violation.
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(this.storeName, "readonly");
+      const store = tx.objectStore(this.storeName);
+      const req = store.get(key);
+      req.onsuccess = () => resolve(req.result !== undefined ? req.result : null);
+      req.onerror = () => reject(req.error);
+    });
   }
 
   // Resolve a write only once its transaction has durably COMMITTED, not when

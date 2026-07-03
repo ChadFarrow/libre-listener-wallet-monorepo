@@ -1581,3 +1581,4 @@ export { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
 export { EsploraSyncClient } from "./esplora-client";
 export type { WalletConfig } from "@libre/shared";
 export { LspsClient } from "./lsps-client";
+export { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";

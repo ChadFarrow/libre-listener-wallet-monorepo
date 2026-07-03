@@ -103,7 +103,7 @@ export async function handleWeblnRequest(rpc: WalletRpc, method: string, params:
     case "getInfo": {
       const info = await rpc.getInfo();
       return {
-        node: { pubkey: info.pubkey, alias: info.alias, color: "#7a5af5" },
+        node: { pubkey: info.pubkey, alias: info.alias, color: "#22c45e" },
         network: info.network,
         methods: ["getInfo", "makeInvoice", "sendPayment", "keysend"],
       };

@@ -1,8 +1,6 @@
 import QRCode from "qrcode";
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
-import { downloadBackupName } from "../core/backup-name";
-import { defaultPeer, parsePeerString } from "../core/wallet-config";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (el: HTMLElement, on: boolean) => el.classList.toggle("hidden", !on);
@@ -46,13 +44,11 @@ async function refresh() {
       show($("start"), !running);
       show($("stop"), running);
       // Actions that require a live node.
-      for (const id of ["connect-peer", "create-invoice", "create-nwc", "export", "drive-backup-now"]) {
+      for (const id of ["create-invoice", "create-nwc"]) {
         ($(id) as HTMLButtonElement).disabled = !running;
       }
       if (running) {
         void refreshNwcList();
-        void refreshDriveStatus();
-        void refreshAutoDownload();
       }
       void refreshAutoStart();
     }
@@ -82,21 +78,6 @@ $("copy-node").addEventListener("click", async () => {
   const t = $("nodeid").textContent || "";
   if (t) await navigator.clipboard.writeText(t);
   setMsg("msg", "Node ID copied — paste into your node's openchannel", "ok");
-});
-
-// ---- open a channel: connect a peer ----
-$("connect-peer").addEventListener("click", async () => {
-  setMsg("peer-msg", "Connecting…");
-  try {
-    await command("connectPeer", {
-      pubkey: ($("peer-pubkey") as HTMLInputElement).value.trim(),
-      host: ($("peer-host") as HTMLInputElement).value.trim(),
-      port: Number(($("peer-port") as HTMLInputElement).value) || 9735,
-    });
-    setMsg("peer-msg", "Peer connected — it can now open a channel to you", "ok");
-  } catch (e: any) {
-    setMsg("peer-msg", e.message, "err");
-  }
 });
 
 // ---- top up: create a receive invoice ----
@@ -190,44 +171,6 @@ async function refreshNwcList() {
   }
 }
 
-// ---- backup: manual export + Google Drive ----
-
-$("export").addEventListener("click", async () => {
-  setMsg("backup-msg", "Preparing backup…");
-  try {
-    const env = await command<string>("exportBackup");
-    const state = await command<{ network: string }>("getState").catch(() => ({ network: "mainnet" }));
-    const name = downloadBackupName(state.network || "mainnet", env, new Date());
-    // Download the (large) encrypted envelope as a file — no giant clipboard/textarea.
-    const url = URL.createObjectURL(new Blob([env], { type: "application/json" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    setMsg("backup-msg", `Downloaded ${name}. Store it safely.`, "ok");
-  } catch (e: any) {
-    setMsg("backup-msg", e.message, "err");
-  }
-});
-
-// Auto-download toggle: persisted in the background (chrome.storage.local).
-async function refreshAutoDownload() {
-  const on = await command<boolean>("getAutoDownload").catch(() => false);
-  ($("auto-download") as HTMLInputElement).checked = !!on;
-}
-$("auto-download").addEventListener("change", async (e) => {
-  const enabled = (e.target as HTMLInputElement).checked;
-  await command("setAutoDownload", { enabled }).catch((err) => setMsg("backup-msg", err.message, "err"));
-  setMsg(
-    "backup-msg",
-    enabled ? "Auto-backup on. A dated file saves to Downloads when your wallet changes." : "Auto-backup off.",
-    "ok"
-  );
-});
-
 // Auto-start toggle: persisted in the background (chrome.storage.local), default ON.
 async function refreshAutoStart() {
   const on = await command<boolean>("getAutoStart").catch(() => true);
@@ -237,41 +180,6 @@ $("auto-start").addEventListener("change", async (e) => {
   const enabled = (e.target as HTMLInputElement).checked;
   await command("setAutoStart", { enabled }).catch((err) => setMsg("msg", err.message, "err"));
   setMsg("msg", enabled ? "Auto-start on — the node starts with the browser." : "Auto-start off.", "ok");
-});
-
-async function refreshDriveStatus() {
-  const s = await command<{ connected: boolean; email: string | null }>("driveStatus").catch((e) => {
-    console.warn("[Popup] driveStatus failed:", e?.message || e);
-    return null;
-  });
-  if (!s) return;
-  $("drive-status").textContent = s.connected
-    ? `Google Drive: connected${s.email ? ` (${s.email})` : ""} — auto-syncing`
-    : s.email
-      ? `Google Drive: reconnect ${s.email}`
-      : "Google Drive: not connected";
-  ($("drive-connect") as HTMLButtonElement).textContent = s.connected ? "Reconnect" : "Connect Drive";
-}
-
-$("drive-connect").addEventListener("click", async () => {
-  setMsg("backup-msg", "Opening Google sign-in…");
-  try {
-    const { email } = await command<{ email: string | null }>("driveConnect");
-    setMsg("backup-msg", `Drive connected${email ? ` as ${email}` : ""}`, "ok");
-    void refreshDriveStatus();
-  } catch (e: any) {
-    setMsg("backup-msg", e.message, "err");
-  }
-});
-
-$("drive-backup-now").addEventListener("click", async () => {
-  setMsg("backup-msg", "Backing up to Drive…");
-  try {
-    const { network } = await command<{ network: string }>("driveBackupNow");
-    setMsg("backup-msg", `Backed up (${network}) to Google Drive`, "ok");
-  } catch (e: any) {
-    setMsg("backup-msg", e.message, "err");
-  }
 });
 
 // ---- setup: create ----
@@ -393,27 +301,6 @@ $("restore-confirm").addEventListener("click", async () => {
 });
 
 $("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
-
-// Pre-fill the connect-peer fields from the saved (last-connected) peer, falling back to the
-// network default. Only fills blanks — never clobbers what the user typed. Cosmetic: failures
-// are ignored.
-async function prefillPeer() {
-  try {
-    const c = await command<any>("getConfig");
-    const peerStr = c.peer || defaultPeer(c.network || "mainnet");
-    if (!peerStr) return;
-    const { pubkey, host, port } = parsePeerString(peerStr);
-    const pk = $("peer-pubkey") as HTMLInputElement;
-    const h = $("peer-host") as HTMLInputElement;
-    const p = $("peer-port") as HTMLInputElement;
-    if (!pk.value.trim()) pk.value = pubkey;
-    if (!h.value.trim()) h.value = host;
-    if (!p.value.trim() || p.value === "9735") p.value = String(port);
-  } catch {
-    /* pre-fill is cosmetic */
-  }
-}
-void prefillPeer();
 
 onWalletEvent(() => refresh());
 void refresh();

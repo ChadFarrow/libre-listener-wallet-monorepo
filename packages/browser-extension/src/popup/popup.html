@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <title>Libre Listener Wallet</title>
     <style>
-      :root { color-scheme: light dark; --accent: #7a5af5; }
+      :root { color-scheme: light dark; --accent: #22c45e; }
       body { font: 13px/1.5 system-ui, sans-serif; margin: 0; width: 340px; padding: 14px; }
       h1 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
       .dot { width: 9px; height: 9px; border-radius: 50%; background: #999; flex: none; }
@@ -26,7 +26,7 @@
       details { border-top: 1px solid #8883; margin-top: 12px; padding-top: 8px; }
       summary { cursor: pointer; font-weight: 600; font-size: 13px; }
       section { border-top: 1px solid #8883; margin-top: 12px; padding-top: 10px; }
-      .seed { font-family: monospace; font-size: 11px; word-break: break-all; background: rgba(122,90,245,0.12); padding: 8px; border-radius: 8px; }
+      .seed { font-family: monospace; font-size: 11px; word-break: break-all; background: rgba(34,196,94,0.12); padding: 8px; border-radius: 8px; }
       label { display: block; margin: 8px 0 4px; font-weight: 600; }
       .hint { color: #888; font-size: 11px; font-weight: 400; }
       .msg { margin-top: 8px; font-size: 12px; }
@@ -63,19 +63,6 @@
         Auto-start node when the browser opens
       </label>
 
-      <!-- Open a channel: connect a peer, or hand out the node id so a peer opens to you -->
-      <details id="channel-details">
-        <summary>Open a channel</summary>
-        <p class="hint">A browser node can't be dialed. Either dial a peer that will open a channel back, or copy your Node ID above and open a channel to it from your own node.</p>
-        <input id="peer-pubkey" placeholder="peer pubkey (66 hex)" />
-        <div class="two" style="margin-top:8px">
-          <input id="peer-host" placeholder="host" />
-          <input id="peer-port" placeholder="port" value="9735" style="max-width:80px" />
-        </div>
-        <button id="connect-peer" style="margin-top:8px;width:100%">Connect peer</button>
-        <div class="msg" id="peer-msg"></div>
-      </details>
-
       <!-- Top up: receive over an existing channel -->
       <details id="receive-details">
         <summary>Top up (receive)</summary>
@@ -108,22 +95,6 @@
         <div class="msg" id="nwc-msg"></div>
       </details>
 
-      <!-- Backup: manual export + Google Drive -->
-      <details id="backup-details">
-        <summary>Backup</summary>
-        <p class="hint">Your seed is inside an encrypted backup. Save it, or sync it to Google Drive.</p>
-        <button id="export" class="ghost" style="width:100%">Download encrypted backup</button>
-        <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:400">
-          <input type="checkbox" id="auto-download" style="width:auto" />
-          Auto-save a backup file when my wallet changes
-        </label>
-        <div id="drive-status" class="hint" style="margin-top:10px">Google Drive: not connected</div>
-        <div class="row">
-          <button id="drive-connect">Connect Drive</button>
-          <button id="drive-backup-now" class="ghost">Back up now</button>
-        </div>
-        <div class="msg" id="backup-msg"></div>
-      </details>
     </div>
 
     <!-- No wallet yet -->

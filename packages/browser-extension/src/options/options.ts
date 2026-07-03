@@ -1,6 +1,7 @@
 import { command } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
 import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer, parsePeerString } from "../core/wallet-config";
+import { downloadBackupName } from "../core/backup-name";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const val = (id: string) => $<HTMLInputElement>(id).value.trim();
@@ -68,7 +69,7 @@ $("save-config").addEventListener("click", async () => {
 $("save-drive").addEventListener("click", async () => {
   try {
     await command("setGoogleClientId", { clientId: val("google-client-id") });
-    setMsg("drive-msg", "Saved. Open the popup → Backup → Connect Drive.", "ok");
+    setMsg("drive-msg", "Saved. Now click Connect Drive below.", "ok");
   } catch (e: any) {
     setMsg("drive-msg", e.message, "err");
   }
@@ -101,6 +102,90 @@ $("connect-peer").addEventListener("click", async () => {
     setMsg("peer-msg", "Peer connected", "ok");
   } catch (e: any) {
     setMsg("peer-msg", e.message, "err");
+  }
+});
+
+// ---- backup: manual export + auto-download + Google Drive ----
+
+// Export/back-up-now need the wallet host running (exportBackup calls requireRunning). Disable them
+// when the node is stopped so a click can't fail with a confusing error; the popup starts the node.
+async function refreshBackupState() {
+  const running = await command<{ running: boolean }>("getState")
+    .then((s) => !!s.running)
+    .catch(() => false);
+  ($("export") as HTMLButtonElement).disabled = !running;
+  ($("drive-backup-now") as HTMLButtonElement).disabled = !running;
+  if (!running) setMsg("backup-msg", "Start the node in the popup to export or sync a backup.");
+}
+
+$("export").addEventListener("click", async () => {
+  setMsg("backup-msg", "Preparing backup…");
+  try {
+    const env = await command<string>("exportBackup");
+    const state = await command<{ network: string }>("getState").catch(() => ({ network: "mainnet" }));
+    const name = downloadBackupName(state.network || "mainnet", env, new Date());
+    // Download the (large) encrypted envelope as a file — no giant clipboard/textarea.
+    const url = URL.createObjectURL(new Blob([env], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setMsg("backup-msg", `Downloaded ${name}. Store it safely.`, "ok");
+  } catch (e: any) {
+    setMsg("backup-msg", e.message, "err");
+  }
+});
+
+// Auto-download toggle: persisted in the background (chrome.storage.local).
+async function refreshAutoDownload() {
+  const on = await command<boolean>("getAutoDownload").catch(() => false);
+  ($("auto-download") as HTMLInputElement).checked = !!on;
+}
+$("auto-download").addEventListener("change", async (e) => {
+  const enabled = (e.target as HTMLInputElement).checked;
+  await command("setAutoDownload", { enabled }).catch((err) => setMsg("backup-msg", err.message, "err"));
+  setMsg(
+    "backup-msg",
+    enabled ? "Auto-backup on. A dated file saves to Downloads when your wallet changes." : "Auto-backup off.",
+    "ok"
+  );
+});
+
+async function refreshDriveStatus() {
+  const s = await command<{ connected: boolean; email: string | null }>("driveStatus").catch((e) => {
+    console.warn("[Options] driveStatus failed:", e?.message || e);
+    return null;
+  });
+  if (!s) return;
+  $("drive-status").textContent = s.connected
+    ? `Google Drive: connected${s.email ? ` (${s.email})` : ""} — auto-syncing`
+    : s.email
+      ? `Google Drive: reconnect ${s.email}`
+      : "Google Drive: not connected";
+  ($("drive-connect") as HTMLButtonElement).textContent = s.connected ? "Reconnect" : "Connect Drive";
+}
+
+$("drive-connect").addEventListener("click", async () => {
+  setMsg("backup-msg", "Opening Google sign-in…");
+  try {
+    const { email } = await command<{ email: string | null }>("driveConnect");
+    setMsg("backup-msg", `Drive connected${email ? ` as ${email}` : ""}`, "ok");
+    void refreshDriveStatus();
+  } catch (e: any) {
+    setMsg("backup-msg", e.message, "err");
+  }
+});
+
+$("drive-backup-now").addEventListener("click", async () => {
+  setMsg("backup-msg", "Backing up to Drive…");
+  try {
+    const { network } = await command<{ network: string }>("driveBackupNow");
+    setMsg("backup-msg", `Backed up (${network}) to Google Drive`, "ok");
+  } catch (e: any) {
+    setMsg("backup-msg", e.message, "err");
   }
 });
 
@@ -168,3 +253,6 @@ $("reset-wallet").addEventListener("click", async () => {
 void loadConfig();
 void loadGrants();
 void loadSweep();
+void refreshBackupState();
+void refreshAutoDownload();
+void refreshDriveStatus();

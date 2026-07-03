@@ -15,6 +15,7 @@ import {
   fetchAccountEmail,
 } from "./core/drive-rest";
 import { AUTO_START_KEY, isAutoStartEnabled } from "./core/auto-start";
+import { buildIconSet } from "./core/action-icon";
 
 // The background service worker is a THIN, restartable router + permission gate. It never hosts
 // the node (that's the offscreen document) — it can be killed at ~30s idle and respawn without
@@ -81,6 +82,46 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onInstalled.addListener(() => {
   void ensureOffscreen().catch((e: any) => console.warn("[AutoStart] ensureOffscreen failed:", e?.message || e));
 });
+
+// ---- Toolbar icon: green when the node is live, grey when stopped ----
+//
+// Driven off the same state-changed events the offscreen host emits on start/stop (see the
+// WALLET_EVENT listener below). setIcon state persists across service-worker reaps, so once set it
+// stays until the next change. lastIconRunning coalesces redundant redraws (channel-state changes
+// keep the node "running", so the icon shouldn't be rebuilt on every one).
+let lastIconRunning: boolean | null = null;
+async function setActionIcon(running: boolean): Promise<void> {
+  if (running === lastIconRunning) return;
+  lastIconRunning = running;
+  try {
+    await chrome.action.setIcon({ imageData: buildIconSet(running) });
+    await chrome.action.setTitle({
+      title: running ? "Libre Listener Wallet — node running" : "Libre Listener Wallet",
+    });
+  } catch (e: any) {
+    console.warn("[Icon] setIcon failed:", e?.message || e);
+    lastIconRunning = null; // let the next event retry
+  }
+}
+
+// Reflect the node's actual liveness. Only queries the offscreen host if it already exists — never
+// spins one up just to paint the icon (a stopped wallet has no document → grey).
+async function refreshActionIcon(): Promise<void> {
+  let running = false;
+  try {
+    if (await chrome.offscreen.hasDocument?.()) {
+      const s = await callOffscreen("getState");
+      running = !!s?.running;
+    }
+  } catch (e: any) {
+    console.warn("[Icon] state read failed:", e?.message || e);
+    running = false;
+  }
+  await setActionIcon(running);
+}
+// Paint the correct icon whenever the service worker wakes (reads real state, so no grey flicker
+// over a running node).
+void refreshActionIcon();
 
 async function callOffscreen(method: string, params?: any): Promise<any> {
   await ensureOffscreen();
@@ -216,6 +257,9 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   // sender gating on every other message kind.
   if (!isFromExtensionContext(sender, chrome.runtime.id, chrome.runtime.getURL(""))) return false;
   if (msg?.kind === MSG.WALLET_EVENT && msg.event === "state-changed") {
+    // The node just started, stopped, or advanced its channel state — repaint the toolbar icon
+    // (green when live, grey when stopped). Coalesced inside setActionIcon.
+    void refreshActionIcon();
     if (driveConnected()) {
       if (autoSyncTimer) clearTimeout(autoSyncTimer);
       autoSyncTimer = setTimeout(() => {
@@ -238,6 +282,24 @@ interface PendingApproval {
 }
 const pendingApprovals = new Map<string, PendingApproval>();
 
+// Center a popup of the given size over the currently focused browser window. Returns {} if the
+// window bounds can't be read (Chrome then falls back to its default placement) — best-effort.
+async function approvalPosition(width: number, height: number): Promise<{ left?: number; top?: number }> {
+  try {
+    const w = await chrome.windows.getLastFocused();
+    if (typeof w.left !== "number" || typeof w.top !== "number" || !w.width || !w.height) return {};
+    return {
+      // Don't clamp left to 0 — a browser on a left/secondary monitor has negative coords, and
+      // forcing >=0 would throw the popup onto the primary monitor (the wrong-side bug again).
+      left: Math.round(w.left + (w.width - width) / 2),
+      // Keep top >=0 so the title bar stays reachable (can't drag a window whose bar is off-screen).
+      top: Math.max(0, Math.round(w.top + (w.height - height) / 3)),
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function requestApproval(origin: string): Promise<{ approved: boolean; spendingLimitSats: number }> {
   // Coalesce concurrent prompts for the same origin. Without this, a hostile page
   // calling webln.enable() in a loop spawns one focused OS popup per call — a
@@ -254,7 +316,13 @@ async function requestApproval(origin: string): Promise<{ approved: boolean; spe
     resolveFn = resolve;
   });
   pendingApprovals.set(id, { origin, resolve: resolveFn, promise: decision });
-  const win = await chrome.windows.create({ url, type: "popup", width: 400, height: 560, focused: true });
+  // Position the prompt over the browser window that triggered it. Without explicit left/top,
+  // Chrome drops the popup at the display's default corner (far left) even when the browser is on
+  // the right — jarring, and easy to miss on a multi-monitor setup. Center it on the focused window.
+  const width = 400;
+  const height = 560;
+  const pos = await approvalPosition(width, height);
+  const win = await chrome.windows.create({ url, type: "popup", width, height, focused: true, ...pos });
   const p = pendingApprovals.get(id);
   if (p) p.windowId = win?.id;
   return decision;

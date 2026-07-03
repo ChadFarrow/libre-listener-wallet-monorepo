@@ -40,7 +40,7 @@ export function confirmModal(opts: ConfirmOptions): Promise<boolean> {
     ok.textContent = opts.confirmLabel || "Confirm";
     ok.style.cssText =
       "padding:8px 14px;border-radius:8px;border:0;color:#fff;cursor:pointer;font:inherit;font-weight:600;background:" +
-      (opts.danger ? "#c0392b" : "#7a5af5") + ";";
+      (opts.danger ? "#c0392b" : "#22c45e") + ";";
 
     const close = (v: boolean) => {
       document.removeEventListener("keydown", onKey);

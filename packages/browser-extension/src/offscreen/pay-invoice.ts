@@ -46,6 +46,9 @@ export async function payBolt11(
   const paymentId = crypto.getRandomValues(new Uint8Array(32));
   const sendRes = mgr.send_payment(paymentHash, onionFields, paymentId, routeParams, Retry.constructor_attempts(10));
   if (!sendRes.is_ok()) {
+    // Nothing was sent, so the settlement waiter can never resolve — detach it so its
+    // timeout doesn't surface as an uncaught rejection ~90s after a failed payment attempt.
+    void settled.catch(() => {});
     throw new Error(`send_payment failed: ${(sendRes as any).err?.toString() || "route not found"}`);
   }
 

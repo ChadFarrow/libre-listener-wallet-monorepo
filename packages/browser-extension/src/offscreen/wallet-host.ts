@@ -510,7 +510,12 @@ export class WalletHost implements WalletRpc {
       customRecords: args.customRecords,
       preimage,
     });
-    if (!res.ok) throw new Error(`Keysend failed to initiate: ${res.error}`);
+    if (!res.ok) {
+      // Nothing was sent, so the settlement waiter can never resolve — detach it so its
+      // timeout doesn't surface as an uncaught rejection ~90s after every failed split.
+      void settled.catch(() => {});
+      throw new Error(`Keysend failed to initiate: ${res.error}`);
+    }
     const preimageHex = await settled;
     return { preimage: preimageHex };
   }

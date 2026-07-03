@@ -30,6 +30,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # Workspace deps FIRST: the extension's typecheck/tests resolve @libre/listener-wallet
+      # types from its dist/, which doesn't exist on a fresh checkout (same order as ci.yml —
+      # gates before build fail with TS2307 "Cannot find module").
+      - name: Build workspace deps
+        run: pnpm build # turbo: shared → SDK → …
+
       # Never ship an unverified extension zip: gate on lint, storage contract,
       # typecheck, and the extension unit tests before building the release.
       - name: Lint
@@ -41,10 +47,8 @@ jobs:
       - name: Unit tests
         run: pnpm --filter @libre/browser-extension test
 
-      - name: Build workspace deps + extension
-        run: |
-          pnpm build                                   # turbo: shared → SDK → …
-          pnpm --filter @libre/browser-extension build # → packages/browser-extension/dist
+      - name: Build extension
+        run: pnpm --filter @libre/browser-extension build # → packages/browser-extension/dist
 
       - name: Package unpacked extension
         run: |

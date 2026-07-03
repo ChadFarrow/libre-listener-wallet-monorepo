@@ -102,6 +102,60 @@ export interface Lsps2BuyResponse {
   cltv_expiry_delta: number;
 }
 
+// --- LSPS1 over REST (bLIP-51 HTTP binding, as used by real mainnet LSPs: Megalith, Olympus/ZEUS) ---
+// These LSPs expose LSPS1 as a plain REST API (path-per-method, no JSON-RPC envelope), with sat
+// amounts as strings. get_info returns `uris` (read live for the peer connection) and only
+// max_channel_expiry_blocks (no min). Not all fields are returned by every LSP — hence the optionals.
+export interface Lsps1RestGetInfoResponse {
+  min_channel_balance_sat: string;
+  max_channel_balance_sat: string;
+  min_initial_lsp_balance_sat?: string;
+  max_initial_lsp_balance_sat?: string;
+  min_initial_client_balance_sat?: string;
+  max_initial_client_balance_sat?: string;
+  max_channel_expiry_blocks: number;
+  min_required_channel_confirmations?: number;
+  min_funding_confirms_within_blocks?: number;
+  supports_zero_channel_reserve?: boolean;
+  uris: string[];
+}
+
+export interface Lsps1RestCreateOrderRequest {
+  lsp_balance_sat: string;
+  client_balance_sat: string;
+  required_channel_confirmations: number;
+  funding_confirms_within_blocks: number;
+  channel_expiry_blocks: number;
+  token?: string;
+  refund_onchain_address?: string;
+  announce_channel: boolean;
+  public_key: string; // the CLIENT's node pubkey (channel destination) — bLIP-51 uses `public_key`
+}
+
+export interface Lsps1RestOrderResponse {
+  order_id: string;
+  order_state: "CREATED" | "COMPLETED" | "FAILED" | string;
+  lsp_balance_sat?: string;
+  client_balance_sat?: string;
+  payment?: {
+    bolt11?: { state?: string; expires_at?: string; fee_total_sat?: string; invoice?: string };
+    onchain?: { state?: string; address?: string; min_onchain_payment_confirmations?: number; min_fee_for_0conf?: number };
+  };
+  channel?: unknown | null;
+}
+
+// Known mainnet LSPS1-over-REST providers. Reference data the APP uses to build an LspProvider;
+// the SDK still takes injected config (no hardcoded endpoints inside the library behaviour).
+export interface Lsps1RestProvider {
+  name: string;
+  restBaseUrl: string;
+  supportsZeroConf: boolean; // 0-conf (instant) channels over LSPS1
+}
+export const LSPS1_REST_PROVIDERS: Record<string, Lsps1RestProvider> = {
+  megalith: { name: "Megalith", restBaseUrl: "https://megalithic.me/api/lsps1/v1", supportsZeroConf: true },
+  olympus: { name: "Olympus (ZEUS)", restBaseUrl: "https://lsps1.lnolymp.us/api/v1", supportsZeroConf: false },
+};
+
 // LSPS1 Inbound capacity interfaces
 export interface Lsps1GetInfoResponse {
   min_channel_balance_sat: string;

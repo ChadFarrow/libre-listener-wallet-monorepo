@@ -223,6 +223,14 @@
         <section class="card glass-card">
           <h2>3. LSPS1 Inbound Capacity</h2>
           <div class="form-group">
+            <label>LSP provider (mainnet, LSPS1 REST)</label>
+            <select id="lsps1-provider">
+              <option value="megalith">Megalith — instant 0-conf, 150k–16M sat</option>
+              <option value="olympus">Olympus (ZEUS) — 100k–10M sat, ~3 confs</option>
+            </select>
+            <span class="help-text">Real mainnet LSPs. Requires a mainnet wallet + a bridge that fronts the chosen LSP's node (read live from its <code>get_info</code> uris). 0-conf needs the LSP's pubkey in <code>trustedZeroConfPeers</code>.</span>
+          </div>
+          <div class="form-group">
             <label>Requested Channel Balance (Satoshi)</label>
             <input type="number" id="lsps1-amount" value="100000" min="50000" />
           </div>

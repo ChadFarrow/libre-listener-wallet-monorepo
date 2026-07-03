@@ -2,13 +2,12 @@ import type {
   WalletConfig,
   LspProvider,
   JsonRpcRequest,
-  Lsps1GetInfoResponse,
-  Lsps1CreateOrderParams,
-  Lsps1CreateOrderResponse,
+  Lsps1RestOrderResponse,
   TlvRecord,
   SplitResult,
 } from "@libre/shared";
 import { encodeV4VTlvs } from "@libre/shared";
+import { Lsps1RestClient, clampExpiryBlocks, orderInvoice } from "./lsps1-rest-client";
 
 import {
   initializeWasmFromBinary,
@@ -1447,71 +1446,87 @@ export class LibreListenerWallet {
 
   // --- LSPS1 Inbound Capacity Purchase ---
 
+  /**
+   * Buy inbound liquidity from a real mainnet LSP over the LSPS1 REST binding (bLIP-51 HTTP: Megalith,
+   * Olympus/ZEUS). `lsp.api_url` is the REST base (e.g. https://megalithic.me/api/lsps1/v1). Reads the
+   * LSP's live `uris` to dial its node, places the order, and returns the BOLT11 to pay + the order id
+   * (poll `getLSPS1Order` after paying until the channel opens). 0-conf is requested only when the LSP
+   * offers it AND its pubkey is in `trustedZeroConfPeers` (guardrail: never 0-conf from an unvetted node).
+   */
   async purchaseLSPS1Capacity(options: {
     amountSats: number;
-    lsp: LspProvider;
-    // Desired channel lease duration in blocks. Clamped to the LSP's advertised
-    // [min_channel_expiry_blocks, max_channel_expiry_blocks]. Defaults to the LSP's
-    // MAX (the longest lease on offer) — an infrequently-online listener wallet wants
-    // the longest guaranteed lifetime per channel-open fee, not the shortest.
+    lsp: LspProvider; // api_url = the LSPS1 REST base URL
+    // Lease duration in blocks, clamped to [1, LSP max]; defaults to the LSP max (longest lease
+    // per open fee — right for an infrequently-online listener wallet).
     channelExpiryBlocks?: number;
-    // Request an announced (public) channel. Defaults false (private). A browser node
-    // has no reachable address to advertise, so private is correct here; exposed only
-    // for completeness/parity with the spec.
-    announceChannel?: boolean;
-  }): Promise<string> {
+    announceChannel?: boolean; // default false (a browser node has no reachable address to announce)
+    refundOnchainAddress?: string; // where the LSP refunds if the order fails/expires (optional)
+  }): Promise<{ orderId: string; invoice: string; feeTotalSat?: string; onchainAddress?: string; lspPeerUri?: string }> {
     if (!this.channelManager) {
       throw new Error("Wallet is not running");
     }
 
     const { amountSats, lsp } = options;
-    this.logger?.info(`[LSPS1] Purchasing ${amountSats} sats inbound capacity from LSP ${lsp.name}`);
+    this.logger?.info(`[LSPS1] Purchasing ${amountSats} sats inbound capacity from ${lsp.name}`);
+    const client = new Lsps1RestClient({ baseUrl: lsp.api_url, logger: this.logger });
 
-    const lspsClient = new LspsClient(lsp.api_url, this.logger);
-
-    // a. Get info
-    const infoRes = await lspsClient.request<{}, Lsps1GetInfoResponse>(
-      "lsps1.get_info",
-      {}
-    );
-
-    const amountSatStr = amountSats.toString();
-    if (BigInt(amountSatStr) < BigInt(infoRes.min_channel_balance_sat) ||
-        BigInt(amountSatStr) > BigInt(infoRes.max_channel_balance_sat)) {
-      throw new Error(`Requested amount ${amountSats} sat is outside LSP bounds [${infoRes.min_channel_balance_sat}, ${infoRes.max_channel_balance_sat}]`);
+    // 1. get_info — bounds, 0-conf capability, and the peer uris to dial.
+    const info = await client.getInfo();
+    const amt = BigInt(Math.round(amountSats));
+    if (amt < BigInt(info.min_channel_balance_sat) || amt > BigInt(info.max_channel_balance_sat)) {
+      throw new Error(`Requested ${amountSats} sat is outside ${lsp.name} bounds [${info.min_channel_balance_sat}, ${info.max_channel_balance_sat}]`);
     }
+    const channelExpiryBlocks = clampExpiryBlocks(options.channelExpiryBlocks, info.max_channel_expiry_blocks);
 
-    // Choose the lease duration: caller's request clamped to the LSP's bounds,
-    // defaulting to the longest lease offered (max guaranteed channel lifetime).
-    const minExpiry = infoRes.min_channel_expiry_blocks;
-    const maxExpiry = infoRes.max_channel_expiry_blocks;
-    const requestedExpiry = options.channelExpiryBlocks ?? maxExpiry;
-    const channelExpiryBlocks = Math.min(maxExpiry, Math.max(minExpiry, requestedExpiry));
-    if (options.channelExpiryBlocks != null && channelExpiryBlocks !== options.channelExpiryBlocks) {
-      this.logger?.info(`[LSPS1] Requested lease ${options.channelExpiryBlocks} blocks clamped to LSP bounds [${minExpiry}, ${maxExpiry}] → ${channelExpiryBlocks}`);
-    }
-
-    // b. Create order
-    const orderRes = await lspsClient.request<Lsps1CreateOrderParams, Lsps1CreateOrderResponse>(
-      "lsps1.create_order",
-      {
-        lsp_balance_sat: amountSatStr,
-        client_balance_sat: "0",
-        client_node_id: bytesToHex(this.channelManager.get_our_node_id()),
-        channel_expiry_blocks: channelExpiryBlocks,
-        announce_channel: options.announceChannel ?? false,
+    // 2. Dial the LSP node (read live from get_info uris) — it opens the channel over this peer link.
+    //    Best-effort: a browser node reaches peers only through its configured websockify bridge,
+    //    which must front this LSP; log a warning but still place the order if the dial fails.
+    const peerUri = info.uris?.[0];
+    const lspPubkey = peerUri ? peerUri.split("@")[0] : lsp.pubkey;
+    if (peerUri) {
+      try {
+        const addrPort = peerUri.slice(peerUri.indexOf("@") + 1);
+        const lastColon = addrPort.lastIndexOf(":");
+        await this.connectPeer(lspPubkey, addrPort.slice(0, lastColon), parseInt(addrPort.slice(lastColon + 1), 10));
+      } catch (e) {
+        this.logger?.warn(`[LSPS1] Could not dial LSP peer ${peerUri}: ${(e as Error)?.message ?? e}. Order still placed; ensure the wallet's bridge fronts this node before paying.`);
       }
-    );
-
-    // The dev LSP returns a flat `invoice`; spec-compliant LSPs (bLIP-51) nest it at
-    // `payment.bolt11.invoice`. Accept whichever is present.
-    const invoice = orderRes.invoice ?? orderRes.payment?.bolt11?.invoice;
-    if (!invoice) {
-      throw new Error("LSPS1 create_order response missing payment invoice");
     }
 
-    this.logger?.info(`[LSPS1] Order placed successfully: ${orderRes.order_id} (lease ${channelExpiryBlocks} blocks). Pay invoice: ${invoice}`);
-    return invoice;
+    // 3. 0-conf only when the LSP offers it AND we've allowlisted its pubkey.
+    const trusts0conf = (this.config.trustedZeroConfPeers ?? []).includes(lspPubkey);
+    const requiredConfs = info.min_required_channel_confirmations === 0 && trusts0conf ? 0 : info.min_required_channel_confirmations ?? 6;
+
+    // 4. create_order (bLIP-51 REST uses `public_key` for the client node).
+    const order = await client.createOrder({
+      lsp_balance_sat: String(amountSats),
+      client_balance_sat: "0",
+      required_channel_confirmations: requiredConfs,
+      funding_confirms_within_blocks: info.min_funding_confirms_within_blocks ?? 6,
+      channel_expiry_blocks: channelExpiryBlocks,
+      announce_channel: options.announceChannel ?? false,
+      public_key: bytesToHex(this.channelManager.get_our_node_id()),
+      ...(options.refundOnchainAddress ? { refund_onchain_address: options.refundOnchainAddress } : {}),
+    });
+
+    const invoice = orderInvoice(order);
+    if (!invoice) {
+      throw new Error(`${lsp.name} create_order returned no BOLT11 invoice`);
+    }
+    this.logger?.info(`[LSPS1] Order ${order.order_id} placed (lease ${channelExpiryBlocks} blk, ${requiredConfs}-conf). Pay: ${invoice}`);
+    return {
+      orderId: order.order_id,
+      invoice,
+      feeTotalSat: order.payment?.bolt11?.fee_total_sat,
+      onchainAddress: order.payment?.onchain?.address,
+      lspPeerUri: peerUri,
+    };
+  }
+
+  // Poll an LSPS1 order's status after paying its invoice (until order_state COMPLETED/FAILED and the
+  // channel opens). Stateless REST GET against the same LSP base URL.
+  async getLSPS1Order(apiUrl: string, orderId: string): Promise<Lsps1RestOrderResponse> {
+    return new Lsps1RestClient({ baseUrl: apiUrl, logger: this.logger }).getOrder(orderId);
   }
 
   // --- Value-for-Value Keysend & Splits Implementation ---
@@ -1660,4 +1675,5 @@ export { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
 export { EsploraSyncClient } from "./esplora-client";
 export type { WalletConfig } from "@libre/shared";
 export { LspsClient } from "./lsps-client";
+export { Lsps1RestClient, clampExpiryBlocks, isOrderComplete, isOrderFailed, orderInvoice } from "./lsps1-rest-client";
 export { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";

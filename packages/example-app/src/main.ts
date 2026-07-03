@@ -4,6 +4,7 @@ import {
   WebSocketStreamProvider,
   WebSocketConnection,
 } from "@libre/listener-wallet";
+import { LSPS1_REST_PROVIDERS } from "@libre/shared";
 
 // Boot MSW browser worker conditionally in development mode to intercept LSP API (9099) requests
 if (import.meta.env.DEV) {
@@ -852,14 +853,15 @@ purchaseLsps1Btn.addEventListener("click", async () => {
     lsps1InvoiceContainer.classList.add("hidden");
 
     const amountSats = parseInt(lsps1AmountInput.value, 10);
-    const lspConnStr = lspConnStrInput.value.trim();
-    const [lspPubkey] = lspConnStr.split("@");
-
+    // Real mainnet LSP over the LSPS1 REST binding — api_url is the provider's REST base; the peer
+    // node is read live from its get_info uris (not lsp.connection_string).
+    const providerKey = (document.getElementById("lsps1-provider") as HTMLSelectElement).value;
+    const provider = LSPS1_REST_PROVIDERS[providerKey] ?? LSPS1_REST_PROVIDERS.megalith;
     const lsp = {
-      name: "libre-lsp",
-      pubkey: lspPubkey,
-      connection_string: lspConnStr,
-      api_url: lspApiUrlInput.value.trim().replace("/lsps2", "/lsps1"), // Fallback LSPS1 api endpoint
+      name: provider.name,
+      pubkey: "",
+      connection_string: "",
+      api_url: provider.restBaseUrl,
       protocols: ["lsps1" as const],
     };
 
@@ -868,17 +870,20 @@ purchaseLsps1Btn.addEventListener("click", async () => {
     const channelExpiryBlocks = leaseRaw ? parseInt(leaseRaw, 10) : undefined;
 
     appendLog(
-      `[LSPS1] Purchasing ${amountSats} sats inbound capacity${channelExpiryBlocks ? ` (~${channelExpiryBlocks} block lease)` : " (longest lease)"}...`,
+      `[LSPS1] Ordering ${amountSats} sats inbound from ${provider.name}${channelExpiryBlocks ? ` (~${channelExpiryBlocks} block lease)` : " (longest lease)"}...`,
       "system"
     );
-    const invoice = await wallet.purchaseLSPS1Capacity({
+    const order = await wallet.purchaseLSPS1Capacity({
       amountSats,
       lsp,
       ...(channelExpiryBlocks !== undefined ? { channelExpiryBlocks } : {}),
     });
 
-    appendLog(`[LSPS1] Order placed! Pay invoice: ${invoice.substring(0, 30)}...`, "system");
-    lsps1InvoiceStr.value = invoice;
+    appendLog(
+      `[LSPS1] Order ${order.orderId} placed! Fee ${order.feeTotalSat ?? "?"} sat. Pay invoice: ${order.invoice.substring(0, 30)}…`,
+      "system"
+    );
+    lsps1InvoiceStr.value = order.invoice;
     lsps1InvoiceContainer.classList.remove("hidden");
   } catch (err: any) {
     appendLog(`[ERROR] LSPS1 purchase failed: ${err.message}`, "error");

@@ -94,6 +94,8 @@ import {
 } from "lightningdevkit";
 import { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
 import { getSecureRandomBytes } from "./crypto-utils";
+import { hasRouteHint, appendRouteHints } from "./bolt11-hints";
+import { selectHintChannels, type HintableChannel } from "./hint-selection";
 import { EsploraSyncClient } from "./esplora-client";
 import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
@@ -797,6 +799,30 @@ export class LibreListenerWallet {
     return invoice;
   }
 
+  // Snapshot list_channels() into the pure HintableChannel shape (see hint-selection.ts).
+  private hintableChannels(): HintableChannel[] {
+    if (!this.channelManager) return [];
+    return this.channelManager.list_channels().map((ch: ChannelDetails) => {
+      const scidOpt = ch.get_inbound_payment_scid();
+      const shortOpt = ch.get_short_channel_id();
+      const fwd = ch.get_counterparty().get_forwarding_info();
+      return {
+        isUsable: ch.get_is_usable(),
+        counterpartyNodeId: bytesToHex(ch.get_counterparty().get_node_id()),
+        inboundPaymentScid: scidOpt instanceof Option_u64Z_Some ? scidOpt.some : undefined,
+        shortChannelId: shortOpt instanceof Option_u64Z_Some ? shortOpt.some : undefined,
+        inboundCapacityMsat: ch.get_inbound_capacity_msat(),
+        forwardingInfo: fwd
+          ? {
+              feeBaseMsat: fwd.get_fee_base_msat(),
+              feeProportionalMillionths: fwd.get_fee_proportional_millionths(),
+              cltvExpiryDelta: fwd.get_cltv_expiry_delta(),
+            }
+          : undefined,
+      };
+    });
+  }
+
   /**
    * Single BOLT11 builder shared by createInvoice / requestLSPS2Invoice / NWC make_invoice.
    * Uses the ChannelManager creator, which auto-embeds route hints for our (possibly
@@ -824,8 +850,28 @@ export class LibreListenerWallet {
     );
     if (!invoiceRes.is_ok()) throw new Error("Failed to create BOLT11 invoice");
     const invoice = (invoiceRes as Result_Bolt11InvoiceSignOrCreationErrorZ_OK).res.to_str();
+
+    // LDK refuses route hints when ANY public channel exists, which strands an unannounced
+    // leaf node (nothing can route to it from gossip alone — proven live: external payers all
+    // "no route"). Ensure a last-hop hint: append + re-sign via the pure transformer. Hints on
+    // public channels are legal BOLT11. Best-effort: a transformer failure logs and falls back
+    // to the original (a direct peer can still pay it) — never fail invoice creation over it.
+    let finalInvoice = invoice;
+    try {
+      if (!hasRouteHint(invoice)) {
+        const hints = selectHintChannels(this.hintableChannels());
+        if (hints.length && this.keysManager) {
+          finalInvoice = appendRouteHints(invoice, hints, this.keysManager.get_node_secret_key());
+          this.logger?.info(`[Invoice] Appended ${hints.length} route hint(s) (LDK omitted hints)`);
+        }
+      }
+    } catch (e) {
+      this.logger?.warn(`[Invoice] Route-hint append failed; returning unhinted invoice: ${(e as Error)?.message ?? e}`);
+      finalInvoice = invoice;
+    }
+
     await this.storage.setItem(`preimage_${paymentHashHex}`, bytesToHex(pre));
-    return { invoice, paymentHash: paymentHashHex, preimage: bytesToHex(pre) };
+    return { invoice: finalInvoice, paymentHash: paymentHashHex, preimage: bytesToHex(pre) };
   }
 
   /**

@@ -1,0 +1,56 @@
+name: Release browser extension
+
+# Builds the MV3 browser extension and publishes a ready-to-load zip.
+# - Push a tag like `browser-extension-v0.1.0` → creates a GitHub Release with the zip attached.
+# - Manual run (workflow_dispatch) → builds and uploads the zip as a run artifact (no Release).
+on:
+  push:
+    tags: ["browser-extension-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create releases / upload assets
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build workspace deps + extension
+        run: |
+          pnpm build                                   # turbo: shared → SDK → …
+          pnpm --filter @libre/browser-extension build # → packages/browser-extension/dist
+
+      - name: Package unpacked extension
+        run: |
+          mkdir -p out/libre-listener-wallet-extension
+          cp -r packages/browser-extension/dist/* out/libre-listener-wallet-extension/
+          (cd out && zip -r ../libre-listener-wallet-extension.zip libre-listener-wallet-extension)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libre-listener-wallet-extension
+          path: libre-listener-wallet-extension.zip
+
+      - name: Create GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" libre-listener-wallet-extension.zip \
+            --title "Browser extension $GITHUB_REF_NAME" \
+            --notes "Unpacked MV3 build of the Libre Listener Wallet extension (Chrome / Brave).
+
+          **Install:** download \`libre-listener-wallet-extension.zip\`, unzip it, open \`chrome://extensions\`, turn on **Developer mode**, click **Load unpacked**, and select the unzipped \`libre-listener-wallet-extension\` folder. Full steps in packages/browser-extension/README.md.
+
+          > Experimental — not production-ready. Loss of funds is possible."

@@ -8,6 +8,27 @@ tie into the wallet with zero per-app integration.
 Targets **Chrome + Brave** (one Chromium build). Firefox is a planned follow-up (it lacks the
 offscreen-documents API, so the node would move to a persistent background page).
 
+> ⚠️ Experimental, not production-ready. Loss of funds is possible.
+
+## Install (Chrome / Brave)
+
+There is no Web Store listing yet, so it installs unpacked (Developer mode):
+
+1. Download **`libre-listener-wallet-extension.zip`** from the latest
+   [GitHub Release](https://github.com/ChadFarrow/libre-listener-wallet-monorepo/releases?q=browser-extension),
+   and unzip it.
+2. Open **`chrome://extensions`** (or `brave://extensions`).
+3. Turn on **Developer mode** (top-right).
+4. Click **Load unpacked** and select the unzipped **`libre-listener-wallet-extension`** folder.
+5. Pin the toolbar icon → click it to create or restore a wallet.
+
+To update, download the newer zip and either replace the folder + hit **↻ Reload** on the card,
+or remove and re-add it. **Removing the extension wipes its wallet storage — export a backup first**
+(popup → Backup → Download encrypted backup). The extension ID (and thus your wallet's local
+storage) is derived from the unpacked folder, so keep the folder in a stable location.
+
+(Prefer to build it yourself? See **Build** below, then Load unpacked the `dist/` folder.)
+
 ## Architecture
 
 ```

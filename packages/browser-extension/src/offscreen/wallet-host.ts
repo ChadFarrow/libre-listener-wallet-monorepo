@@ -232,10 +232,16 @@ export class WalletHost implements WalletRpc {
       if (!plan.connectPeer) return;
 
       const cfg = await this.getConfig();
-      const peerStr = cfg.peer || defaultPeer(network);
+      const savedPeer = cfg.peer;
+      const peerStr = savedPeer || defaultPeer(network);
       if (!peerStr) {
         console.warn("[AutoStart] no saved or default peer for this network — skipping peer connect");
         return;
+      }
+      if (!savedPeer) {
+        // A wallet funded before peer persistence existed has no saved peer. The network default
+        // may not be its channel peer — connect the real peer once (popup → Connect peer) to save it.
+        console.warn("[AutoStart] no saved peer — dialing the network default, which may not be your channel peer");
       }
       const { pubkey, host, port } = parsePeerString(peerStr);
       const wallet = this.wallet; // abort the retry loop if stop()/restore swaps the instance
@@ -251,7 +257,7 @@ export class WalletHost implements WalletRpc {
       );
       if (connected) {
         this.emit("state-changed");
-        console.log("[AutoStart] node running, peer connected");
+        console.log(`[AutoStart] node running, ${savedPeer ? "saved peer" : "default peer"} connected`);
       } else {
         console.warn("[AutoStart] peer connect gave up — use Connect peer in the popup");
       }
@@ -264,6 +270,10 @@ export class WalletHost implements WalletRpc {
   // channel state + monitors). DESTRUCTIVE — any funds in a live channel are lost; the UI gates
   // this behind an explicit confirmation. Leaves the network pointer + saved config intact.
   async resetWallet(): Promise<{ network: string }> {
+    // Settle an in-flight start first (auto-start makes one the default state at boot) — tearing
+    // down a wallet still inside start() orphans live timers and lets a later Start double-build
+    // over the same IndexedDB.
+    if (this.startingPromise) await this.startingPromise.catch(() => {});
     const network = await this.activeNetwork();
     if (this.wallet) {
       await this.wallet.nwc.stop().catch((e) => console.warn("[NWC] stop failed:", e?.message || e));
@@ -277,6 +287,10 @@ export class WalletHost implements WalletRpc {
   }
 
   async stopNode(): Promise<void> {
+    // Settle an in-flight start first (auto-start makes one the default state at boot) — tearing
+    // down a wallet still inside start() orphans live timers and lets a later Start double-build
+    // over the same IndexedDB.
+    if (this.startingPromise) await this.startingPromise.catch(() => {});
     if (this.wallet) {
       await this.wallet.nwc.stop().catch((e) => console.warn("[NWC] stop failed:", e?.message || e));
       await this.wallet.stop();

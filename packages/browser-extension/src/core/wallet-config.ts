@@ -47,8 +47,8 @@ export function defaultBridgeUrl(network: string): string | undefined {
 export function defaultRapidGossipSyncUrl(network: string): string | undefined {
   return network === "mainnet" ? DEFAULT_MAINNET_RGS : undefined;
 }
-// The channel-peer address (pubkey@host:port) to pre-fill / reconnect. Explicit user action still
-// required to connect — nothing auto-dials.
+// The channel-peer address (pubkey@host:port) to pre-fill, and the fallback auto-start dials for a
+// funded wallet that has no saved peer yet (wallets funded before peer persistence existed).
 export function defaultPeer(network: string): string | undefined {
   return network === "mainnet" ? DEFAULT_MAINNET_PEER : undefined;
 }

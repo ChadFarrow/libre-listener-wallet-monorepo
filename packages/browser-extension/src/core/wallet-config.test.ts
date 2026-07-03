@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   parseConfig,
+  serializeConfig,
   defaultEsploraUrl,
   defaultBridgeUrl,
   defaultRapidGossipSyncUrl,
   defaultPeer,
   DEFAULT_MAINNET_PEER,
+  parsePeerString,
+  formatPeerString,
+  type ExtensionConfig,
 } from "./wallet-config";
 
 describe("defaultEsploraUrl", () => {
@@ -53,5 +57,45 @@ describe("parseConfig", () => {
 
   it("falls back to mainnet on a corrupt config", () => {
     expect(parseConfig("{not json")).toEqual({ network: "mainnet" });
+  });
+});
+
+describe("ExtensionConfig.peer (persisted last-connected peer)", () => {
+  it("round-trips through serialize/parse", () => {
+    const cfg: ExtensionConfig = { network: "mainnet", peer: DEFAULT_MAINNET_PEER };
+    expect(parseConfig(serializeConfig(cfg)).peer).toBe(DEFAULT_MAINNET_PEER);
+  });
+
+  it("is optional: old configs without it parse unchanged (backward compat)", () => {
+    const cfg = parseConfig(JSON.stringify({ network: "mainnet", esploraUrl: "https://x/api" }));
+    expect(cfg.peer).toBeUndefined();
+    expect(cfg.esploraUrl).toBe("https://x/api");
+  });
+
+  it("drops a blank peer", () => {
+    expect(parseConfig(JSON.stringify({ network: "mainnet", peer: "  " })).peer).toBeUndefined();
+  });
+});
+
+describe("parsePeerString / formatPeerString", () => {
+  it("parses pubkey@host:port", () => {
+    const p = parsePeerString(DEFAULT_MAINNET_PEER);
+    expect(p.pubkey).toMatch(/^0[23][0-9a-f]{64}$/);
+    expect(p.host).toBe("45.33.65.45");
+    expect(p.port).toBe(9735);
+  });
+
+  it("round-trips with formatPeerString", () => {
+    const p = parsePeerString(DEFAULT_MAINNET_PEER);
+    expect(formatPeerString(p.pubkey, p.host, p.port)).toBe(DEFAULT_MAINNET_PEER);
+  });
+
+  it("rejects malformed input (never dial garbage at boot)", () => {
+    expect(() => parsePeerString("")).toThrow();
+    expect(() => parsePeerString("nopubkey:9735")).toThrow();
+    expect(() => parsePeerString("deadbeef@host:9735")).toThrow(); // pubkey not 66 hex 02/03
+    expect(() => parsePeerString(`${"02" + "a".repeat(64)}@:9735`)).toThrow(); // empty host
+    expect(() => parsePeerString(`${"02" + "a".repeat(64)}@host:0`)).toThrow(); // bad port
+    expect(() => parsePeerString(`${"02" + "a".repeat(64)}@host:99999`)).toThrow();
   });
 });

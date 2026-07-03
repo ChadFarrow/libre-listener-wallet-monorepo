@@ -10,6 +10,9 @@ export interface ExtensionConfig {
   esploraUrl?: string;
   bridgeUrl?: string;
   rapidGossipSyncUrl?: string;
+  // Last successfully connected channel peer ("pubkey@host:port"). Saved by the offscreen host
+  // on every manual connect; auto-start redials it (funded wallets only).
+  peer?: string;
 }
 
 const CONFIG_KEY = "ldk_config";
@@ -50,6 +53,35 @@ export function defaultPeer(network: string): string | undefined {
   return network === "mainnet" ? DEFAULT_MAINNET_PEER : undefined;
 }
 
+export interface PeerParts {
+  pubkey: string;
+  host: string;
+  port: number;
+}
+
+// Parse "pubkey@host:port". Throws a user-facing error on malformed input so boot-time
+// auto-connect never dials garbage. (IPv6 literals unsupported — the websockify bridge
+// transport doesn't use them.)
+export function parsePeerString(peer: string): PeerParts {
+  const s = (peer || "").trim();
+  const at = s.indexOf("@");
+  const colon = s.lastIndexOf(":");
+  if (at <= 0 || colon <= at + 1) throw new Error(`Invalid peer (expected pubkey@host:port): "${s}"`);
+  const pubkey = s.slice(0, at).toLowerCase();
+  const host = s.slice(at + 1, colon);
+  const port = Number(s.slice(colon + 1));
+  if (!/^0[23][0-9a-f]{64}$/.test(pubkey)) {
+    throw new Error("Invalid peer pubkey (expected 66 hex characters starting 02/03).");
+  }
+  if (!host) throw new Error("Invalid peer host.");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid peer port.");
+  return { pubkey, host, port };
+}
+
+export function formatPeerString(pubkey: string, host: string, port: number): string {
+  return `${pubkey}@${host}:${port}`;
+}
+
 export function parseConfig(rawJson: string | null): ExtensionConfig {
   const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v : undefined);
   if (!rawJson) return { network: "mainnet" };
@@ -60,6 +92,7 @@ export function parseConfig(rawJson: string | null): ExtensionConfig {
       esploraUrl: str(c.esploraUrl),
       bridgeUrl: str(c.bridgeUrl),
       rapidGossipSyncUrl: str(c.rapidGossipSyncUrl),
+      peer: str(c.peer),
     };
   } catch (e) {
     // Don't silently boot mainnet on a corrupt config without a trace (guardrails §4).

@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { http, HttpResponse } from "msw";
+import { server } from "../setup";
 import { calculateSplits, encodeV4VTlvs } from "@libre/shared";
 import { LibreListenerWallet, SecureStorageProvider, WebSocketStreamProvider, WebSocketConnection } from "../../index";
 import * as fs from "fs";
@@ -91,6 +93,17 @@ describe("Value-for-Value Shared Utils", () => {
 });
 
 describe("sendKeysendPayment LDK Integration", () => {
+  const ESPLORA = "http://127.0.0.1:3002";
+  // A fresh node built at tip height 0 makes the initial sync a no-op, so start()
+  // needs only these three esplora reads mocked — no docker/regtest required.
+  beforeEach(() => {
+    server.use(
+      http.get(`${ESPLORA}/fee-estimates`, () => HttpResponse.json({})),
+      http.get(`${ESPLORA}/blocks/tip/height`, () => HttpResponse.text("0")),
+      http.get(`${ESPLORA}/blocks/tip/hash`, () => HttpResponse.text("00".repeat(32))),
+    );
+  });
+
   const mockStorage: SecureStorageProvider = {
     getItem: async () => null,
     setItem: async () => {},

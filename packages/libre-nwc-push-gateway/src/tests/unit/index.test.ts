@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { LibreNWCPushGateway } from "../../index";
+import { LibreNWCPushGateway, isSafeRelayUrl } from "../../index";
 
 describe("LibreNWCPushGateway Daemon & API", () => {
   let gateway: LibreNWCPushGateway;
@@ -10,6 +10,7 @@ describe("LibreNWCPushGateway Daemon & API", () => {
       host: "127.0.0.1",
       port: PORT,
       dbPath: ":memory:", // use in-memory DB for isolated unit tests
+      allowPrivateRelays: true, // loopback relay used for test isolation
     });
     await gateway.start();
   });
@@ -76,5 +77,38 @@ describe("LibreNWCPushGateway Daemon & API", () => {
 
     const pubkeys = gateway.getRegisteredPubkeys("ws://127.0.0.1:4869");
     expect(pubkeys).not.toContain(unregisterPayload.walletPubkey);
+  });
+
+  it("rejects an SSRF/private relayUrl on registration (default-safe gateway)", async () => {
+    const SAFE_PORT = 3097;
+    const g = new LibreNWCPushGateway({ host: "127.0.0.1", port: SAFE_PORT, dbPath: ":memory:" });
+    await g.start();
+    try {
+      const res = await fetch(`http://127.0.0.1:${SAFE_PORT}/api/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          walletPubkey: "02abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".slice(0, 64),
+          relayUrl: "ws://169.254.169.254:80", // cloud-metadata SSRF probe
+          subscription: {
+            endpoint: "https://updates.push.services.mozilla.com/wpush/v2/x",
+            keys: { auth: "a", p256dh: "p" },
+          },
+        }),
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await g.stop();
+    }
+  });
+
+  it("isSafeRelayUrl blocks private/plaintext, allows public wss", () => {
+    expect(isSafeRelayUrl("wss://relay.getalby.com/v1")).toBe(true);
+    expect(isSafeRelayUrl("ws://relay.getalby.com")).toBe(false); // no TLS
+    expect(isSafeRelayUrl("wss://169.254.169.254")).toBe(false); // link-local
+    expect(isSafeRelayUrl("wss://127.0.0.1")).toBe(false); // loopback
+    expect(isSafeRelayUrl("wss://10.0.0.5")).toBe(false); // private
+    expect(isSafeRelayUrl("https://evil.com")).toBe(false); // wrong scheme
+    expect(isSafeRelayUrl("ws://127.0.0.1", true)).toBe(true); // override for tests
   });
 });

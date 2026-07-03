@@ -12,15 +12,14 @@ function copyLdkWasmPlugin() {
         fs.mkdirSync(publicDir, { recursive: true });
       }
 
-      // Run tsup to compile the service worker
-      try {
-        console.log("[vite-plugin] Compiling Service Worker with tsup...");
-        const { execSync } = require("child_process");
-        execSync("npx tsup", { cwd: __dirname });
-        console.log("[vite-plugin] Service Worker compiled successfully!");
-      } catch (err: any) {
-        console.error("[vite-plugin] Service Worker compilation failed:", err.message || err);
-      }
+      // Run tsup to compile the service worker. A failure here MUST abort the
+      // build: public/service-worker.js is gitignored, so swallowing the error
+      // would ship a deploy with no service worker (web-push wake silently dead)
+      // while CI stays green.
+      console.log("[vite-plugin] Compiling Service Worker with tsup...");
+      const { execSync } = require("child_process");
+      execSync("npx tsup", { cwd: __dirname, stdio: "inherit" });
+      console.log("[vite-plugin] Service Worker compiled successfully!");
 
       // Try multiple potential paths to resolve the WASM in pnpm monorepo
       const candidatePaths = [
@@ -54,6 +53,9 @@ export default defineConfig({
   plugins: [copyLdkWasmPlugin()],
   server: {
     port: 5173,
-    host: true
+    // Bind loopback only. `host: true` exposes the dev server (which sits next to
+    // a wallet origin) to the LAN and to drive-by websites via known Vite/esbuild
+    // dev-server advisories. Use `vite --host` explicitly if LAN access is needed.
+    host: "127.0.0.1"
   }
 });

@@ -60,4 +60,27 @@ describe("IndexedDBStorageProvider", () => {
     // The aborted write must not have persisted.
     expect(await s.getItem("k")).toBeNull();
   });
+
+  // A read failure (DB open / transaction error) must REJECT, not resolve null.
+  // Flattening it to null lets start() mistake a transiently-broken store for an
+  // empty one and overwrite a funded wallet's seed. Absence still returns null.
+  it("getItem rejects on a read error — it does not mask it as absent null", async () => {
+    const s = new IndexedDBStorageProvider("test-read-error");
+    await s.setItem("warm", "1"); // open the connection before spying
+
+    const spy = vi
+      .spyOn(IDBDatabase.prototype, "transaction")
+      .mockImplementation(() => {
+        throw new DOMException("simulated store failure", "InvalidStateError");
+      });
+
+    try {
+      await expect(s.getItem("warm")).rejects.toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Absence still resolves to null (not an error) once storage recovers.
+    expect(await s.getItem("does-not-exist")).toBeNull();
+  });
 });

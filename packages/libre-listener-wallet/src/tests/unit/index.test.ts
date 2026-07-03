@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { http, HttpResponse } from "msw";
+import { server } from "../setup";
 import {
   LibreListenerWallet,
   SecureStorageProvider,
@@ -27,6 +29,17 @@ function loadWasmBinary(): Uint8Array {
 }
 
 describe("LibreListenerWallet Core Node Manager", () => {
+  const ESPLORA = "http://127.0.0.1:3002";
+  // Fresh node at tip height 0 → initial sync is a no-op; mock the three esplora
+  // reads start() makes so the test needs no docker/regtest.
+  beforeEach(() => {
+    server.use(
+      http.get(`${ESPLORA}/fee-estimates`, () => HttpResponse.json({})),
+      http.get(`${ESPLORA}/blocks/tip/height`, () => HttpResponse.text("0")),
+      http.get(`${ESPLORA}/blocks/tip/hash`, () => HttpResponse.text("00".repeat(32))),
+    );
+  });
+
   const mockStorage: SecureStorageProvider = {
     getItem: async () => null,
     setItem: async () => {},

@@ -1,0 +1,59 @@
+name: CI
+
+# Lint, storage-contract guard, build, and unit tests on every push/PR. The SDK's
+# docker-backed integration tests (packages/libre-listener-wallet/src/tests/integration)
+# need a regtest stack (bitcoind/electrs/lnd) and are intentionally NOT run here —
+# only the fast unit suites. Nothing deploys from this workflow.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint (async-safety rules are errors)
+        run: pnpm lint
+
+      - name: Storage-contract guard
+        run: pnpm check:storage
+
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Unit tests — SDK (unit only, no docker)
+        run: pnpm --filter @libre/listener-wallet exec vitest run src/tests/unit
+
+      - name: Unit tests — other packages
+        run: |
+          pnpm --filter @libre/shared test
+          pnpm --filter @libre/nwc-push-gateway test
+          pnpm --filter @libre/lsps2-server test
+          pnpm --filter @libre/example-app test
+          pnpm --filter @libre/browser-extension test
+
+      - name: Typecheck (extension + example-app)
+        run: |
+          pnpm --filter @libre/browser-extension typecheck
+          pnpm --filter @libre/example-app exec tsc --noEmit

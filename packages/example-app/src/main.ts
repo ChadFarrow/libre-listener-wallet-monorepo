@@ -210,17 +210,20 @@ async function migrateLegacyStorageOnce(selectedNetwork: string): Promise<void> 
         "system"
       );
     }
-  } catch (e) {
-    appendLog(`[WARN] Storage migration skipped: ${e instanceof Error ? e.message : e}`, "warn");
-  } finally {
+    // Only mark migration done on the SUCCESS path. A transient IndexedDB error
+    // (quota, blocked upgrade) must be retried on the next load, not permanently
+    // recorded as complete — otherwise a funded legacy wallet is stranded behind
+    // a "No wallet found" banner while its channels sit unattended.
     localStorage.setItem("libre_ns_migrated", "1");
+  } catch (e) {
+    appendLog(`[WARN] Storage migration failed, will retry on next load: ${e instanceof Error ? e.message : e}`, "warn");
   }
 }
 
 // On page load, restore the previously-selected network (+ its preset) and the
 // existing wallet seed from storage, so a reload preserves your wallet and network
 // instead of resetting to regtest / the default seed (which Start would overwrite).
-(async () => {
+void (async () => {
   try {
     // Default to mainnet (this is a mainnet product); returning users keep their last choice.
     const savedNetwork = localStorage.getItem("libre_ui_network");
@@ -268,7 +271,7 @@ async function migrateLegacyStorageOnce(selectedNetwork: string): Promise<void> 
     startNodeBtn.click();
   }
 
-  tryAutoConnectDrive();
+  void tryAutoConnectDrive();
 })();
 
 autostartCheckbox.addEventListener("change", () => {
@@ -344,7 +347,7 @@ function applySweepAddress(): Uint8Array | null {
     return null;
   }
   try {
-    const script = addressToScriptPubKey(addr);
+    const script = addressToScriptPubKey(addr, networkSelect.value);
     localStorage.setItem(SWEEP_ADDRESS_KEY, addr);
     if (wallet) wallet.setSweepDestination(script);
     sweepAddressStatus.textContent = "✓ sweep address set";
@@ -674,6 +677,16 @@ startNodeBtn.addEventListener("click", async () => {
     }
   } catch (err: any) {
     appendLog(`[ERROR] Start failed: ${err.message}`, "error");
+    // A start() that threw mid-way may have left timers/sockets running on a
+    // half-initialized instance. Tear it down and drop the reference so a retry
+    // builds a clean instance instead of a second one writing the same storage.
+    try {
+      await wallet?.stop();
+    } catch (stopErr: any) {
+      appendLog(`[WARN] Cleanup after failed start also failed: ${stopErr?.message ?? stopErr}`, "warn");
+    }
+    wallet = null;
+    isNodeRunning = false;
     startNodeBtn.disabled = false;
     // Don't leak post-start intents into a later manual Start if this one failed.
     justCreated = false;
@@ -808,7 +821,7 @@ copyNodeIdBtn.addEventListener("click", () => {
     appendLog("[ERROR] Start the node first — the Node ID appears once it's running.", "error");
     return;
   }
-  copyToClipboard(id, "Node ID copied — paste it into your node's openchannel.");
+  void copyToClipboard(id, "Node ID copied — paste it into your node's openchannel.");
 });
 
 createInvoiceBtn.addEventListener("click", async () => {

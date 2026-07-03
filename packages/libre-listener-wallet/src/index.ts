@@ -288,7 +288,7 @@ export class LibreListenerWallet {
     }
 
     // 2. Load storage cache
-    this.storageCache = new StorageCache(this.storage);
+    this.storageCache = new StorageCache(this.storage, this.logger);
     await this.storageCache.load();
 
     const storedVersion = await this.storage.getItem("state_version");
@@ -507,7 +507,17 @@ export class LibreListenerWallet {
         this.channelManager = tuple.get_b();
         this.logger?.info("Successfully loaded ChannelManager from storage");
       } else {
-        this.logger?.error("Failed to load ChannelManager from storage, constructing fresh");
+        // A stored channel_manager that fails to decode is corrupt/mismatched
+        // state, NOT a fresh wallet. Bootstrapping an empty ChannelManager here
+        // would connect the peer, answer its channel_reestablish with "unknown
+        // channel", and FORCE-CLOSE the real channel (the documented mainnet
+        // incident). Refuse to start instead — the funds are recoverable via
+        // restore-from-backup or the force-close sweeper, never by overwriting.
+        const errMsg =
+          "Stored channel_manager failed to decode (corrupt or key-mismatched state). " +
+          "Refusing to start to avoid force-closing live channels — restore from a backup instead.";
+        this.logger?.error(errMsg);
+        throw new Error(errMsg);
       }
     }
 
@@ -597,20 +607,30 @@ export class LibreListenerWallet {
         if (event instanceof Event_PaymentClaimable) {
           const paymentHash = bytesToHex(event.payment_hash);
           this.logger?.info(`[LDK Event] PaymentClaimable for hash: ${paymentHash}`);
+          const purpose = event.purpose;
           this.storage.getItem(`preimage_${paymentHash}`).then((preimageHex) => {
+            // The node may have stopped between the event and this async read;
+            // snapshot the manager and bail if it's gone (LDK re-emits on restart).
+            const mgr = this.channelManager;
+            if (!mgr) {
+              this.logger?.warn(`[LDK Event] Node stopped before claim for hash ${paymentHash}; will re-claim on restart.`);
+              return;
+            }
             if (preimageHex) {
               // Never log the preimage itself (key-isolation guardrail: no preimages in logs).
               this.logger?.info(`[LDK Event] Claiming payment for hash ${paymentHash}`);
-              this.channelManager!.claim_funds(hexToBytes(preimageHex));
+              mgr.claim_funds(hexToBytes(preimageHex));
             } else {
-              const preimageOpt = event.purpose.preimage();
+              const preimageOpt = purpose.preimage();
               if (preimageOpt instanceof Option_ThirtyTwoBytesZ_Some) {
                 this.logger?.info(`[LDK Event] Claiming payment for hash ${paymentHash} (preimage from purpose)`);
-                this.channelManager!.claim_funds(preimageOpt.some);
+                mgr.claim_funds(preimageOpt.some);
               } else {
                 this.logger?.warn(`[LDK Event] Preimage unknown for hash: ${paymentHash}`);
               }
             }
+          }).catch((e) => {
+            this.logger?.error(`[LDK Event] Failed to claim payment for hash ${paymentHash}: ${e instanceof Error ? e.message : e}`);
           });
         } else if (event instanceof Event_OpenChannelRequest) {
           const tempChanId = (event as any).temporary_channel_id;
@@ -986,8 +1006,19 @@ export class LibreListenerWallet {
     if (payload.network !== this.config.network) {
       throw new Error(`Backup network mismatch: backup is "${payload.network}" but wallet is configured for "${this.config.network}"`);
     }
-    for (const [k, v] of Object.entries(payload.entries)) {
+    // Write the seed LAST for crash-safety. If the browser is killed mid-restore
+    // and ldk_seed lands first, storage holds a bare seed with no channel_manager
+    // — the seed-without-state condition that force-closes on the next start.
+    // Ordering seed last means a partial restore is an obviously-incomplete
+    // wallet (no seed yet) rather than a dangerous half-restored one.
+    const entries = Object.entries(payload.entries);
+    for (const [k, v] of entries) {
+      if (k === "ldk_seed") continue;
       await this.storage.setItem(k, v);
+    }
+    const seedEntry = payload.entries["ldk_seed"];
+    if (seedEntry !== undefined) {
+      await this.storage.setItem("ldk_seed", seedEntry);
     }
   }
 
@@ -1476,8 +1507,15 @@ export class LibreListenerWallet {
 
       if (sendRes.is_ok()) {
         this.logger?.info(`[Keysend] Payment successfully initiated with ID: ${bytesToHex(paymentId)}, hash: ${paymentHashHex}`);
-        // Store the preimage so we can reference it when Event_PaymentClaimable triggers (if we pay ourselves)
-        await this.storage.setItem(`preimage_${paymentHashHex}`, bytesToHex(preimage));
+        // The payment is now irrevocably in flight. Persisting the preimage is a
+        // best-effort convenience (self-payment claim lookup) — a storage failure
+        // here must NOT flip the result to ok:false, or the NWC layer reports the
+        // send as failed and the client retries → the recipient is paid twice.
+        try {
+          await this.storage.setItem(`preimage_${paymentHashHex}`, bytesToHex(preimage));
+        } catch (e) {
+          this.logger?.error(`[Keysend] Payment initiated but failed to persist preimage: ${e instanceof Error ? e.message : e}`);
+        }
         return {
           ok: true,
           paymentId: bytesToHex(paymentId),

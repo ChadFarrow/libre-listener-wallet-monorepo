@@ -67,12 +67,12 @@ $("start").addEventListener("click", async () => {
   } catch (e: any) {
     setMsg("msg", e.message, "err");
   }
-  refresh();
+  void refresh();
 });
 
 $("stop").addEventListener("click", async () => {
   await command("stopNode").catch((e) => setMsg("msg", e.message, "err"));
-  refresh();
+  void refresh();
 });
 
 $("copy-node").addEventListener("click", async () => {
@@ -131,7 +131,7 @@ $("create-nwc").addEventListener("click", async () => {
     show(out, true);
     show($("copy-nwc"), true);
     setMsg("nwc-msg", "Pairing created — paste it into your nostr app", "ok");
-    refreshNwcList();
+    void refreshNwcList();
   } catch (e: any) {
     setMsg("nwc-msg", e.message, "err");
   }
@@ -170,7 +170,7 @@ async function refreshNwcList() {
       await command("nwcDeleteConnection", { clientPubkey: c.clientPubkey }).catch((e) =>
         setMsg("nwc-msg", e.message, "err")
       );
-      refreshNwcList();
+      void refreshNwcList();
     });
     item.append(nm, btn);
     box.appendChild(item);
@@ -234,7 +234,7 @@ $("drive-connect").addEventListener("click", async () => {
   try {
     const { email } = await command<{ email: string | null }>("driveConnect");
     setMsg("backup-msg", `Drive connected${email ? ` as ${email}` : ""}`, "ok");
-    refreshDriveStatus();
+    void refreshDriveStatus();
   } catch (e: any) {
     setMsg("backup-msg", e.message, "err");
   }
@@ -291,7 +291,7 @@ $("create-confirm").addEventListener("click", async () => {
   try {
     await command("createWallet", { seedHex });
     setMsg("msg", "Wallet created", "ok");
-    refresh();
+    void refresh();
   } catch (e: any) {
     setMsg("msg", e.message, "err");
   }
@@ -313,7 +313,7 @@ $("restore-drive").addEventListener("click", async () => {
   try {
     await command("driveRestore", { secret });
     setMsg("restore-msg", "Wallet restored from Drive", "ok");
-    refresh();
+    void refresh();
   } catch (e: any) {
     setMsg("restore-msg", e.message, "err");
   }
@@ -341,7 +341,7 @@ $("restore-file-btn").addEventListener("click", async () => {
     setMsg("restore-msg", "Restoring…");
     await command("restoreWallet", { envelope, secret });
     setMsg("restore-msg", "Wallet restored", "ok");
-    refresh();
+    void refresh();
   } catch (e: any) {
     setMsg("restore-msg", e.message, "err");
   }
@@ -362,7 +362,7 @@ $("restore-confirm").addEventListener("click", async () => {
   try {
     await command("restoreWallet", { envelope, secret });
     setMsg("restore-msg", "Wallet restored", "ok");
-    refresh();
+    void refresh();
   } catch (e: any) {
     setMsg("restore-msg", e.message, "err");
   }
@@ -371,4 +371,4 @@ $("restore-confirm").addEventListener("click", async () => {
 $("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 
 onWalletEvent(() => refresh());
-refresh();
+void refresh();

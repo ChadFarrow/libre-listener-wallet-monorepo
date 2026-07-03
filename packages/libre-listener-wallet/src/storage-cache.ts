@@ -5,7 +5,7 @@ import {
   Result_CVec_StrZIOErrorZ,
   IOError,
 } from "lightningdevkit";
-import { SecureStorageProvider } from "./index";
+import { SecureStorageProvider, Logger } from "./index";
 
 export function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -31,13 +31,37 @@ export function getStorageKey(primary: string, secondary: string, key: string): 
 
 export class StorageCache implements KVStoreInterface {
   private storage: SecureStorageProvider;
+  private logger?: Logger;
   private cache: Map<string, Uint8Array> = new Map();
   private keys: Set<string> = new Set();
   private indexKey = "ldk_keys_index";
   private isLoaded = false;
+  // Flips to false the moment a background persist (setItem/removeItem/index)
+  // rejects. LDK's KVStore.write/remove are synchronous and we can't await the
+  // durable commit before answering, so a fire-and-forget failure would
+  // otherwise be invisible while LDK proceeds to revoke old commitment state on
+  // the belief a monitor update persisted — the classic path to broadcasting a
+  // stale channel state and losing funds. Once degraded, every subsequent
+  // write/remove returns an IOError so LDK STOPS advancing channel state instead
+  // of compounding on storage it can't trust.
+  private persistenceHealthy = true;
 
-  constructor(storage: SecureStorageProvider) {
+  constructor(storage: SecureStorageProvider, logger?: Logger) {
     this.storage = storage;
+    this.logger = logger;
+  }
+
+  /** True while every persisted write is known to have committed. */
+  isPersistenceHealthy(): boolean {
+    return this.persistenceHealthy;
+  }
+
+  private onPersistError(op: string, storeKey: string, err: unknown): void {
+    this.persistenceHealthy = false;
+    const msg = err instanceof Error ? err.message : String(err);
+    this.logger?.error(
+      `[StorageCache] Persist ${op} for "${storeKey}" FAILED — channel-state persistence is now degraded; refusing further writes: ${msg}`,
+    );
   }
 
   async load(): Promise<void> {
@@ -55,6 +79,11 @@ export class StorageCache implements KVStoreInterface {
           }
         }
       } catch (e) {
+        // A corrupt key index means we can't trust which monitors exist; clear
+        // it and surface the problem rather than swallowing it silently.
+        this.logger?.error(
+          `[StorageCache] Corrupt "${this.indexKey}" — clearing key index: ${e instanceof Error ? e.message : String(e)}`,
+        );
         this.keys.clear();
       }
     }
@@ -77,29 +106,37 @@ export class StorageCache implements KVStoreInterface {
 
   write(primary_namespace: string, secondary_namespace: string, key: string, buf: Uint8Array): Result_NoneIOErrorZ {
     const storeKey = getStorageKey(primary_namespace, secondary_namespace, key);
+    if (!this.persistenceHealthy) {
+      this.logger?.error(`[StorageCache] Refusing write for "${storeKey}" — persistence degraded.`);
+      return Result_NoneIOErrorZ.constructor_err(IOError.LDKIOError_Other);
+    }
     this.cache.set(storeKey, buf);
-    
+
     if (!this.keys.has(storeKey)) {
       this.keys.add(storeKey);
-      this.persistIndex().catch(() => {});
+      this.persistIndex().catch((e) => this.onPersistError("index", this.indexKey, e));
     }
 
     const hexVal = bytesToHex(buf);
-    this.storage.setItem(storeKey, hexVal).catch(() => {});
+    this.storage.setItem(storeKey, hexVal).catch((e) => this.onPersistError("write", storeKey, e));
 
     return Result_NoneIOErrorZ.constructor_ok();
   }
 
   remove(primary_namespace: string, secondary_namespace: string, key: string, lazy: boolean): Result_NoneIOErrorZ {
     const storeKey = getStorageKey(primary_namespace, secondary_namespace, key);
+    if (!this.persistenceHealthy) {
+      this.logger?.error(`[StorageCache] Refusing remove for "${storeKey}" — persistence degraded.`);
+      return Result_NoneIOErrorZ.constructor_err(IOError.LDKIOError_Other);
+    }
     this.cache.delete(storeKey);
-    
+
     if (this.keys.has(storeKey)) {
       this.keys.delete(storeKey);
-      this.persistIndex().catch(() => {});
+      this.persistIndex().catch((e) => this.onPersistError("index", this.indexKey, e));
     }
 
-    this.storage.removeItem(storeKey).catch(() => {});
+    this.storage.removeItem(storeKey).catch((e) => this.onPersistError("remove", storeKey, e));
 
     return Result_NoneIOErrorZ.constructor_ok();
   }

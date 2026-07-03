@@ -82,6 +82,42 @@ describe("StorageCache Unit Tests", () => {
     expect((listAfterRemove as any).res).toEqual([]);
   });
 
+  it("degrades and refuses further writes once a background persist fails", async () => {
+    let failWrites = false;
+    const db = new Map<string, string>();
+    const mockStorage: SecureStorageProvider = {
+      getItem: async (key) => db.get(key) || null,
+      setItem: async (key, val) => {
+        if (failWrites) throw new Error("simulated quota exceeded");
+        db.set(key, val);
+      },
+      removeItem: async (key) => {
+        db.delete(key);
+      },
+    };
+
+    const cache = new StorageCache(mockStorage);
+    await cache.load();
+    const kvStore = KVStore.new_impl(cache);
+
+    // Healthy write succeeds.
+    expect(kvStore.write("monitors", "", "chan1", new Uint8Array([1])).is_ok()).toBeTruthy();
+    expect(cache.isPersistenceHealthy()).toBe(true);
+
+    // A write whose async persist rejects flips the cache to degraded.
+    failWrites = true;
+    const w2 = kvStore.write("monitors", "", "chan2", new Uint8Array([2]));
+    expect(w2.is_ok()).toBeTruthy(); // synchronous ack fired before the async failure
+    await new Promise((r) => setTimeout(r, 0)); // let the rejected persist settle
+    expect(cache.isPersistenceHealthy()).toBe(false);
+
+    // Every subsequent write is now refused (IOError) so LDK stops advancing state.
+    const w3 = kvStore.write("monitors", "", "chan3", new Uint8Array([3]));
+    expect(w3.is_ok()).toBeFalsy();
+    const r3 = kvStore.remove("monitors", "", "chan1", false);
+    expect(r3.is_ok()).toBeFalsy();
+  });
+
   it("should initialize correctly from existing persisted data", async () => {
     const db = new Map<string, string>();
     db.set("ldk_keys_index", JSON.stringify(["rootkey", "ns/sub/nestedkey"]));

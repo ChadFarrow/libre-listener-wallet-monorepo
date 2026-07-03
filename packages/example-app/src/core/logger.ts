@@ -7,10 +7,23 @@ const logFilter = document.getElementById("log-filter") as HTMLSelectElement;
 
 const MAX_LOG_LINES = 500;
 
+function matchesFilter(el: HTMLDivElement, filter: string): boolean {
+  if (filter === "all") return true;
+  if (filter === "error") return el.classList.contains("error");
+  if (filter === "warn") return el.classList.contains("warn");
+  if (filter === "info") {
+    return el.classList.contains("info") || el.classList.contains("system") || el.classList.contains("ldk-info");
+  }
+  return false;
+}
+
 export function appendLog(msg: string, type: LogType) {
   const line = document.createElement("div");
   line.className = `log-line ${type}`;
   line.innerText = msg;
+  // Apply the active filter to just the new line. Re-walking all ≤500 existing
+  // lines on every append was O(n²) during LDK trace bursts (1s tick + traces).
+  line.style.display = matchesFilter(line, logFilter.value) ? "block" : "none";
   terminalContent.appendChild(line);
 
   // Cap the buffer so the terminal doesn't grow unboundedly — the 1s event tick +
@@ -20,25 +33,15 @@ export function appendLog(msg: string, type: LogType) {
   }
 
   terminalContent.parentElement!.scrollTop = terminalContent.parentElement!.scrollHeight;
-  applyLogFilter();
 }
 
+/** Re-apply the current filter to every line — used only on filter change. */
 export function applyLogFilter() {
   const filter = logFilter.value;
   const lines = terminalContent.querySelectorAll(".log-line");
   lines.forEach((lineNode) => {
     const el = lineNode as HTMLDivElement;
-    if (filter === "all") {
-      el.style.display = "block";
-    } else if (filter === "error" && el.classList.contains("error")) {
-      el.style.display = "block";
-    } else if (filter === "warn" && el.classList.contains("warn")) {
-      el.style.display = "block";
-    } else if (filter === "info" && (el.classList.contains("info") || el.classList.contains("system") || el.classList.contains("ldk-info"))) {
-      el.style.display = "block";
-    } else {
-      el.style.display = "none";
-    }
+    el.style.display = matchesFilter(el, filter) ? "block" : "none";
   });
 }
 

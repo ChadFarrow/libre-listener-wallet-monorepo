@@ -9,6 +9,11 @@ export * from "./lnd-client";
 export * from "./bitcoind-client";
 export * from "./backend";
 export * from "./config";
+export * from "./fee";
+export * from "./jit-store";
+export * from "./intercept-types";
+export * from "./intercept";
+export * from "./lnd-grpc-client";
 
 export interface Logger { info(m: string): void; error(m: string): void; }
 

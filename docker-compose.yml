@@ -46,7 +46,7 @@ services:
       - bitcoind
 
   lnd:
-    image: lightninglabs/lnd:v0.18.0-beta
+    image: lightninglabs/lnd:v0.18.5-beta
     container_name: libre-lnd
     command: >
       --bitcoin.active

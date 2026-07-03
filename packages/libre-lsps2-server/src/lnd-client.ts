@@ -42,6 +42,39 @@ export class LndRestClient {
     });
   }
 
+  // Opens an INSTANT zero-conf channel (no confirmation wait) to the client. Requires lnd's
+  // --protocol.zero-conf + --protocol.option-scid-alias (set on libre-lnd) and an anchors
+  // commitment. The client must accept 0-conf from this peer (trustedZeroConfPeers).
+  async openZeroConfChannel(p: { nodePubkeyHex: string; localFundingSat: number; pushSat: number }): Promise<void> {
+    await this.call("POST", "/v1/channels", {
+      node_pubkey_string: p.nodePubkeyHex,
+      local_funding_amount: String(p.localFundingSat),
+      push_sat: String(p.pushSat),
+      private: true,
+      zero_conf: true,
+      commitment_type: "ANCHORS",
+    });
+  }
+
+  // Polls listchannels for the just-opened zero-conf channel and returns lnd's OWN scid alias
+  // (`alias_scids[0]`, falling back to `peer_scid_alias`) as a decimal string. This is the scid an
+  // external payer's onion carries for the LSP->client hop and that the interceptor sees as
+  // `outgoing_requested_chan_id` — so it's what the client must advertise and the store keys on.
+  async findZeroConfAlias(p: { nodePubkeyHex: string; retries?: number; delayMs?: number }): Promise<string> {
+    const totalAttempts = (p.retries ?? 20) + 1;
+    const delayMs = p.delayMs ?? 500;
+    for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+      const r = await this.call("GET", "/v1/channels");
+      const matches = (r.channels ?? []).filter((c: any) => c.remote_pubkey === p.nodePubkeyHex);
+      for (const c of matches) {
+        const alias = (Array.isArray(c.alias_scids) && c.alias_scids[0]) || c.peer_scid_alias;
+        if (alias && String(alias) !== "0") return String(alias);
+      }
+      if (attempt < totalAttempts) await new Promise((res) => setTimeout(res, delayMs));
+    }
+    throw new Error(`no zero-conf alias for ${p.nodePubkeyHex} in listchannels after ${totalAttempts} tries`);
+  }
+
   // Lists active channels and returns the chan_id of the last channel matching the given
   // remote pubkey. Retries up to `retries` additional times (default 5) with `delayMs`
   // delay (default 500 ms) between attempts to handle the mine→listchannels race.

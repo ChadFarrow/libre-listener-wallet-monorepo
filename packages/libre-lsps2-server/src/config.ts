@@ -11,6 +11,11 @@ export interface Lsps2ServerConfig {
   capacitySat: number;
   pushSat: number;
   confirmBlocks: number;
+  // Real JIT: gRPC endpoint + TLS cert for the HTLC interceptor, and the opening-fee menu values.
+  lndGrpcHost: string;
+  lndTlsCertPath: string;
+  minFeeMsat: string;
+  proportionalFeePpm: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Lsps2ServerConfig {
@@ -32,5 +37,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Lsps2ServerCon
     capacitySat: Number(env.CHANNEL_CAPACITY_SAT ?? 1_000_000),
     pushSat: Number(env.PUSH_SAT ?? 200_000),
     confirmBlocks: Number(env.CONFIRM_BLOCKS ?? 6),
+    lndGrpcHost: env.LND_GRPC_HOST ?? "127.0.0.1:10009",
+    lndTlsCertPath: env.LND_TLS_CERT_PATH ?? "/tmp/libre-lnd-tls.cert",
+    minFeeMsat: env.MIN_FEE_MSAT ?? "250000",
+    proportionalFeePpm: Number(env.PROP_FEE_PPM ?? 1000),
   };
 }

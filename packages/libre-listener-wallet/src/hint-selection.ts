@@ -65,3 +65,14 @@ export function selectHintChannels(channels: HintableChannel[]): HintHop[] {
       cltvExpiryDelta: c.forwardingInfo!.cltvExpiryDelta,
     }));
 }
+
+// Builds the final hint list for an LSPS2 JIT invoice: the LSP's intercept hint (jit_channel_scid)
+// goes FIRST — an external payer must route via that scid to trigger the interceptor, regardless of
+// any existing channel's capacity — then capacity-ranked real-channel hints fill the remaining
+// slots (deduped by scid, capped at MAX_HINTS). With no priority hint this is just selectHintChannels.
+export function prioritizeHints(priority: HintHop | undefined, channels: HintableChannel[]): HintHop[] {
+  const capacityHints = selectHintChannels(channels);
+  if (!priority) return capacityHints;
+  const rest = capacityHints.filter((h) => h.scid !== priority.scid);
+  return [priority, ...rest].slice(0, MAX_HINTS);
+}

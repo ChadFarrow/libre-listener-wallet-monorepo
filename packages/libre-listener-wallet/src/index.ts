@@ -94,8 +94,8 @@ import {
 } from "lightningdevkit";
 import { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
 import { getSecureRandomBytes } from "./crypto-utils";
-import { hasRouteHint, appendRouteHints } from "./bolt11-hints";
-import { selectHintChannels, forwardingInfoFromLdk, type HintableChannel } from "./hint-selection";
+import { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
+import { selectHintChannels, prioritizeHints, forwardingInfoFromLdk, type HintableChannel } from "./hint-selection";
 import { EsploraSyncClient } from "./esplora-client";
 import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
@@ -486,6 +486,12 @@ export class LibreListenerWallet {
     // Announced (public) channels must match the counterparty's preference. Default
     // private; enable when accepting public channels (e.g. from the Mutinynet faucet).
     userConfig.get_channel_handshake_config().set_announce_for_forwarding(this.config.announceChannels ?? false);
+    // Accept HTLCs worth less than the invoice amount by the LSP's skimmed opening fee — required
+    // for LSPS2 JIT, where the LSP deducts its opening fee from the first incoming payment before
+    // forwarding it to us. Without this LDK rejects the underpaying HTLC and the JIT payment fails.
+    const jitChannelConfig = userConfig.get_channel_config();
+    jitChannelConfig.set_accept_underpaying_htlcs(true);
+    userConfig.set_channel_config(jitChannelConfig);
 
     const managerHex = await this.storage.getItem("channel_manager");
     if (managerHex) {
@@ -830,7 +836,11 @@ export class LibreListenerWallet {
     amountMsat: bigint,
     description: string,
     expirySeconds: number,
-    preimage?: Uint8Array
+    preimage?: Uint8Array,
+    // LSPS2 JIT: a forced intercept hint (the LSP's jit_channel_scid) the invoice MUST advertise
+    // so an external payer routes through the LSP and triggers its HTLC interceptor. Prioritized
+    // ahead of any capacity-ranked channel hints.
+    priorityHint?: HintHop
   ): Promise<{ invoice: string; paymentHash: string; preimage: string }> {
     if (!this.channelManager) throw new Error("Wallet not started");
     const pre = preimage ?? getSecureRandomBytes(32);
@@ -854,7 +864,16 @@ export class LibreListenerWallet {
     // to the original (a direct peer can still pay it) — never fail invoice creation over it.
     let finalInvoice = invoice;
     try {
-      if (!hasRouteHint(invoice)) {
+      if (priorityHint) {
+        // JIT invoice: force the LSP's intercept scid in FIRST (prioritized over capacity-ranked
+        // hints), regardless of whether LDK already added its own — an external payer must route
+        // via the intercept scid so the LSP's HTLC interceptor fires and skims the opening fee.
+        const hints = prioritizeHints(priorityHint, this.hintableChannels());
+        if (hints.length && this.keysManager) {
+          finalInvoice = appendRouteHints(invoice, hints, this.keysManager.get_node_secret_key());
+          this.logger?.info(`[Invoice] Appended intercept + ${hints.length - 1} channel hint(s) for JIT`);
+        }
+      } else if (!hasRouteHint(invoice)) {
         const hints = selectHintChannels(this.hintableChannels());
         if (hints.length && this.keysManager) {
           finalInvoice = appendRouteHints(invoice, hints, this.keysManager.get_node_secret_key());
@@ -1392,7 +1411,7 @@ export class LibreListenerWallet {
 
     const buyRes = await lspsClient.request<
       { version: number; opening_fee_params: any; payment_hash: string; client_node_id: string },
-      { jit_channel_scid: string; cltv_expiry_delta: number }
+      { jit_channel_scid: string; lsp_node_id: string; cltv_expiry_delta: number }
     >("lsps2.buy", {
       version: 1,
       opening_fee_params: selectedFeeParams,
@@ -1400,10 +1419,28 @@ export class LibreListenerWallet {
       client_node_id: bytesToHex(this.channelManager.get_our_node_id()),
     });
 
-    // 3. Generate the BOLT11 invoice with the same payment hash via the shared builder
-    // (route hints auto-added; preimage persisted for the claim path).
-    const { invoice: invoiceStr } = await this.buildInvoice(amountMsat, description, 3600, preimage);
-    this.logger?.info(`[LSPS2] Generated standard JIT invoice: ${invoiceStr}`);
+    // 3. Build the intercept route hint from the LSP's response. The jit_channel_scid is the scid
+    // lnd forwards+intercepts on; the payer must route through the LSP via it. The opening fee is
+    // skimmed by the interceptor (not carried as a hop fee), so the hop fee is 0 — the LSP sets its
+    // channel routing policy to match. cltv comes from the buy response (falling back to the menu).
+    if (!/^\d+$/.test(buyRes.jit_channel_scid)) {
+      throw new Error(`LSP returned an invalid jit_channel_scid: ${buyRes.jit_channel_scid}`);
+    }
+    if (!/^[0-9a-fA-F]{66}$/.test(buyRes.lsp_node_id ?? "")) {
+      throw new Error(`LSP returned an invalid lsp_node_id: ${buyRes.lsp_node_id}`);
+    }
+    const jitHint: HintHop = {
+      srcNodeId: buyRes.lsp_node_id,
+      scid: BigInt(buyRes.jit_channel_scid),
+      feeBaseMsat: 0,
+      feeProportionalMillionths: 0,
+      cltvExpiryDelta: buyRes.cltv_expiry_delta ?? selectedFeeParams.cltv_expiry_delta ?? 144,
+    };
+
+    // 4. Generate the BOLT11 invoice with the same payment hash via the shared builder, forcing the
+    // intercept hint (preimage persisted for the claim path).
+    const { invoice: invoiceStr } = await this.buildInvoice(amountMsat, description, 3600, preimage, jitHint);
+    this.logger?.info(`[LSPS2] Generated JIT invoice with intercept scid ${buyRes.jit_channel_scid}`);
 
     return invoiceStr;
   }

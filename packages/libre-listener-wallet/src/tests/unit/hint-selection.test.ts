@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { selectHintChannels, forwardingInfoFromLdk, type HintableChannel } from "../../hint-selection";
+import { selectHintChannels, prioritizeHints, forwardingInfoFromLdk, type HintableChannel } from "../../hint-selection";
+import type { HintHop } from "../../bolt11-hints";
 
 const FWD = { feeBaseMsat: 1000, feeProportionalMillionths: 1, cltvExpiryDelta: 80 };
 const base: HintableChannel = {
@@ -38,6 +39,39 @@ describe("selectHintChannels", () => {
     const mk = (cap: bigint, scid: bigint): HintableChannel => ({ ...base, inboundCapacityMsat: cap, inboundPaymentScid: scid });
     const hints = selectHintChannels([mk(1n, 1n), mk(4n, 4n), mk(3n, 3n), mk(2n, 2n)]);
     expect(hints.map((h) => h.scid)).toEqual([4n, 3n, 2n]);
+  });
+});
+
+// prioritizeHints places a forced intercept hint (the LSPS2 jit_channel_scid) FIRST, ahead of the
+// capacity-ranked real-channel hints — an external payer must route via the LSP's intercept scid,
+// not whichever existing channel has the most inbound capacity.
+describe("prioritizeHints", () => {
+  const PRIORITY: HintHop = {
+    srcNodeId: "03" + "ff".repeat(32),
+    scid: 999n,
+    feeBaseMsat: 0,
+    feeProportionalMillionths: 0,
+    cltvExpiryDelta: 144,
+  };
+  const mk = (cap: bigint, scid: bigint): HintableChannel => ({ ...base, inboundCapacityMsat: cap, inboundPaymentScid: scid });
+
+  it("returns the capacity-ranked hints unchanged when there is no priority hint", () => {
+    expect(prioritizeHints(undefined, [base])).toEqual(selectHintChannels([base]));
+  });
+
+  it("returns just the priority hint when there are no channels", () => {
+    expect(prioritizeHints(PRIORITY, [])).toEqual([PRIORITY]);
+  });
+
+  it("puts the priority hint first, then capacity-ranked hints, capped at 3", () => {
+    const hints = prioritizeHints(PRIORITY, [mk(1n, 1n), mk(3n, 3n), mk(2n, 2n)]);
+    expect(hints[0]).toEqual(PRIORITY);
+    expect(hints.map((h) => h.scid)).toEqual([999n, 3n, 2n]);
+  });
+
+  it("dedups a capacity hint that shares the priority scid", () => {
+    const hints = prioritizeHints({ ...PRIORITY, scid: 3n }, [mk(3n, 3n), mk(2n, 2n)]);
+    expect(hints.map((h) => h.scid)).toEqual([3n, 2n]);
   });
 });
 

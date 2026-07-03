@@ -14,6 +14,7 @@ import {
   pickRestoreNetwork,
   fetchAccountEmail,
 } from "./core/drive-rest";
+import { AUTO_START_KEY, isAutoStartEnabled } from "./core/auto-start";
 
 // The background service worker is a THIN, restartable router + permission gate. It never hosts
 // the node (that's the offscreen document) — it can be killed at ~30s idle and respawn without
@@ -46,6 +47,18 @@ async function ensureOffscreen(): Promise<void> {
   }
   await creating;
 }
+
+// ---- Auto-start ----
+//
+// Bring the wallet up on browser launch and extension install/update. The offscreen document's
+// boot runs host.autoStart() (which reads the persisted flag and readiness markers), so the only
+// job here is making sure the document exists.
+chrome.runtime.onStartup.addListener(() => {
+  void ensureOffscreen().catch((e: any) => console.warn("[AutoStart] ensureOffscreen failed:", e?.message || e));
+});
+chrome.runtime.onInstalled.addListener(() => {
+  void ensureOffscreen().catch((e: any) => console.warn("[AutoStart] ensureOffscreen failed:", e?.message || e));
+});
 
 async function callOffscreen(method: string, params?: any): Promise<any> {
   await ensureOffscreen();
@@ -372,6 +385,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         reply(chromeKV.get(AUTO_DOWNLOAD_KEY).then((v) => v === "1"));
       } else if (msg.command === "setAutoDownload") {
         reply(chromeKV.set(AUTO_DOWNLOAD_KEY, msg.params?.enabled ? "1" : ""));
+      } else if (msg.command === "getAutoStart") {
+        reply(chromeKV.get(AUTO_START_KEY).then(isAutoStartEnabled));
+      } else if (msg.command === "setAutoStart") {
+        reply(chromeKV.set(AUTO_START_KEY, msg.params?.enabled ? "1" : "0"));
       } else {
         reply(callOffscreen(msg.command, msg.params));
       }

@@ -1,6 +1,7 @@
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
 import { downloadBackupName } from "../core/backup-name";
+import { defaultPeer, parsePeerString } from "../core/wallet-config";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (el: HTMLElement, on: boolean) => el.classList.toggle("hidden", !on);
@@ -52,6 +53,7 @@ async function refresh() {
         void refreshDriveStatus();
         void refreshAutoDownload();
       }
+      void refreshAutoStart();
     }
   } catch (e: any) {
     setMsg("msg", e.message, "err");
@@ -215,6 +217,17 @@ $("auto-download").addEventListener("change", async (e) => {
   );
 });
 
+// Auto-start toggle: persisted in the background (chrome.storage.local), default ON.
+async function refreshAutoStart() {
+  const on = await command<boolean>("getAutoStart").catch(() => true);
+  ($("auto-start") as HTMLInputElement).checked = !!on;
+}
+$("auto-start").addEventListener("change", async (e) => {
+  const enabled = (e.target as HTMLInputElement).checked;
+  await command("setAutoStart", { enabled }).catch((err) => setMsg("msg", err.message, "err"));
+  setMsg("msg", enabled ? "Auto-start on — the node starts with the browser." : "Auto-start off.", "ok");
+});
+
 async function refreshDriveStatus() {
   const s = await command<{ connected: boolean; email: string | null }>("driveStatus").catch((e) => {
     console.warn("[Popup] driveStatus failed:", e?.message || e);
@@ -369,6 +382,27 @@ $("restore-confirm").addEventListener("click", async () => {
 });
 
 $("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+// Pre-fill the connect-peer fields from the saved (last-connected) peer, falling back to the
+// network default. Only fills blanks — never clobbers what the user typed. Cosmetic: failures
+// are ignored.
+async function prefillPeer() {
+  try {
+    const c = await command<any>("getConfig");
+    const peerStr = c.peer || defaultPeer(c.network || "mainnet");
+    if (!peerStr) return;
+    const { pubkey, host, port } = parsePeerString(peerStr);
+    const pk = $("peer-pubkey") as HTMLInputElement;
+    const h = $("peer-host") as HTMLInputElement;
+    const p = $("peer-port") as HTMLInputElement;
+    if (!pk.value.trim()) pk.value = pubkey;
+    if (!h.value.trim()) h.value = host;
+    if (!p.value.trim() || p.value === "9735") p.value = String(port);
+  } catch {
+    /* pre-fill is cosmetic */
+  }
+}
+void prefillPeer();
 
 onWalletEvent(() => refresh());
 void refresh();

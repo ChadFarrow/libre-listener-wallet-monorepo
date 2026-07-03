@@ -86,3 +86,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   );
   return true; // async response
 });
+
+// Auto-start: the node comes up whenever this document is created — browser launch (the
+// background's onStartup → ensureOffscreen), an extension install/update, or a lazy creation
+// for an incoming WebLN request. autoStart() is non-throwing and enforces the readiness plan.
+void host.autoStart();

@@ -1,6 +1,6 @@
 import { command } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
-import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer } from "../core/wallet-config";
+import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer, parsePeerString } from "../core/wallet-config";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const val = (id: string) => $<HTMLInputElement>(id).value.trim();
@@ -21,7 +21,7 @@ async function loadConfig() {
     $<HTMLInputElement>("esplora").value = c.esploraUrl || "";
     $<HTMLInputElement>("bridge").value = c.bridgeUrl || defaultBridgeUrl(network) || "";
     $<HTMLInputElement>("rgs").value = c.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(network) || "";
-    prefillPeer(network);
+    prefillPeer(network, c.peer);
   } catch (e: any) {
     setMsg("config-msg", e.message, "err");
   }
@@ -31,20 +31,24 @@ async function loadConfig() {
   $<HTMLInputElement>("redirect-uri").value = await command<string>("driveRedirectUri").catch(() => "");
 }
 
-// Pre-fill the connect-peer fields with the network's default channel peer (only when blank, so it
-// never clobbers what the user typed). Nothing auto-connects — they still click Connect peer.
-function prefillPeer(network: string) {
-  const peer = defaultPeer(network);
+// Pre-fill the connect-peer fields with the saved (last-connected) peer, falling back to the
+// network's default. Only fills blanks, so it never clobbers what the user typed. Nothing
+// auto-connects from here — they still click Connect peer.
+function prefillPeer(network: string, savedPeer?: string) {
+  const peer = savedPeer || defaultPeer(network);
   if (!peer) return;
-  const at = peer.lastIndexOf("@");
-  const colon = peer.lastIndexOf(":");
-  if (at < 0 || colon < at) return;
+  let parts;
+  try {
+    parts = parsePeerString(peer);
+  } catch {
+    return; // a corrupt saved peer just means no pre-fill
+  }
   const pk = $<HTMLInputElement>("peer-pubkey");
   const host = $<HTMLInputElement>("peer-host");
   const port = $<HTMLInputElement>("peer-port");
-  if (!pk.value.trim()) pk.value = peer.slice(0, at);
-  if (!host.value.trim()) host.value = peer.slice(at + 1, colon);
-  if (!port.value.trim() || port.value === "9735") port.value = peer.slice(colon + 1);
+  if (!pk.value.trim()) pk.value = parts.pubkey;
+  if (!host.value.trim()) host.value = parts.host;
+  if (!port.value.trim() || port.value === "9735") port.value = String(parts.port);
 }
 
 $("save-config").addEventListener("click", async () => {

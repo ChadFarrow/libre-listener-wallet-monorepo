@@ -22,6 +22,7 @@ import { createWebSocketStreamProvider } from "../core/ws-provider";
 import { PaymentTracker } from "./payment-tracker";
 import { payBolt11 } from "./pay-invoice";
 import { restoreBlockReason } from "./restore-guard";
+import { downloadBackupName } from "../core/backup-name";
 import type { WalletRpc } from "../core/webln-mapping";
 
 const KEYSEND_TIMEOUT_MS = 90_000;
@@ -272,6 +273,20 @@ export class WalletHost implements WalletRpc {
   async exportBackup(): Promise<string> {
     this.requireRunning();
     return this.wallet!.exportState();
+  }
+
+  // Export the backup as a Blob URL the background can hand to chrome.downloads (a service worker
+  // can't create Blob URLs; the offscreen document can). The URL is revoked after a grace period so
+  // the download has time to read it. Uses a FIXED per-network filename so the auto-backup overwrites
+  // one rolling file instead of piling up dated copies (the manual button keeps dated snapshots).
+  async exportBackupBlob(): Promise<{ url: string; filename: string }> {
+    this.requireRunning();
+    const envelope = await this.wallet!.exportState();
+    const network = await this.activeNetwork();
+    const filename = `libre-wallet-backup-${network}-auto.json`;
+    const url = URL.createObjectURL(new Blob([envelope], { type: "application/json" }));
+    setTimeout(() => URL.revokeObjectURL(url), 120_000);
+    return { url, filename };
   }
 
   // Top up: a BOLT11 invoice to receive into existing inbound capacity (open a channel first).

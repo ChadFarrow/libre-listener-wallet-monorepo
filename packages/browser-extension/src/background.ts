@@ -132,17 +132,64 @@ async function driveRestore(secret: string): Promise<any> {
   return callOffscreen("restoreWallet", { envelope, secret });
 }
 
-// Auto-sync: when the wallet's persisted state advances (a channel opened, a payment settled) and
-// Drive is connected, push a fresh encrypted backup, debounced. Mirrors the PWA — restorability is
-// prioritized over Drive-write count. A silent-token failure just skips this round.
+// ---- Auto-download backup (no cloud) ----
+//
+// When enabled, a fresh encrypted backup file is saved to Downloads whenever the wallet's state
+// advances — coalesced (trailing debounce) so a burst of activity produces one file, not dozens.
+// A service worker can't create Blob URLs, so the offscreen document mints one and we hand it to
+// chrome.downloads. Zero setup (no Google), off by default.
+const AUTO_DOWNLOAD_KEY = "auto_download_backup";
+// The node emits state-changed every ~30s from routine persistence, so a debounce isn't enough —
+// throttle to at most one auto-backup per interval. It overwrites one rolling file, so a wipe loses
+// at most this much recent state (deliberate wipes should still use the manual download first).
+const AUTO_DOWNLOAD_MIN_INTERVAL_MS = 5 * 60 * 1000;
+let autoDownloadTimer: ReturnType<typeof setTimeout> | null = null;
+let lastAutoDownloadAt = 0;
+
+async function autoDownloadBackup(): Promise<void> {
+  const { url, filename } = await callOffscreen("exportBackupBlob");
+  const id = await chrome.downloads.download({ url, filename, conflictAction: "overwrite", saveAs: false });
+  // Keep chrome://downloads tidy: erase the history record once the file is written (the file stays).
+  if (typeof id === "number") {
+    const onChanged = (delta: chrome.downloads.DownloadDelta) => {
+      if (delta.id === id && delta.state?.current === "complete") {
+        chrome.downloads.onChanged.removeListener(onChanged);
+        void chrome.downloads.erase({ id }).catch(() => {});
+      }
+    };
+    chrome.downloads.onChanged.addListener(onChanged);
+  }
+}
+
+function scheduleAutoDownload(): void {
+  if (autoDownloadTimer) return; // one already pending — coalesce this burst of state changes
+  void chromeKV.get(AUTO_DOWNLOAD_KEY).then((enabled) => {
+    if (enabled !== "1" || autoDownloadTimer) return;
+    const elapsed = Date.now() - lastAutoDownloadAt;
+    // If we're past the interval, take a fresh backup after a short settle; else wait out the interval.
+    const delay = elapsed >= AUTO_DOWNLOAD_MIN_INTERVAL_MS ? 10_000 : AUTO_DOWNLOAD_MIN_INTERVAL_MS - elapsed;
+    autoDownloadTimer = setTimeout(() => {
+      autoDownloadTimer = null;
+      lastAutoDownloadAt = Date.now();
+      void autoDownloadBackup().catch((e) => console.warn("[Backup] auto-download failed:", e?.message || e));
+    }, delay);
+  });
+}
+
+// Auto-sync: when the wallet's persisted state advances (a channel opened, a payment settled),
+// push a fresh encrypted backup, debounced. Drive sync mirrors the PWA (restorability prioritized
+// over write count); the local auto-download is the no-cloud alternative. Both are best-effort.
 let autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.kind === MSG.WALLET_EVENT && msg.event === "state-changed" && driveConnected()) {
-    if (autoSyncTimer) clearTimeout(autoSyncTimer);
-    autoSyncTimer = setTimeout(() => {
-      autoSyncTimer = null;
-      void driveBackupNow().catch((e) => console.warn("[Drive] auto-sync failed:", e?.message || e));
-    }, 5000);
+  if (msg?.kind === MSG.WALLET_EVENT && msg.event === "state-changed") {
+    if (driveConnected()) {
+      if (autoSyncTimer) clearTimeout(autoSyncTimer);
+      autoSyncTimer = setTimeout(() => {
+        autoSyncTimer = null;
+        void driveBackupNow().catch((e) => console.warn("[Drive] auto-sync failed:", e?.message || e));
+      }, 5000);
+    }
+    scheduleAutoDownload();
   }
   return false; // never the responder for events
 });
@@ -310,6 +357,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         reply(chromeKV.get(GOOGLE_CLIENT_ID_KEY));
       } else if (msg.command === "setGoogleClientId") {
         reply(chromeKV.set(GOOGLE_CLIENT_ID_KEY, String(msg.params?.clientId || "")));
+      } else if (msg.command === "getAutoDownload") {
+        reply(chromeKV.get(AUTO_DOWNLOAD_KEY).then((v) => v === "1"));
+      } else if (msg.command === "setAutoDownload") {
+        reply(chromeKV.set(AUTO_DOWNLOAD_KEY, msg.params?.enabled ? "1" : ""));
       } else {
         reply(callOffscreen(msg.command, msg.params));
       }

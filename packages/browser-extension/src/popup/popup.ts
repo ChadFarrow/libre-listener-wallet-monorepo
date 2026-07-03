@@ -1,5 +1,6 @@
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
+import { downloadBackupName } from "../core/backup-name";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (el: HTMLElement, on: boolean) => el.classList.toggle("hidden", !on);
@@ -49,6 +50,7 @@ async function refresh() {
       if (running) {
         void refreshNwcList();
         void refreshDriveStatus();
+        void refreshAutoDownload();
       }
     }
   } catch (e: any) {
@@ -177,28 +179,12 @@ async function refreshNwcList() {
 
 // ---- backup: manual export + Google Drive ----
 
-// Filename for a DOWNLOADED backup (a local label only — restore-from-file reads the contents, not
-// the name; the pinned Drive filename is separate). Includes the envelope format version + a
-// date/time stamp so multiple saved backups are distinguishable and sortable by "newest".
-function downloadBackupName(network: string, envelope: string): string {
-  let ver = "";
-  try {
-    ver = `-v${(JSON.parse(envelope).v ?? JSON.parse(envelope).version) || "?"}`;
-  } catch {
-    /* keep going without a version tag */
-  }
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-  return `libre-wallet-backup-${network}${ver}-${stamp}.json`;
-}
-
 $("export").addEventListener("click", async () => {
   setMsg("backup-msg", "Preparing backup…");
   try {
     const env = await command<string>("exportBackup");
     const state = await command<{ network: string }>("getState").catch(() => ({ network: "mainnet" }));
-    const name = downloadBackupName(state.network || "mainnet", env);
+    const name = downloadBackupName(state.network || "mainnet", env, new Date());
     // Download the (large) encrypted envelope as a file — no giant clipboard/textarea.
     const url = URL.createObjectURL(new Blob([env], { type: "application/json" }));
     const a = document.createElement("a");
@@ -212,6 +198,21 @@ $("export").addEventListener("click", async () => {
   } catch (e: any) {
     setMsg("backup-msg", e.message, "err");
   }
+});
+
+// Auto-download toggle: persisted in the background (chrome.storage.local).
+async function refreshAutoDownload() {
+  const on = await command<boolean>("getAutoDownload").catch(() => false);
+  ($("auto-download") as HTMLInputElement).checked = !!on;
+}
+$("auto-download").addEventListener("change", async (e) => {
+  const enabled = (e.target as HTMLInputElement).checked;
+  await command("setAutoDownload", { enabled }).catch((err) => setMsg("backup-msg", err.message, "err"));
+  setMsg(
+    "backup-msg",
+    enabled ? "Auto-backup on. A dated file saves to Downloads when your wallet changes." : "Auto-backup off.",
+    "ok"
+  );
 });
 
 async function refreshDriveStatus() {

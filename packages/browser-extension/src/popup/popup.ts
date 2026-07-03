@@ -1,5 +1,6 @@
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
+import { backupFilename } from "../core/drive-rest";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (el: HTMLElement, on: boolean) => el.classList.toggle("hidden", !on);
@@ -177,13 +178,21 @@ async function refreshNwcList() {
 
 // ---- backup: manual export + Google Drive ----
 $("export").addEventListener("click", async () => {
+  setMsg("backup-msg", "Preparing backup…");
   try {
     const env = await command<string>("exportBackup");
-    const out = $<HTMLTextAreaElement>("backup-out");
-    out.value = env;
-    show(out, true);
-    await navigator.clipboard.writeText(env).catch(() => {});
-    setMsg("backup-msg", "Backup exported & copied. Store it safely.", "ok");
+    const state = await command<{ network: string }>("getState").catch(() => ({ network: "mainnet" }));
+    const name = backupFilename(state.network || "mainnet");
+    // Download the (large) encrypted envelope as a file — no giant clipboard/textarea.
+    const url = URL.createObjectURL(new Blob([env], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setMsg("backup-msg", `Downloaded ${name}. Store it safely.`, "ok");
   } catch (e: any) {
     setMsg("backup-msg", e.message, "err");
   }

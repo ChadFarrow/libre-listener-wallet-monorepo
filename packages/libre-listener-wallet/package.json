@@ -20,6 +20,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@libre/lsps2-server": "workspace:*",
     "bolt11": "^1.4.1",
     "fake-indexeddb": "^6.0.0",
     "jsdom": "^24.0.0",

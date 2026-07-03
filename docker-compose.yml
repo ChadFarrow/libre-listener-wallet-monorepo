@@ -64,6 +64,8 @@ services:
       --protocol.option-scid-alias
       --noseedbackup
       --accept-keysend
+      --bitcoin.basefee=0
+      --bitcoin.feerate=0
       --debuglevel=info
     ports:
       # strictly bound to localhost for security
@@ -72,6 +74,39 @@ services:
       - "127.0.0.1:9735:9735"
     volumes:
       - lnd-data:/root/.lnd
+    depends_on:
+      - bitcoind
+
+  # Second lnd used ONLY by the LSPS2 integration test as the external PAYER. Real JIT interception
+  # only fires on FORWARDED htlcs, so the payment must originate here and route payer -> lnd(LSP) ->
+  # client. Reachable in-network as lnd-payer:9735; the test drives it via `docker exec`.
+  lnd-payer:
+    image: lightninglabs/lnd:v0.18.5-beta
+    container_name: libre-lnd-payer
+    command: >
+      --bitcoin.active
+      --bitcoin.regtest
+      --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind
+      --bitcoind.rpcuser=libre
+      --bitcoind.rpcpass=listener
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28332
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28333
+      --rpclisten=0.0.0.0:10009
+      --restlisten=0.0.0.0:8080
+      --listen=0.0.0.0:9735
+      --protocol.zero-conf
+      --protocol.option-scid-alias
+      --noseedbackup
+      --accept-keysend
+      --debuglevel=info
+    ports:
+      # strictly bound to localhost for security
+      - "127.0.0.1:10010:10009"
+      - "127.0.0.1:8089:8080"
+      - "127.0.0.1:9736:9735"
+    volumes:
+      - lnd-payer-data:/root/.lnd
     depends_on:
       - bitcoind
 
@@ -90,3 +125,4 @@ volumes:
   bitcoin-data:
   electrs-db:
   lnd-data:
+  lnd-payer-data:

@@ -1,3 +1,4 @@
+import QRCode from "qrcode";
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
 import { downloadBackupName } from "../core/backup-name";
@@ -101,6 +102,7 @@ $("connect-peer").addEventListener("click", async () => {
 // ---- top up: create a receive invoice ----
 $("create-invoice").addEventListener("click", async () => {
   setMsg("receive-msg", "Creating invoice…");
+  show($("invoice-qr"), false); // never leave a stale QR up while the new invoice is created
   try {
     const { paymentRequest } = await command<{ paymentRequest: string }>("createInvoice", {
       amountSats: Number(($("invoice-amount") as HTMLInputElement).value),
@@ -110,7 +112,16 @@ $("create-invoice").addEventListener("click", async () => {
     out.value = paymentRequest;
     show(out, true);
     show($("copy-invoice"), true);
-    setMsg("receive-msg", "Invoice ready — pay it from another wallet to top up", "ok");
+    // Render the QR locally (bundled qrcode) — never via a QR image service, same rule as the
+    // PWA's NWC QR. Best-effort: the textarea + copy button are the fallback if rendering fails.
+    try {
+      const qr = $<HTMLImageElement>("invoice-qr");
+      qr.src = await QRCode.toDataURL(paymentRequest, { width: 190, margin: 1 });
+      show(qr, true);
+    } catch (qrErr: any) {
+      console.warn("[Receive] could not render invoice QR:", qrErr?.message || qrErr);
+    }
+    setMsg("receive-msg", "Invoice ready — scan it or pay it from another wallet to top up", "ok");
   } catch (e: any) {
     setMsg("receive-msg", e.message, "err");
   }

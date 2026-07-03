@@ -175,7 +175,11 @@ function scheduleAutoDownload(): void {
 // push a fresh encrypted backup, debounced. Drive sync mirrors the PWA (restorability prioritized
 // over write count); the local auto-download is the no-cloud alternative. Both are best-effort.
 let autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  // Defense-in-depth: only our own contexts (the offscreen host) emit wallet events. A content
+  // script's sender.url is the web page, so this rejects any page-originated forgery — matching the
+  // sender gating on every other message kind.
+  if (!isFromExtensionContext(sender, chrome.runtime.id, chrome.runtime.getURL(""))) return false;
   if (msg?.kind === MSG.WALLET_EVENT && msg.event === "state-changed") {
     if (driveConnected()) {
       if (autoSyncTimer) clearTimeout(autoSyncTimer);

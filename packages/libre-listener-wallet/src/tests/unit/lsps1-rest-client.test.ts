@@ -92,4 +92,29 @@ describe("Lsps1RestClient", () => {
     const client = new Lsps1RestClient({ baseUrl: "https://x/api", fetchImpl: impl });
     await expect(client.getInfo()).rejects.toThrow();
   });
+
+  // Regression: in a browser the global `fetch` must be invoked with `this === window`/globalThis, or
+  // it throws "Failed to execute 'fetch' on 'Window': Illegal invocation". Storing the bare global and
+  // calling it as `this.fetchImpl(url)` sets `this` to the client instance and triggers that error.
+  // Seen live in the extension/PWA LSPS1 quote flow. The default fetch must be bound to globalThis.
+  it("default fetch is invoked with globalThis as receiver (no 'Illegal invocation')", async () => {
+    const realFetch = globalThis.fetch;
+    const brandChecked = function (this: unknown) {
+      if (this !== globalThis) {
+        throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(GET_INFO), { status: 200, headers: { "content-type": "application/json" } })
+      );
+    };
+    (globalThis as any).fetch = brandChecked;
+    try {
+      // No fetchImpl injected → the client must default to a correctly-bound global fetch.
+      const client = new Lsps1RestClient({ baseUrl: "https://lsp.example/api" });
+      const info = await client.getInfo();
+      expect(info.min_channel_balance_sat).toBe("150000");
+    } finally {
+      (globalThis as any).fetch = realFetch;
+    }
+  });
 });

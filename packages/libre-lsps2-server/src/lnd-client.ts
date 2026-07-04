@@ -12,7 +12,7 @@ export class LndRestClient {
   constructor(cfg: LndRestConfig) {
     this.restUrl = cfg.restUrl.replace(/\/$/, "");
     this.macaroonHex = cfg.macaroonHex;
-    this.fetchImpl = cfg.fetchImpl ?? fetch;
+    this.fetchImpl = cfg.fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
   private async call(method: string, path: string, body?: object): Promise<any> {

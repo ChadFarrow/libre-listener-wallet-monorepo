@@ -13,7 +13,7 @@ export class BitcoindClient {
   private fetchImpl: typeof fetch;
   constructor(cfg: BitcoindConfig) {
     this.cfg = cfg;
-    this.fetchImpl = cfg.fetchImpl ?? fetch;
+    this.fetchImpl = cfg.fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
   private async rpc(method: string, params: any[]): Promise<any> {

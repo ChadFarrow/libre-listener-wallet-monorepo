@@ -34,7 +34,9 @@ export class Lsps1RestClient {
 
   constructor(cfg: Lsps1RestClientConfig) {
     this.base = cfg.baseUrl.replace(/\/$/, "");
-    this.fetchImpl = cfg.fetchImpl ?? fetch;
+    // Bind to globalThis: a browser's global `fetch` throws "Illegal invocation" if invoked with a
+    // non-Window receiver (e.g. as `this.fetchImpl(url)`). Injected impls (tests) are used as-is.
+    this.fetchImpl = cfg.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.logger = cfg.logger;
   }
 

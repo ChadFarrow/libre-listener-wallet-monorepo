@@ -218,6 +218,14 @@ export interface Lsps1CreateOrderResponse {
   };
 }
 
+// Append the desired peer target (host:port) to a WebSocket bridge base URL. The multi-target
+// ws-bridge reads ?target= and connects there; an old single-target websockify ignores the query,
+// so the default-peer path stays backward-compatible during rollout.
+export function bridgeTargetUrl(base: string, host: string, port: number): string {
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}target=${encodeURIComponent(`${host}:${port}`)}`;
+}
+
 export * from "./v4v-utils";
 export * from "./nwc-schema";
 

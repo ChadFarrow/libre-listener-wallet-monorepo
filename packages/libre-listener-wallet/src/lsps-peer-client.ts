@@ -15,7 +15,7 @@ import {
   type PeerManager,
   type Init,
 } from "lightningdevkit";
-import type { Lsps2GetVersionsResponse, Lsps2GetInfoResponse } from "@libre/shared";
+import type { Lsps2GetInfoResponse } from "@libre/shared";
 import {
   LSPS_PEER_MSG_TYPE,
   encodeLspsMessage,
@@ -99,7 +99,13 @@ export class LspsPeerClient {
         peer_connected: (_id: Uint8Array, _msg: Init, _inbound: boolean): Result_NoneNoneZ =>
           Result_NoneNoneZ.constructor_ok(),
         provided_node_features: (): NodeFeatures => NodeFeatures.constructor_empty(),
-        provided_init_features: (_id: Uint8Array): InitFeatures => InitFeatures.constructor_empty(),
+        provided_init_features: (_id: Uint8Array): InitFeatures => {
+          // LSPS0 (bLIP-50) `option_supports_lsps` feature bit 729 — some LSPs only answer LSPS
+          // messages from a peer that advertises it in its init.
+          const f = InitFeatures.constructor_empty();
+          f.set_optional_custom_bit(729);
+          return f;
+        },
       },
       reader
     );
@@ -130,11 +136,11 @@ export class LspsPeerClient {
     });
   }
 
-  getVersions(peerPubkeyHex: string): Promise<Lsps2GetVersionsResponse> {
-    return this.request(peerPubkeyHex, "lsps2.get_versions", {});
-  }
-
-  getInfo(peerPubkeyHex: string, params: { version: number; token?: string }): Promise<Lsps2GetInfoResponse> {
+  // LSPS2 (bLIP-52) has NO `get_versions` method — `get_info` is the client entry point and takes only
+  // an optional `token`. (The regtest dev LSP's `get_versions` was a non-standard extension; sending it
+  // to a spec-compliant LSP gets no reply. Verified against Megalith: getInfo answers, get_versions
+  // times out.)
+  getInfo(peerPubkeyHex: string, params: { token?: string } = {}): Promise<Lsps2GetInfoResponse> {
     return this.request(peerPubkeyHex, "lsps2.get_info", params);
   }
 }

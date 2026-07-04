@@ -68,7 +68,7 @@ describe("LspsPeerClient", () => {
     const handler = client.buildHandler();
     client.setPeerManager({ process_events: () => {} } as any);
 
-    const p = client.getInfo(PEER, { version: 1 });
+    const p = client.getInfo(PEER);
     const sentReq = decodeLspsMessage(handler.get_and_clear_pending_msg()[0].get_b().write());
     const respBytes = encodeLspsMessage({ jsonrpc: "2.0", id: sentReq.id, error: { code: 1, message: "unsupported" } });
     handler.handle_custom_message(

@@ -22,7 +22,13 @@ const BRIDGE = "wss://ws-bridge-production-9e2f.up.railway.app";
 const ESPLORA = "https://mempool.space/api";
 const LSPS = [
   {
-    name: "Megalith",
+    name: "Megalith-JIT (main-page node)",
+    pubkey: "0322d0e43b3d92d30ed187f4e101a9a9605c3ee5fc9721e6dac3ce3d7732fbb13e",
+    host: "164.92.106.32",
+    port: 9735,
+  },
+  {
+    name: "Megalith-LSPS1-node",
     pubkey: "038a9e56512ec98da2b5789761f7af8f280baf98a09282360cd6ff1381b5e889bf",
     host: "64.23.162.51",
     port: 9735,

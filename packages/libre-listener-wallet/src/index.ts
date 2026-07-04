@@ -1452,21 +1452,42 @@ export class LibreListenerWallet {
 
   /**
    * LSPS2 discovery over the BOLT8 peer transport (custom message 37913): connect to the LSP node
-   * (dialed through the configured ws-bridge), then lsps2.get_versions -> lsps2.get_info. Returns the
-   * fee-param menu. Gate-1 check that a real LSP actually speaks LSPS2. Does not spend anything.
+   * (dialed through the configured ws-bridge), then lsps2.get_info (the spec entry point — there is NO
+   * get_versions in bLIP-52). Returns the opening-fee-param menu. Gate-1 check that a real LSP speaks
+   * LSPS2. Does not spend anything.
    */
-  async getLSPS2Info(opts: { lspPubkey: string; lspHost: string; lspPort: number }): Promise<Lsps2GetInfoResponse> {
+  async getLSPS2Info(opts: {
+    lspPubkey: string;
+    lspHost: string;
+    lspPort: number;
+    token?: string;
+  }): Promise<Lsps2GetInfoResponse> {
     if (!this.peerManager || !this.lspsPeerClient) {
       throw new Error("Wallet is not running");
     }
     await this.connectPeer(opts.lspPubkey, opts.lspHost, opts.lspPort);
-    const versions = await this.lspsPeerClient.getVersions(opts.lspPubkey);
-    const version = Math.max(...(versions.versions ?? []));
-    if (!Number.isFinite(version) || version <= 0) {
-      throw new Error(`LSP ${opts.lspPubkey} returned no LSPS2 versions`);
+    // connectPeer resolves on socket-open, BEFORE the BOLT8 handshake/Init completes. If we send a
+    // custom message now, LDK drains it from the handler but drops it ("no connection to the node
+    // exists, the message is simply not sent") and our queue is empty — the request is lost. Wait for
+    // the peer to appear in list_peers() (post-handshake) before sending.
+    await this.waitForPeerReady(opts.lspPubkey, 15000);
+    return this.lspsPeerClient.getInfo(opts.lspPubkey, opts.token ? { token: opts.token } : {});
+  }
+
+  // Poll LDK's list_peers() until the given peer has completed the BOLT8 handshake (only then can a
+  // custom message be delivered to it). Throws on timeout.
+  private async waitForPeerReady(pubkeyHex: string, timeoutMs: number): Promise<void> {
+    if (!this.peerManager) throw new Error("Wallet is not running");
+    const target = pubkeyHex.toLowerCase();
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const ready = this.peerManager
+        .list_peers()
+        .some((p) => bytesToHex(p.get_counterparty_node_id()).toLowerCase() === target);
+      if (ready) return;
+      await new Promise((r) => setTimeout(r, 200));
     }
-    this.logger?.info?.(`[LSPS2] ${opts.lspPubkey} supports versions ${JSON.stringify(versions.versions)}; using ${version}`);
-    return this.lspsPeerClient.getInfo(opts.lspPubkey, { version });
+    throw new Error(`Peer ${pubkeyHex} did not complete the handshake within ${timeoutMs}ms`);
   }
 
   // --- LSPS1 Inbound Capacity Purchase ---

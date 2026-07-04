@@ -479,6 +479,35 @@ export class WalletHost implements WalletRpc {
     await this.wallet!.syncGossip();
   }
 
+  // Buy inbound liquidity from a real mainnet LSP over the LSPS1 REST binding (Megalith / Olympus).
+  // Returns the payment invoice + real opening fee; pay it, then poll getLSPS1Order until COMPLETED.
+  // The api_url is the provider's REST base; the peer node is read live from its get_info uris.
+  async purchaseLSPS1Capacity(params: {
+    amountSats: number;
+    apiUrl: string;
+    providerName: string;
+    channelExpiryBlocks?: number;
+  }): Promise<{ orderId: string; invoice: string; feeTotalSat?: string; onchainAddress?: string; lspPeerUri?: string }> {
+    this.requireRunning();
+    return this.wallet!.purchaseLSPS1Capacity({
+      amountSats: params.amountSats,
+      lsp: {
+        name: params.providerName,
+        pubkey: "",
+        connection_string: "",
+        api_url: params.apiUrl,
+        protocols: ["lsps1"],
+      },
+      ...(params.channelExpiryBlocks != null ? { channelExpiryBlocks: params.channelExpiryBlocks } : {}),
+    });
+  }
+
+  // Poll an LSPS1 order's status after paying its invoice (COMPLETED once the channel opens).
+  async getLSPS1Order(apiUrl: string, orderId: string): Promise<unknown> {
+    this.requireRunning();
+    return this.wallet!.getLSPS1Order(apiUrl, orderId);
+  }
+
   // ---- WalletRpc (WebLN-facing) ----
 
   async getInfo(): Promise<{ pubkey: string; alias: string; network: string }> {

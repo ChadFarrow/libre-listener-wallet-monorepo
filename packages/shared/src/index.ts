@@ -150,10 +150,36 @@ export interface Lsps1RestProvider {
   name: string;
   restBaseUrl: string;
   supportsZeroConf: boolean; // 0-conf (instant) channels over LSPS1
+  // Channel-size bounds + lease/cost character. Live-verified against each LSP's get_info 2026-07-04
+  // (reference values for informed provider selection + client-side range guard; the SDK still clamps
+  // against the LSP's live get_info at order time, so a slightly-stale hint here is harmless).
+  minChannelSat: number;
+  maxChannelSat: number;
+  maxLeaseBlocks: number; // LSP's max_channel_expiry_blocks — the longest lease it will grant
+  leaseMonthsApprox: number;
+  costNote: string; // one-line cost/lease summary for the picker help text
 }
 export const LSPS1_REST_PROVIDERS: Record<string, Lsps1RestProvider> = {
-  megalith: { name: "Megalith", restBaseUrl: "https://megalithic.me/api/lsps1/v1", supportsZeroConf: true },
-  olympus: { name: "Olympus (ZEUS)", restBaseUrl: "https://lsps1.lnolymp.us/api/v1", supportsZeroConf: false },
+  megalith: {
+    name: "Megalith",
+    restBaseUrl: "https://megalithic.me/api/lsps1/v1",
+    supportsZeroConf: true,
+    minChannelSat: 150_000,
+    maxChannelSat: 16_000_000,
+    maxLeaseBlocks: 13_140, // ~3 months
+    leaseMonthsApprox: 3,
+    costNote: "Cheaper upfront + instant (0-conf), ~3-month lease",
+  },
+  olympus: {
+    name: "Olympus (ZEUS)",
+    restBaseUrl: "https://lsps1.lnolymp.us/api/v1",
+    supportsZeroConf: false,
+    minChannelSat: 100_000,
+    maxChannelSat: 10_000_000,
+    maxLeaseBlocks: 52_560, // ~12 months
+    leaseMonthsApprox: 12,
+    costNote: "Pricier upfront but ~12-month lease (cheaper per month), 3-conf",
+  },
 };
 
 // LSPS1 Inbound capacity interfaces

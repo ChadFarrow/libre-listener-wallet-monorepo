@@ -1,7 +1,16 @@
-import { command } from "../ui/rpc";
+import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
-import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer, parsePeerString } from "../core/wallet-config";
+import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer, parsePeerString, formatPeerString } from "../core/wallet-config";
 import { downloadBackupName } from "../core/backup-name";
+import { LSPS1_REST_PROVIDERS } from "@libre/shared";
+import {
+  formatOpeningFee,
+  validateAmountForProvider,
+  suggestProviderForAmount,
+  providerSummary,
+  isLeaseOptionAvailable,
+  clampLeaseSelectionValue,
+} from "../core/lsps1-provider-ui";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const val = (id: string) => $<HTMLInputElement>(id).value.trim();
@@ -92,6 +101,99 @@ $("save-sweep").addEventListener("click", async () => {
   }
 });
 
+// ---- LSPS1: buy inbound capacity from a real mainnet LSP (Megalith / Olympus) ----
+// The order button is enabled only when the node is running AND the requested size fits the selected
+// provider. lsps1Running is kept live by refreshBackupState (+ wallet events); lsps1Valid by the picker.
+let lsps1Running = false;
+let lsps1Valid = false;
+function updateLsps1OrderBtn() {
+  ($("lsps1-order") as HTMLButtonElement).disabled = !(lsps1Running && lsps1Valid);
+}
+
+// Reflect the selected provider's cost/lease/bounds, offer only lease durations it grants, and
+// validate the amount (Megalith rejects <150k; Olympus serves 100k+).
+function refreshLsps1Provider() {
+  const providerKey = $<HTMLSelectElement>("lsps1-provider").value;
+  const provider = LSPS1_REST_PROVIDERS[providerKey] ?? LSPS1_REST_PROVIDERS.megalith;
+  $("lsps1-provider-summary").textContent = providerSummary(provider);
+
+  const amountEl = $<HTMLInputElement>("lsps1-amount");
+  amountEl.min = String(provider.minChannelSat);
+  amountEl.max = String(provider.maxChannelSat);
+
+  const leaseEl = $<HTMLSelectElement>("lsps1-lease");
+  for (const opt of Array.from(leaseEl.options)) {
+    if (opt.value === "") {
+      opt.textContent = `Longest available (~${provider.leaseMonthsApprox} months, recommended)`;
+      continue;
+    }
+    opt.disabled = !isLeaseOptionAvailable(parseInt(opt.value, 10) || 0, provider.maxLeaseBlocks);
+  }
+  leaseEl.value = clampLeaseSelectionValue(leaseEl.value, provider.maxLeaseBlocks);
+
+  const amountSats = parseInt(amountEl.value, 10);
+  const check = validateAmountForProvider(amountSats, provider);
+  const msgEl = $("lsps1-amount-msg");
+  if (check.ok) {
+    msgEl.textContent = "";
+    msgEl.style.color = "";
+  } else {
+    const alt = suggestProviderForAmount(amountSats, providerKey);
+    msgEl.textContent = `${check.message ?? "Invalid amount."}${alt ? ` Try ${alt.provider.name}, which serves this size.` : ""}`;
+    msgEl.style.color = "#c0392b";
+  }
+  lsps1Valid = check.ok;
+  updateLsps1OrderBtn();
+}
+$("lsps1-provider").addEventListener("change", refreshLsps1Provider);
+$("lsps1-amount").addEventListener("input", refreshLsps1Provider);
+
+$("lsps1-order").addEventListener("click", async () => {
+  const providerKey = $<HTMLSelectElement>("lsps1-provider").value;
+  const provider = LSPS1_REST_PROVIDERS[providerKey] ?? LSPS1_REST_PROVIDERS.megalith;
+  const amountSats = parseInt(val("lsps1-amount"), 10);
+
+  const check = validateAmountForProvider(amountSats, provider);
+  if (!check.ok) {
+    const alt = suggestProviderForAmount(amountSats, providerKey);
+    setMsg("lsps1-msg", `${check.message}${alt ? ` Try ${alt.provider.name}.` : ""}`, "err");
+    return;
+  }
+
+  const leaseRaw = $<HTMLSelectElement>("lsps1-lease").value.trim();
+  const channelExpiryBlocks = leaseRaw ? parseInt(leaseRaw, 10) : undefined;
+
+  const btn = $<HTMLButtonElement>("lsps1-order");
+  btn.disabled = true;
+  $("lsps1-fee-readout").style.display = "none";
+  $("lsps1-invoice").style.display = "none";
+  $("lsps1-invoice-label").style.display = "none";
+  setMsg("lsps1-msg", `Getting quote from ${provider.name}…`);
+
+  try {
+    const order = await command<{ orderId: string; invoice: string; feeTotalSat?: string }>("purchaseLSPS1Capacity", {
+      amountSats,
+      apiUrl: provider.restBaseUrl,
+      providerName: provider.name,
+      ...(channelExpiryBlocks != null ? { channelExpiryBlocks } : {}),
+    });
+    const feeText = formatOpeningFee(order.feeTotalSat, amountSats);
+    const fee = $("lsps1-fee-readout");
+    fee.textContent = `${provider.name} opening fee: ${feeText} — pay only if you want this channel.`;
+    fee.style.display = "block";
+    const inv = $<HTMLTextAreaElement>("lsps1-invoice");
+    inv.value = order.invoice;
+    inv.style.display = "block";
+    $("lsps1-invoice-label").style.display = "block";
+    setMsg("lsps1-msg", `Order ${order.orderId} placed. Pay the invoice below to open the channel.`, "ok");
+  } catch (e: any) {
+    setMsg("lsps1-msg", e.message, "err");
+  } finally {
+    btn.disabled = false;
+    updateLsps1OrderBtn(); // re-apply the running/valid gate
+  }
+});
+
 $("connect-peer").addEventListener("click", async () => {
   try {
     await command("connectPeer", {
@@ -102,6 +204,21 @@ $("connect-peer").addEventListener("click", async () => {
     setMsg("peer-msg", "Peer connected", "ok");
   } catch (e: any) {
     setMsg("peer-msg", e.message, "err");
+  }
+});
+
+$("copy-peer").addEventListener("click", async () => {
+  const pubkey = val("peer-pubkey");
+  if (!pubkey) {
+    setMsg("peer-msg", "Enter a peer pubkey first.", "err");
+    return;
+  }
+  const conn = formatPeerString(pubkey, val("peer-host"), Number(val("peer-port")) || 9735);
+  try {
+    await navigator.clipboard.writeText(conn);
+    setMsg("peer-msg", `Copied ${conn}`, "ok");
+  } catch {
+    setMsg("peer-msg", `Copy failed — connection string: ${conn}`, "err");
   }
 });
 
@@ -116,6 +233,8 @@ async function refreshBackupState() {
   ($("export") as HTMLButtonElement).disabled = !running;
   ($("drive-backup-now") as HTMLButtonElement).disabled = !running;
   if (!running) setMsg("backup-msg", "Start the node in the popup to export or sync a backup.");
+  lsps1Running = running;
+  updateLsps1OrderBtn();
 }
 
 $("export").addEventListener("click", async () => {
@@ -256,3 +375,10 @@ void loadSweep();
 void refreshBackupState();
 void refreshAutoDownload();
 void refreshDriveStatus();
+refreshLsps1Provider();
+
+// Keep node-running-gated controls live if the node is started/stopped from the popup while this
+// page is open (backup buttons + the LSPS1 order button).
+onWalletEvent((event) => {
+  if (event === "state-changed" || event === "status") void refreshBackupState();
+});

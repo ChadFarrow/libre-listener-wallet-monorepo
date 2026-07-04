@@ -5,6 +5,14 @@ import {
   WebSocketConnection,
 } from "@libre/listener-wallet";
 import { LSPS1_REST_PROVIDERS } from "@libre/shared";
+import {
+  formatOpeningFee,
+  validateAmountForProvider,
+  suggestProviderForAmount,
+  providerSummary,
+  isLeaseOptionAvailable,
+  clampLeaseSelectionValue,
+} from "./core/lsps1-provider-ui";
 
 // Boot MSW browser worker conditionally in development mode to intercept LSP API (9099) requests
 if (import.meta.env.DEV) {
@@ -291,8 +299,12 @@ const copyJitInvoiceBtn = document.getElementById("copy-jit-invoice-btn") as HTM
 
 const lspPresetSelect = document.getElementById("lsp-preset") as HTMLSelectElement;
 const purchaseLsps1Btn = document.getElementById("purchase-lsps1-btn") as HTMLButtonElement;
+const lsps1ProviderSelect = document.getElementById("lsps1-provider") as HTMLSelectElement;
+const lsps1ProviderSummary = document.getElementById("lsps1-provider-summary") as HTMLSpanElement;
 const lsps1AmountInput = document.getElementById("lsps1-amount") as HTMLInputElement;
+const lsps1AmountMsg = document.getElementById("lsps1-amount-msg") as HTMLSpanElement;
 const lsps1LeaseSelect = document.getElementById("lsps1-lease") as HTMLSelectElement;
+const lsps1FeeReadout = document.getElementById("lsps1-fee-readout") as HTMLDivElement;
 const lsps1InvoiceContainer = document.getElementById("lsps1-invoice-container") as HTMLDivElement;
 const lsps1InvoiceStr = document.getElementById("lsps1-invoice-str") as HTMLTextAreaElement;
 const copyLsps1InvoiceBtn = document.getElementById("copy-lsps1-invoice-btn") as HTMLButtonElement;
@@ -646,7 +658,7 @@ startNodeBtn.addEventListener("click", async () => {
     networkSelect.disabled = true;
     connectLspBtn.disabled = false;
     requestJitBtn.disabled = false;
-    purchaseLsps1Btn.disabled = false;
+    refreshLsps1Provider(); // enables purchase only if the amount fits the selected provider
     setV4VEnabled(true);
     createInvoiceBtn.disabled = false;
     setNwcEnabled(true);
@@ -846,17 +858,67 @@ createInvoiceBtn.addEventListener("click", async () => {
 copyReceiveInvoiceBtn.addEventListener("click", () => copyToClipboard(receiveInvoiceStr.value, "Invoice copied to clipboard."));
 
 // 10. Purchase LSPS1 Capacity
+// Keep the picker informed: reflect the selected provider's cost/lease character + sat bounds, and
+// validate the requested amount against that provider (Megalith rejects <150k; Olympus serves 100k+).
+function refreshLsps1Provider(): void {
+  const providerKey = lsps1ProviderSelect.value;
+  const provider = LSPS1_REST_PROVIDERS[providerKey] ?? LSPS1_REST_PROVIDERS.megalith;
+  lsps1ProviderSummary.textContent = providerSummary(provider);
+  lsps1AmountInput.min = String(provider.minChannelSat);
+  lsps1AmountInput.max = String(provider.maxChannelSat);
+
+  // Only offer lease durations the provider actually grants — Megalith caps at ~3 months, so its 6/12
+  // month options must be disabled (else the SDK silently clamps them back down).
+  for (const opt of Array.from(lsps1LeaseSelect.options)) {
+    if (opt.value === "") {
+      opt.textContent = `Longest available (~${provider.leaseMonthsApprox} months, recommended)`;
+      continue;
+    }
+    opt.disabled = !isLeaseOptionAvailable(parseInt(opt.value, 10) || 0, provider.maxLeaseBlocks);
+  }
+  lsps1LeaseSelect.value = clampLeaseSelectionValue(lsps1LeaseSelect.value, provider.maxLeaseBlocks);
+
+  const amountSats = parseInt(lsps1AmountInput.value, 10);
+  const check = validateAmountForProvider(amountSats, provider);
+  if (check.ok) {
+    lsps1AmountMsg.textContent = "";
+    lsps1AmountMsg.style.color = "";
+    purchaseLsps1Btn.disabled = !(wallet && isNodeRunning);
+  } else {
+    const alt = suggestProviderForAmount(amountSats, providerKey);
+    const hint = alt ? ` Try ${alt.provider.name}, which serves this size.` : "";
+    lsps1AmountMsg.textContent = `${check.message ?? "Invalid amount."}${hint}`;
+    lsps1AmountMsg.style.color = "var(--color-danger, #d9534f)";
+    purchaseLsps1Btn.disabled = true;
+  }
+}
+lsps1ProviderSelect.addEventListener("change", refreshLsps1Provider);
+lsps1AmountInput.addEventListener("input", refreshLsps1Provider);
+refreshLsps1Provider();
+
 purchaseLsps1Btn.addEventListener("click", async () => {
   if (!wallet || !isNodeRunning) return;
+
+  const amountSats = parseInt(lsps1AmountInput.value, 10);
+  // Real mainnet LSP over the LSPS1 REST binding — api_url is the provider's REST base; the peer
+  // node is read live from its get_info uris (not lsp.connection_string).
+  const providerKey = lsps1ProviderSelect.value;
+  const provider = LSPS1_REST_PROVIDERS[providerKey] ?? LSPS1_REST_PROVIDERS.megalith;
+
+  // Guard the doomed request client-side (the LSP would reject an out-of-range size anyway).
+  const check = validateAmountForProvider(amountSats, provider);
+  if (!check.ok) {
+    const alt = suggestProviderForAmount(amountSats, providerKey);
+    const hint = alt ? ` Try ${alt.provider.name}.` : "";
+    appendLog(`[LSPS1] ${check.message}${hint}`, "error");
+    return;
+  }
+
   try {
     purchaseLsps1Btn.disabled = true;
     lsps1InvoiceContainer.classList.add("hidden");
+    lsps1FeeReadout.classList.add("hidden");
 
-    const amountSats = parseInt(lsps1AmountInput.value, 10);
-    // Real mainnet LSP over the LSPS1 REST binding — api_url is the provider's REST base; the peer
-    // node is read live from its get_info uris (not lsp.connection_string).
-    const providerKey = (document.getElementById("lsps1-provider") as HTMLSelectElement).value;
-    const provider = LSPS1_REST_PROVIDERS[providerKey] ?? LSPS1_REST_PROVIDERS.megalith;
     const lsp = {
       name: provider.name,
       pubkey: "",
@@ -879,10 +941,13 @@ purchaseLsps1Btn.addEventListener("click", async () => {
       ...(channelExpiryBlocks !== undefined ? { channelExpiryBlocks } : {}),
     });
 
+    const feeText = formatOpeningFee(order.feeTotalSat, amountSats);
     appendLog(
-      `[LSPS1] Order ${order.orderId} placed! Fee ${order.feeTotalSat ?? "?"} sat. Pay invoice: ${order.invoice.substring(0, 30)}…`,
+      `[LSPS1] Order ${order.orderId} placed via ${provider.name}. Opening fee: ${feeText}. Pay invoice: ${order.invoice.substring(0, 30)}…`,
       "system"
     );
+    lsps1FeeReadout.textContent = `${provider.name} opening fee: ${feeText} — pay only if you want this channel.`;
+    lsps1FeeReadout.classList.remove("hidden");
     lsps1InvoiceStr.value = order.invoice;
     lsps1InvoiceContainer.classList.remove("hidden");
   } catch (err: any) {

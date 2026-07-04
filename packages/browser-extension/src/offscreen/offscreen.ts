@@ -61,6 +61,10 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.connectPeer(params.pubkey, params.host, params.port);
     case "syncGossip":
       return host.syncGossip();
+    case "purchaseLSPS1Capacity":
+      return host.purchaseLSPS1Capacity(params ?? {});
+    case "getLSPS1Order":
+      return host.getLSPS1Order(params.apiUrl, params.orderId);
     case "getBalance":
       return host.getBalanceSats();
     case "createInvoice":

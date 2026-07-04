@@ -65,6 +65,19 @@ describe("ws-bridge server", () => {
     expect(code).toBe(1008);
   });
 
+  it("rejects `ready` when the port is already in use (EADDRINUSE)", async () => {
+    const first = startBridge({ port: 0, allowlist: new Set() });
+    cleanups.push(first.close);
+    const port = await first.ready;
+
+    const second = startBridge({ port, allowlist: new Set() });
+    // Swallow the rejection at the promise level too, so a slow assertion
+    // failure below can't leave an unhandled rejection lingering.
+    second.ready.catch(() => {});
+    await expect(second.ready).rejects.toThrow();
+    // The second bridge never started listening, so there's nothing to close.
+  });
+
   it("falls back to BRIDGE_TARGET when no ?target is given", async () => {
     const echo = await startEcho();
     cleanups.push(echo.close);

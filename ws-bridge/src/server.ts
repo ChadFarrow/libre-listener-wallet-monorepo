@@ -1,6 +1,7 @@
 import { WebSocketServer, type WebSocket, type RawData } from "ws";
 import net from "node:net";
 import { isTargetAllowed, parseTarget } from "./allowlist";
+import { clientIp } from "./client-ip";
 
 export interface BridgeConfig {
   port: number;
@@ -17,12 +18,23 @@ export function startBridge(cfg: BridgeConfig): { ready: Promise<number>; close:
   const perIp = new Map<string, number>();
   const wss = new WebSocketServer({ port: cfg.port });
 
-  const ready = new Promise<number>((resolve) =>
-    wss.on("listening", () => resolve((wss.address() as net.AddressInfo).port))
-  );
+  let rejectReady: (err: Error) => void;
+  const ready = new Promise<number>((resolve, reject) => {
+    rejectReady = reject;
+    wss.on("listening", () => resolve((wss.address() as net.AddressInfo).port));
+  });
+
+  wss.on("error", (err) => {
+    log(`server error: ${err.message}`);
+    rejectReady(err);
+  });
 
   wss.on("connection", (ws: WebSocket, req) => {
-    const ip = req.socket.remoteAddress ?? "?";
+    // X-Forwarded-For is client-spoofable, so this cap is a coarse abuse-bound
+    // (not a security control) — behind Railway, req.socket.remoteAddress is
+    // the shared edge-proxy IP, so we must key on the real client IP instead.
+    // The allowlist (isTargetAllowed) is the actual security control.
+    const ip = clientIp(req.headers["x-forwarded-for"], req.socket.remoteAddress);
     const url = new URL(req.url ?? "/", "http://localhost");
     const rawTarget = url.searchParams.get("target") ?? cfg.fallbackTarget ?? "";
 
@@ -65,7 +77,8 @@ export function startBridge(cfg: BridgeConfig): { ready: Promise<number>; close:
       tcp.destroy();
       release();
     });
-    ws.on("error", () => {
+    ws.on("error", (e) => {
+      log(`ws error ${ip}: ${e.message}`);
       tcp.destroy();
     });
   });

@@ -4,7 +4,7 @@ import {
   WebSocketStreamProvider,
   WebSocketConnection,
 } from "@libre/listener-wallet";
-import { LSPS1_REST_PROVIDERS } from "@libre/shared";
+import { LSPS1_REST_PROVIDERS, bridgeTargetUrl } from "@libre/shared";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -33,7 +33,7 @@ class BrowserWebSocketStreamProvider implements WebSocketStreamProvider {
       "ws://127.0.0.1:8091";
     appendLog(`[SYSTEM] Connecting WebSocket bridge to ${wsUrl} (LND peer at ${address}:${port})...`, "system");
     
-    const socket = new WebSocket(wsUrl);
+    const socket = new WebSocket(bridgeTargetUrl(wsUrl, address, port));
     socket.binaryType = "arraybuffer";
 
     const conn: WebSocketConnection = {

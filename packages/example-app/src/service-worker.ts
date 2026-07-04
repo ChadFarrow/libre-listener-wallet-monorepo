@@ -1,4 +1,5 @@
 import { LibreListenerWallet, IndexedDBStorageProvider } from "@libre/listener-wallet";
+import { bridgeTargetUrl } from "@libre/shared";
 import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 import { resolveSwConfig } from "./core/sw-config";
 
@@ -55,7 +56,7 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
         throw new Error("[SW] No bridgeUrl in ldk_config — cannot connect to peer on push.");
       }
       console.log(`[SW] SW Connecting WebSocket bridge to ${wsUrl}...`);
-      const socket = new WebSocket(wsUrl);
+      const socket = new WebSocket(bridgeTargetUrl(wsUrl, host, port));
       socket.binaryType = "arraybuffer";
 
       const conn = {

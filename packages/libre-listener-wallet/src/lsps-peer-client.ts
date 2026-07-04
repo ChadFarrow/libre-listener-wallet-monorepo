@@ -24,6 +24,7 @@ import {
   parseResponse,
   newRequestId,
   hexToBytes,
+  isLspsMessageType,
   type JsonRpcResponseObj,
 } from "./lsps-message";
 
@@ -55,7 +56,10 @@ export class LspsPeerClient {
   buildHandler(): CustomMessageHandler {
     const reader = CustomMessageReader.new_impl({
       read: (messageType: number, buffer: Uint8Array): Result_COption_TypeZDecodeErrorZ => {
-        if (messageType !== LSPS_PEER_MSG_TYPE) {
+        // LDK 0.1.0 bindings can hand this in as a sign-extended int16 (37913 -> -27623) since our
+        // type has the top bit set; compare via isLspsMessageType, not a strict !==, or every
+        // incoming LSPS response gets silently dropped here.
+        if (!isLspsMessageType(messageType)) {
           return Result_COption_TypeZDecodeErrorZ.constructor_ok(Option_TypeZ.constructor_none());
         }
         const t = Type.new_impl({

@@ -5,6 +5,13 @@
 
 export const LSPS_PEER_MSG_TYPE = 37913;
 
+// LDK 0.1.0 bindings can surface a u16 peer-message type (>=32768) as a sign-extended int16
+// (e.g. 37913 -> -27623). Mask to 16 bits before comparing so we recognize our own message type
+// no matter which representation the binding hands us.
+export function isLspsMessageType(messageType: number): boolean {
+  return (messageType & 0xffff) === LSPS_PEER_MSG_TYPE;
+}
+
 export interface JsonRpcRequestObj {
   jsonrpc: "2.0";
   id: string;

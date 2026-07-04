@@ -7,6 +7,7 @@ import {
   parseResponse,
   newRequestId,
   hexToBytes,
+  isLspsMessageType,
 } from "../../lsps-message";
 
 describe("lsps-message wire format", () => {
@@ -56,5 +57,14 @@ describe("lsps-message wire format", () => {
     expect(hexToBytes("0x02aa")).toEqual(new Uint8Array([0x02, 0xaa]));
     expect(() => hexToBytes("abc")).toThrow(); // odd length
     expect(() => hexToBytes("zz")).toThrow(); // not hex
+  });
+
+  it("isLspsMessageType recognizes 37913 in both its plain and sign-extended int16 forms", () => {
+    // lightningdevkit@0.1.0 bindings can hand back a u16 message type >= 32768 as a sign-extended
+    // int16 (37913 -> -27623). Masking to 16 bits must recognize both representations.
+    expect(isLspsMessageType(37913)).toBe(true);
+    expect(isLspsMessageType(-27623)).toBe(true);
+    expect(isLspsMessageType(37914)).toBe(false);
+    expect(isLspsMessageType(0)).toBe(false);
   });
 });

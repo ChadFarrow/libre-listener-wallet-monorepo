@@ -1,4 +1,5 @@
 import type { WebSocketStreamProvider, WebSocketConnection } from "@libre/listener-wallet";
+import { bridgeTargetUrl } from "@libre/shared";
 
 // A browser/extension LDK node has no listening socket — it dials OUT through a websockify
 // bridge that proxies WebSocket <-> raw TCP to the Lightning peer's :9735. This is the same
@@ -9,10 +10,11 @@ import type { WebSocketStreamProvider, WebSocketConnection } from "@libre/listen
 export function createWebSocketStreamProvider(getBridgeUrl: () => string | undefined): WebSocketStreamProvider {
   return {
     connect(address: string, port: number): Promise<WebSocketConnection> {
-      const wsUrl = getBridgeUrl();
-      if (!wsUrl) {
+      const base = getBridgeUrl();
+      if (!base) {
         return Promise.reject(new Error("No bridge URL configured — cannot connect to Lightning peer."));
       }
+      const wsUrl = bridgeTargetUrl(base, address, port);
       const socket = new WebSocket(wsUrl);
       socket.binaryType = "arraybuffer";
 

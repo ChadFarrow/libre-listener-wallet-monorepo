@@ -3,11 +3,13 @@ import type {
   LspProvider,
   JsonRpcRequest,
   Lsps1RestOrderResponse,
+  Lsps2GetInfoResponse,
   TlvRecord,
   SplitResult,
 } from "@libre/shared";
 import { encodeV4VTlvs } from "@libre/shared";
 import { Lsps1RestClient, clampExpiryBlocks, orderInvoice } from "./lsps1-rest-client";
+import { LspsPeerClient } from "./lsps-peer-client";
 
 import {
   initializeWasmFromBinary,
@@ -226,6 +228,7 @@ export class LibreListenerWallet {
   private lockableScore?: MultiThreadedLockableScore;
   private monitorUpdatingPersister?: MonitorUpdatingPersister;
   private peerManager?: PeerManager;
+  private lspsPeerClient?: LspsPeerClient;
   private ldkLogger?: LdkLogger;
 
   private syncIntervalId?: any;
@@ -553,18 +556,21 @@ export class LibreListenerWallet {
       this.logger?.info("Successfully bootstrapped a fresh ChannelManager");
     }
 
-    // 11. Setup PeerManager
+    // 11. Setup PeerManager. Use our LSPS custom-message handler (type 37913) instead of the
+    // ignoring one so the node can speak LSPS2 to an LSP over the peer connection.
     const ignoringHandler = IgnoringMessageHandler.constructor_new();
+    this.lspsPeerClient = new LspsPeerClient({ logger: this.logger });
     this.peerManager = PeerManager.constructor_new(
       this.channelManager.as_ChannelMessageHandler(),
       ignoringHandler.as_RoutingMessageHandler(),
       ignoringHandler.as_OnionMessageHandler(),
-      ignoringHandler.as_CustomMessageHandler(),
+      this.lspsPeerClient.buildHandler(),
       Math.floor(Date.now() / 1000),
       getSecureRandomBytes(32),
       this.ldkLogger,
       this.keysManager.as_NodeSigner()
     );
+    this.lspsPeerClient.setPeerManager(this.peerManager);
 
     // 12. Initial sync with Esplora
     await this.syncClient.sync(this.channelManager, this.chainMonitor);
@@ -1444,6 +1450,25 @@ export class LibreListenerWallet {
     return invoiceStr;
   }
 
+  /**
+   * LSPS2 discovery over the BOLT8 peer transport (custom message 37913): connect to the LSP node
+   * (dialed through the configured ws-bridge), then lsps2.get_versions -> lsps2.get_info. Returns the
+   * fee-param menu. Gate-1 check that a real LSP actually speaks LSPS2. Does not spend anything.
+   */
+  async getLSPS2Info(opts: { lspPubkey: string; lspHost: string; lspPort: number }): Promise<Lsps2GetInfoResponse> {
+    if (!this.peerManager || !this.lspsPeerClient) {
+      throw new Error("Wallet is not running");
+    }
+    await this.connectPeer(opts.lspPubkey, opts.lspHost, opts.lspPort);
+    const versions = await this.lspsPeerClient.getVersions(opts.lspPubkey);
+    const version = Math.max(...(versions.versions ?? []));
+    if (!Number.isFinite(version) || version <= 0) {
+      throw new Error(`LSP ${opts.lspPubkey} returned no LSPS2 versions`);
+    }
+    this.logger?.info?.(`[LSPS2] ${opts.lspPubkey} supports versions ${JSON.stringify(versions.versions)}; using ${version}`);
+    return this.lspsPeerClient.getInfo(opts.lspPubkey, { version });
+  }
+
   // --- LSPS1 Inbound Capacity Purchase ---
 
   /**
@@ -1675,5 +1700,6 @@ export { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
 export { EsploraSyncClient } from "./esplora-client";
 export type { WalletConfig } from "@libre/shared";
 export { LspsClient } from "./lsps-client";
+export { LspsPeerClient } from "./lsps-peer-client";
 export { Lsps1RestClient, clampExpiryBlocks, isOrderComplete, isOrderFailed, orderInvoice } from "./lsps1-rest-client";
 export { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";

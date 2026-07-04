@@ -1,3 +1,4 @@
+import QRCode from "qrcode";
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
 import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer, parsePeerString, formatPeerString } from "../core/wallet-config";
@@ -168,6 +169,7 @@ $("lsps1-order").addEventListener("click", async () => {
   $("lsps1-fee-readout").style.display = "none";
   $("lsps1-invoice").style.display = "none";
   $("lsps1-invoice-label").style.display = "none";
+  $("lsps1-invoice-qr").style.display = "none";
   setMsg("lsps1-msg", `Getting quote from ${provider.name}…`);
 
   try {
@@ -185,6 +187,15 @@ $("lsps1-order").addEventListener("click", async () => {
     inv.value = order.invoice;
     inv.style.display = "block";
     $("lsps1-invoice-label").style.display = "block";
+    // Render the QR on-device (bundled qrcode) — never via a QR image service. Best-effort: the
+    // textarea is the fallback if rendering fails.
+    try {
+      const qr = $<HTMLImageElement>("lsps1-invoice-qr");
+      qr.src = await QRCode.toDataURL(order.invoice, { width: 220, margin: 1 });
+      qr.style.display = "block";
+    } catch (qrErr: any) {
+      console.warn("[LSPS1] could not render invoice QR:", qrErr?.message || qrErr);
+    }
     setMsg("lsps1-msg", `Order ${order.orderId} placed. Pay the invoice below to open the channel.`, "ok");
   } catch (e: any) {
     setMsg("lsps1-msg", e.message, "err");

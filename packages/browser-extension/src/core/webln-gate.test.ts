@@ -15,6 +15,7 @@ describe("isAllowedWeblnMethod", () => {
       "nwcDeleteConnection",
       "exportBackup",
       "createWallet",
+      "getRecoveryPhrase",
       "restoreWallet",
       "setConfig",
       "getConfig",

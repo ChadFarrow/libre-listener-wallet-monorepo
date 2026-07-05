@@ -36,6 +36,8 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.setConfig(params ?? {});
     case "createWallet":
       return host.createWallet(params ?? {});
+    case "getRecoveryPhrase":
+      return host.getRecoveryPhrase();
     case "restoreWallet":
       return host.restoreWallet(params.envelope, params.secret);
     case "startNode":

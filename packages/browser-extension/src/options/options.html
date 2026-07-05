@@ -17,6 +17,7 @@
       table { width: 100%; border-collapse: collapse; margin-top: 8px; }
       td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid #8883; font-size: 13px; }
       .peer-row { display: flex; gap: 8px; } .peer-row > input { flex: 1; }
+      .phrase-blur { filter: blur(5px); user-select: none; } /* anti-shoulder-surf until Unhide */
       .danger { margin-top: 26px; border: 1px solid #c0392b66; border-radius: 10px; padding: 4px 16px 16px; }
       .danger h2 { color: #c0392b; }
       button.danger-btn { background: #c0392b; }
@@ -53,6 +54,20 @@
       <input type="checkbox" id="auto-download" style="width:auto" />
       Auto-save a backup file to Downloads when my wallet changes
     </label>
+
+    <h2>Recovery phrase</h2>
+    <p class="hint">
+      Your seed as a 24-word BIP39 phrase — write it down and keep it offline. It restores this
+      wallet (and compatible wallets); it's not meant for importing into a standard HD wallet, and
+      anyone who reads it can spend your funds.
+    </p>
+    <textarea id="phrase-words" class="phrase-blur" readonly rows="3"
+      style="width:100%;box-sizing:border-box;margin-top:4px;font:13px/1.6 monospace"></textarea>
+    <div class="peer-row" style="margin-top:8px">
+      <button id="toggle-phrase-blur" class="ghost">Unhide</button>
+      <button id="copy-phrase" class="ghost">Copy phrase</button>
+    </div>
+    <div class="msg" id="phrase-msg"></div>
 
     <h2>Google Drive backup</h2>
     <p class="hint">

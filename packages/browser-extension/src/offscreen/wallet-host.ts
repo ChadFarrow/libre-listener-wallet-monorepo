@@ -2,6 +2,7 @@ import {
   LibreListenerWallet,
   IndexedDBStorageProvider,
   bytesToHex,
+  seedHexToMnemonic,
   type SecureStorageProvider,
   type ChannelInfo,
 } from "@libre/listener-wallet";
@@ -322,6 +323,18 @@ export class WalletHost implements WalletRpc {
     await storage.setItem(CREATED_NEW_KEY, "1");
     const node = await this.startNode();
     return { seedHex: seedHex.toLowerCase(), ...node };
+  }
+
+  // Return the active network's seed as its 24-word BIP39 recovery phrase, for on-device display
+  // in the options UI (control-plane only — never a WebLN/page-reachable method, never logged).
+  // Reads storage directly, so it works whether or not the node is running.
+  async getRecoveryPhrase(): Promise<{ mnemonic: string }> {
+    const storage = this.storageForNetwork(await this.activeNetwork());
+    const seedHex = await storage.getItem(SEED_KEY);
+    if (!seedHex || !/^[0-9a-fA-F]{64}$/.test(seedHex)) {
+      throw new Error("No wallet seed on this network — create or restore a wallet first.");
+    }
+    return { mnemonic: seedHexToMnemonic(seedHex) };
   }
 
   // Restore from an encrypted backup envelope. importState writes seed + channel state + network

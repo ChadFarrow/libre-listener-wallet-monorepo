@@ -4,6 +4,7 @@ import {
   payKeysendParamsSchema,
   payInvoiceParamsSchema,
   nwcRequestSchema,
+  budgetWindowElapsed,
 } from "../nwc-schema";
 
 const validPubkey = "02" + "a".repeat(64); // 33-byte compressed key => 66 hex chars
@@ -104,5 +105,40 @@ describe("nwcRequestSchema (discriminated union)", () => {
 
   it("rejects an unknown method", () => {
     expect(() => nwcRequestSchema.parse({ method: "self_destruct", params: {} })).toThrow();
+  });
+});
+
+describe("budgetWindowElapsed", () => {
+  const start = 1_700_000_000_000;
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+
+  it("defaults to a rolling 24h window when renewal is undefined (legacy behavior)", () => {
+    expect(budgetWindowElapsed(undefined, start, start + 23 * hour)).toBe(false);
+    expect(budgetWindowElapsed(undefined, start, start + 25 * hour)).toBe(true);
+  });
+
+  it("daily resets after 24h", () => {
+    expect(budgetWindowElapsed("daily", start, start + 23 * hour)).toBe(false);
+    expect(budgetWindowElapsed("daily", start, start + day)).toBe(true);
+  });
+
+  it("weekly resets after 7 days", () => {
+    expect(budgetWindowElapsed("weekly", start, start + 6 * day)).toBe(false);
+    expect(budgetWindowElapsed("weekly", start, start + 7 * day)).toBe(true);
+  });
+
+  it("monthly resets after ~30 days", () => {
+    expect(budgetWindowElapsed("monthly", start, start + 29 * day)).toBe(false);
+    expect(budgetWindowElapsed("monthly", start, start + 30 * day)).toBe(true);
+  });
+
+  it("yearly resets after ~365 days", () => {
+    expect(budgetWindowElapsed("yearly", start, start + 364 * day)).toBe(false);
+    expect(budgetWindowElapsed("yearly", start, start + 365 * day)).toBe(true);
+  });
+
+  it("never resets, no matter how much time passes", () => {
+    expect(budgetWindowElapsed("never", start, start + 10 * 365 * day)).toBe(false);
   });
 });

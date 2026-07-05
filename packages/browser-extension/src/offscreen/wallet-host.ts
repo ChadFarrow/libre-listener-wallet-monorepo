@@ -4,6 +4,7 @@ import {
   bytesToHex,
   type SecureStorageProvider,
 } from "@libre/listener-wallet";
+import type { BudgetRenewal, NwcMethod } from "@libre/shared";
 import {
   dbNameForNetwork,
   META_DB_NAME,
@@ -421,11 +422,25 @@ export class WalletHost implements WalletRpc {
 
   // ---- NWC (Nostr Wallet Connect) pairings ----
 
-  async nwcCreateConnection(name: string, opts?: { spendingLimitSats?: number; relayUrl?: string }): Promise<{ uri: string }> {
+  async nwcCreateConnection(
+    name: string,
+    opts?: {
+      spendingLimitSats?: number;
+      relayUrl?: string;
+      budgetRenewal?: BudgetRenewal;
+      maxAmountSats?: number;
+      allowedMethods?: NwcMethod[];
+      expiresAt?: number;
+    }
+  ): Promise<{ uri: string }> {
     this.requireRunning();
     const uri = await this.wallet!.nwc.createConnection(name || "Nostr Client App", {
       spendingLimitSats: Number(opts?.spendingLimitSats) || 0,
       relayUrl: opts?.relayUrl,
+      budgetRenewal: opts?.budgetRenewal,
+      maxAmountSats: opts?.maxAmountSats,
+      allowedMethods: opts?.allowedMethods,
+      expiresAt: opts?.expiresAt,
     });
     this.emit("state-changed");
     return { uri };

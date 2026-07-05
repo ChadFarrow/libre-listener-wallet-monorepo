@@ -347,8 +347,50 @@
             <input type="text" id="nwc-conn-name" value="Nostr Client App" placeholder="e.g. Damus, Amethyst" />
           </div>
           <div class="form-group">
-            <label>Daily Spending Limit (Sats)</label>
+            <label>Spending Budget (Sats)</label>
             <input type="number" id="nwc-spending-limit" value="5000" min="0" placeholder="0 for unlimited" />
+          </div>
+          <div class="form-group">
+            <label>Budget Renewal</label>
+            <select id="nwc-budget-renewal">
+              <option value="daily" selected>Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+              <option value="never">Never (one-time budget)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Max Per Payment (Sats) — optional</label>
+            <input type="number" id="nwc-max-amount" min="1" placeholder="Blank = no per-payment cap" />
+          </div>
+          <div class="form-group">
+            <label>Connection Expires</label>
+            <select id="nwc-expiry">
+              <option value="0" selected>Never</option>
+              <option value="1">In 1 day</option>
+              <option value="7">In 1 week</option>
+              <option value="30">In 1 month</option>
+              <option value="365">In 1 year</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Allowed Methods</label>
+            <div class="nwc-methods" style="display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem;">
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                <input type="checkbox" id="nwc-method-pay_invoice" checked style="width: auto;" /> Pay invoices (pay_invoice)
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                <input type="checkbox" id="nwc-method-pay_keysend" checked style="width: auto;" /> Send keysend / boosts (pay_keysend)
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                <input type="checkbox" id="nwc-method-make_invoice" checked style="width: auto;" /> Create invoices (make_invoice)
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                <input type="checkbox" id="nwc-method-get_balance" checked style="width: auto;" /> Read balance (get_balance)
+              </label>
+              <div class="text-muted" style="font-size: 0.75rem;">get_info is always available so clients can connect.</div>
+            </div>
           </div>
           <div class="form-group">
             <label>Nostr Relay URL</label>

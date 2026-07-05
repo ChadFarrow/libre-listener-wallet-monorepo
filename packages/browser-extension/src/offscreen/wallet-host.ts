@@ -5,6 +5,7 @@ import {
   type SecureStorageProvider,
   type ChannelInfo,
 } from "@libre/listener-wallet";
+import { zeroConfTrustedPubkeys } from "@libre/shared";
 import type { BudgetRenewal, NwcMethod } from "@libre/shared";
 import {
   dbNameForNetwork,
@@ -132,6 +133,9 @@ export class WalletHost implements WalletRpc {
         esploraUrl: cfg.esploraUrl || defaultEsploraUrl(cfg.network),
         rapidGossipSyncUrl: cfg.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(cfg.network),
         alias: "Libre Listener Wallet",
+        // Allowlist genuinely-0-conf LSPs (Megalith) so their channels are instant. The SDK only
+        // 0-conf-accepts a zeroconf-typed open, so a confirmed open still falls back safely.
+        trustedZeroConfPeers: zeroConfTrustedPubkeys(),
       } as any,
       storage,
       socketProvider,

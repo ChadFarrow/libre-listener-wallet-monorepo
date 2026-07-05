@@ -236,6 +236,21 @@ export function sumBalance(channels: ChannelInfo[]): { spendableSat: number; rec
   };
 }
 
+// The `minimum_depth` we set as a channel fundee: confirmations to wait before an inbound
+// CONFIRMED channel locks in. LDK enforces a lower bound of 1 (0-conf goes through the
+// separate trusted-peer accept path, never global min_depth). Default 3.
+export function resolveMinChannelConfirmations(v?: number): number {
+  if (v == null || !Number.isFinite(v)) return 3;
+  return Math.max(1, Math.floor(v));
+}
+
+// Whether to accept an inbound channel with 0 confirmations: only when the counterparty is
+// allowlisted (trustedZeroConfPeers) AND the open actually requests zeroconf. Guards against
+// 0-conf-accepting a normal open, which the peer rejects as "non-zero-conf ... min depth zero".
+export function shouldZeroConfAccept(trusted: boolean, openerRequestsZeroConf: boolean): boolean {
+  return trusted && openerRequestsZeroConf;
+}
+
 export class LibreListenerWallet {
   private config: WalletConfig;
   private logger?: Logger;
@@ -512,6 +527,11 @@ export class LibreListenerWallet {
     const userConfig = UserConfig.constructor_default();
     userConfig.set_manually_accept_inbound_channels(true);
     userConfig.get_channel_handshake_config().set_negotiate_anchors_zero_fee_htlc_tx(true);
+    // Confirmations we wait for as the fundee of an inbound CONFIRMED channel (LDK's default is 6).
+    // A trusted-peer 0-conf open bypasses this via accept_inbound_channel_from_trusted_peer_0conf.
+    userConfig.get_channel_handshake_config().set_minimum_depth(
+      resolveMinChannelConfirmations(this.config.minChannelConfirmations)
+    );
     // Announced (public) channels must match the counterparty's preference. Default
     // private; enable when accepting public channels (e.g. from the Mutinynet faucet).
     userConfig.get_channel_handshake_config().set_announce_for_forwarding(this.config.announceChannels ?? false);
@@ -673,19 +693,22 @@ export class LibreListenerWallet {
           const tempChanId = (event as any).temporary_channel_id;
           const counterparty = (event as any).counterparty_node_id;
           const counterpartyHex = bytesToHex(counterparty);
+          // Only 0-conf when the opener actually requested a zeroconf channel type; 0-conf-accepting
+          // a normal open makes the peer reject it ("non-zero-conf channel has min depth zero").
+          const openerZeroConf = !!(event as any).channel_type?.supports_zero_conf?.();
           let res;
-          if (this.isZeroConfTrusted(counterpartyHex)) {
-            // Trusted LSP/peer: a 0-conf JIT channel is usable immediately.
-            this.logger?.info("[LDK Event] OpenChannelRequest from a trusted peer; trying zero-conf accept...");
+          if (shouldZeroConfAccept(this.isZeroConfTrusted(counterpartyHex), openerZeroConf)) {
+            // Trusted LSP/peer opening a zeroconf channel: usable immediately.
+            this.logger?.info("[LDK Event] OpenChannelRequest from a trusted peer (zeroconf requested); accepting 0-conf...");
             res = this.channelManager!.accept_inbound_channel_from_trusted_peer_0conf(tempChanId, counterparty, 0n);
             if (!res.is_ok()) {
               this.logger?.info("[LDK Event] Zero-conf unavailable; accepting as a normal channel (awaits confirmation).");
               res = this.channelManager!.accept_inbound_channel(tempChanId, counterparty, 0n);
             }
           } else {
-            // Untrusted peer: never 0-conf (double-spend guardrail). Accept a normal,
-            // confirmation-gated channel — still works, just not instant.
-            this.logger?.info("[LDK Event] OpenChannelRequest from an untrusted peer; accepting as a normal channel (no 0-conf).");
+            // Untrusted peer, or a normal (non-zeroconf) open: accept a confirmation-gated
+            // channel — still works, just not instant (double-spend guardrail).
+            this.logger?.info("[LDK Event] OpenChannelRequest; accepting as a normal confirmed channel (no 0-conf).");
             res = this.channelManager!.accept_inbound_channel(tempChanId, counterparty, 0n);
           }
           this.logger?.info(`[LDK Event] accept_inbound_channel result: ${res.is_ok()}`);

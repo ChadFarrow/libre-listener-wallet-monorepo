@@ -19,6 +19,11 @@ export interface WalletConfig {
   // networks flap; a dropped peer silently disables sending). Exponential backoff while
   // the node runs. Default true; set false to disable.
   autoReconnectPeers?: boolean;
+  // Confirmations we (as the channel fundee) wait for before treating an inbound channel
+  // as locked in — LDK's `minimum_depth`. Applies to CONFIRMED channels only; a trusted-peer
+  // 0-conf open (see trustedZeroConfPeers) locks in at 0 regardless. LDK's own default is 6;
+  // we default to 3 (e.g. Olympus's own required depth). Lower bound 1. Default 3.
+  minChannelConfirmations?: number;
 }
 
 export interface NWCRequest {
@@ -172,12 +177,18 @@ export interface Lsps1RestProvider {
   maxLeaseBlocks: number; // LSP's max_channel_expiry_blocks — the longest lease it will grant
   leaseMonthsApprox: number;
   costNote: string; // one-line cost/lease summary for the picker help text
+  // The LSP's Lightning node pubkey (hex), read live-verified from its get_info `uris`.
+  // Used to allowlist a 0-conf provider (trustedZeroConfPeers) — it MUST match what get_info
+  // returns at runtime, or the 0-conf request+accept won't line up and it falls back to confirmed.
+  nodePubkey?: string;
 }
 export const LSPS1_REST_PROVIDERS: Record<string, Lsps1RestProvider> = {
   megalith: {
     name: "Megalith",
     restBaseUrl: "https://megalithic.me/api/lsps1/v1",
     supportsZeroConf: true,
+    // Live-verified via get_info 2026-07-05 (min_required_channel_confirmations: 0).
+    nodePubkey: "038a9e56512ec98da2b5789761f7af8f280baf98a09282360cd6ff1381b5e889bf",
     minChannelSat: 150_000,
     maxChannelSat: 16_000_000,
     maxLeaseBlocks: 13_140, // ~3 months
@@ -188,6 +199,8 @@ export const LSPS1_REST_PROVIDERS: Record<string, Lsps1RestProvider> = {
     name: "Olympus (ZEUS)",
     restBaseUrl: "https://lsps1.lnolymp.us/api/v1",
     supportsZeroConf: false,
+    // Live-verified via get_info 2026-07-05 (min_required_channel_confirmations: 3).
+    nodePubkey: "031b301307574bbe9b9ac7b79cbe1700e31e544513eae0b5d7497483083f99e581",
     minChannelSat: 100_000,
     maxChannelSat: 10_000_000,
     maxLeaseBlocks: 52_560, // ~12 months
@@ -195,6 +208,17 @@ export const LSPS1_REST_PROVIDERS: Record<string, Lsps1RestProvider> = {
     costNote: "Pricier upfront but ~12-month lease (cheaper per month), 3-conf",
   },
 };
+
+// Node pubkeys to allowlist for 0-conf (instant) channels — the providers that advertise
+// 0-conf AND have a known pubkey to match at open time. Feed into WalletConfig.trustedZeroConfPeers.
+// A provider whose get_info later changes its pubkey simply falls back to a confirmed channel (safe).
+export function zeroConfTrustedPubkeys(
+  providers: Record<string, Lsps1RestProvider> = LSPS1_REST_PROVIDERS
+): string[] {
+  return Object.values(providers)
+    .filter((p) => p.supportsZeroConf && p.nodePubkey)
+    .map((p) => p.nodePubkey as string);
+}
 
 // LSPS1 Inbound capacity interfaces
 export interface Lsps1GetInfoResponse {

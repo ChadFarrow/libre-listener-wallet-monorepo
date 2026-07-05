@@ -4,7 +4,7 @@ import {
   WebSocketStreamProvider,
   WebSocketConnection,
 } from "@libre/listener-wallet";
-import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl, channelConfLabel, lsps1OrderStatus } from "@libre/shared";
+import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl, channelConfLabel, lsps1OrderStatus, zeroConfTrustedPubkeys } from "@libre/shared";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -572,15 +572,12 @@ startNodeBtn.addEventListener("click", async () => {
     await storage.setItem("ldk_config", JSON.stringify(ldkConfig));
     await setActiveNetwork(selectedNetwork);
 
-    // Do NOT auto-trust any peer for 0-conf. Accepting a channel 0-conf
-    // (min_depth 0) when the LSP opened it non-zero-conf makes lnd reject the
-    // open ("non-zero-conf channel has min depth zero"). Current LSPs open
-    // CONFIRMED channels — the regtest onboarding server opens a non-anchor
-    // channel and mines to confirm; Mutinynet advertises ZeroConf: not supported.
-    // So the listener accepts a normal confirmed channel. (True 0-conf JIT would
-    // require an anchor channel + an LSP that signals zeroconf, and on real
-    // networks the fee negotiation works — that's a future addition.)
-    const trustedZeroConfPeers: string[] = [];
+    // Allowlist the LSPs that genuinely offer 0-conf (Megalith: min_required_channel_confirmations
+    // 0) so their channels are usable instantly. The SDK still only 0-conf-accepts when the opener
+    // actually requests a zeroconf channel type (else it falls back to a confirmed channel), so a
+    // provider that opens a normal channel can't trip the "min depth zero" rejection. Confirmed-only
+    // LSPs (Olympus, 3-conf) aren't listed and get a normal channel that locks in at minChannelConfirmations.
+    const trustedZeroConfPeers: string[] = zeroConfTrustedPubkeys();
 
     wallet = new LibreListenerWallet({
       config: {

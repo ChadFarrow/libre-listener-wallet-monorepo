@@ -1,7 +1,7 @@
 import QRCode from "qrcode";
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
-import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer, parsePeerString, formatPeerString } from "../core/wallet-config";
+import { defaultBridgeUrl, defaultRapidGossipSyncUrl, parsePeerString } from "../core/wallet-config";
 import { downloadBackupName } from "../core/backup-name";
 import {
   LSPS1_REST_PROVIDERS,
@@ -42,7 +42,6 @@ async function loadConfig() {
     $<HTMLInputElement>("esplora").value = c.esploraUrl || "";
     $<HTMLInputElement>("bridge").value = c.bridgeUrl || defaultBridgeUrl(network) || "";
     $<HTMLInputElement>("rgs").value = c.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(network) || "";
-    prefillPeer(network, c.peer);
   } catch (e: any) {
     setMsg("config-msg", e.message, "err");
   }
@@ -50,22 +49,6 @@ async function loadConfig() {
   $<HTMLInputElement>("google-client-id").value = (await command<string>("getGoogleClientId").catch(() => "")) || "";
   // Show the redirect URI the user must register on their OAuth client.
   $<HTMLInputElement>("redirect-uri").value = await command<string>("driveRedirectUri").catch(() => "");
-}
-
-// Pre-fill the connect-peer fields with the saved (last-connected) peer, falling back to the
-// network's default. Only fills blanks, so it never clobbers what the user typed. Nothing
-// auto-connects from here — they still click Connect peer.
-function prefillPeer(network: string, savedPeer?: string) {
-  const peer = savedPeer || defaultPeer(network);
-  if (!peer) return;
-  let parts;
-  try {
-    parts = parsePeerString(peer); // validate before pre-filling; a corrupt saved peer = no pre-fill
-  } catch {
-    return;
-  }
-  const conn = $<HTMLInputElement>("peer-conn");
-  if (!conn.value.trim()) conn.value = formatPeerString(parts.pubkey, parts.host, parts.port);
 }
 
 $("save-config").addEventListener("click", async () => {
@@ -269,20 +252,24 @@ $("connect-peer").addEventListener("click", async () => {
   }
 });
 
-$("copy-peer").addEventListener("click", async () => {
-  let conn;
-  try {
-    const p = parsePeerString(val("peer-conn")); // normalize (lowercase pubkey, trimmed) before copying
-    conn = formatPeerString(p.pubkey, p.host, p.port);
-  } catch {
-    setMsg("peer-msg", "Enter a full pubkey@host:port first.", "err");
+// ---- your node: Node ID readout + copy (what a peer opens a channel to) ----
+
+async function loadNodeInfo() {
+  const s = await command<{ nodeId?: string }>("getState").catch(() => ({}) as { nodeId?: string });
+  $<HTMLInputElement>("node-id").value = s.nodeId || "";
+}
+
+$("copy-node-id").addEventListener("click", async () => {
+  const id = val("node-id");
+  if (!id) {
+    setMsg("node-id-msg", "Start the node in the popup to load your Node ID.", "err");
     return;
   }
   try {
-    await navigator.clipboard.writeText(conn);
-    setMsg("peer-msg", `Copied ${conn}`, "ok");
+    await navigator.clipboard.writeText(id);
+    setMsg("node-id-msg", "Node ID copied", "ok");
   } catch {
-    setMsg("peer-msg", `Copy failed — connection string: ${conn}`, "err");
+    setMsg("node-id-msg", "Copy failed — select the field above and copy it manually.", "err");
   }
 });
 
@@ -516,6 +503,7 @@ $("copy-phrase").addEventListener("click", () => void copyField("phrase-words", 
 $("copy-seed-hex").addEventListener("click", () => void copyField("seed-hex", "Hex seed"));
 
 void loadConfig().then(() => void loadChannels());
+void loadNodeInfo();
 void loadGrants();
 void loadSweep();
 void loadPhrase();
@@ -531,5 +519,6 @@ onWalletEvent((event) => {
     void refreshBackupState();
     void loadChannels();
     void loadPhrase();
+    void loadNodeInfo();
   }
 });

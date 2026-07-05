@@ -5,8 +5,11 @@
     <title>Libre Listener Wallet — settings</title>
     <style>
       :root { color-scheme: light dark; --accent: #22c45e; }
-      body { font: 14px/1.6 system-ui, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; }
-      h1 { font-size: 18px; } h2 { font-size: 15px; margin-top: 26px; }
+      body { font: 14px/1.6 system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px 20px 48px; }
+      h1 { font-size: 18px; margin: 0 0 20px; }
+      section.card { border: 1px solid #8883; border-radius: 12px; padding: 16px 20px 20px; margin-top: 16px; background: #8881; }
+      .card h2 { font-size: 15px; margin: 0 0 8px; line-height: 1.3; padding-left: 10px; border-left: 3px solid var(--accent); }
+      .card h2 + .hint { margin-top: 0; }
       label { display: block; margin: 12px 0 4px; font-weight: 600; }
       input, select { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #8884; font: inherit; }
       button { padding: 9px 14px; border-radius: 8px; border: 0; font-weight: 600; cursor: pointer; background: var(--accent); color: #fff; margin-top: 14px; }
@@ -18,148 +21,165 @@
       td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid #8883; font-size: 13px; }
       .peer-row { display: flex; gap: 8px; } .peer-row > input { flex: 1; }
       .phrase-blur { filter: blur(5px); user-select: none; } /* anti-shoulder-surf until Unhide */
-      .danger { margin-top: 26px; border: 1px solid #c0392b66; border-radius: 10px; padding: 4px 16px 16px; }
-      .danger h2 { color: #c0392b; }
+      details summary { cursor: pointer; font-weight: 600; margin-top: 4px; }
+      section.card.danger { border-color: #c0392b66; }
+      .card.danger h2 { color: #c0392b; border-left-color: #c0392b; }
       button.danger-btn { background: #c0392b; }
     </style>
   </head>
   <body>
     <h1>Libre Listener Wallet — settings</h1>
 
-    <h2>Network & connection</h2>
-    <p class="hint">Stop the node before changing these.</p>
-    <label>Network</label>
-    <select id="network">
-      <option value="mainnet">mainnet</option>
-      <option value="testnet">testnet</option>
-      <option value="signet">signet</option>
-      <option value="regtest">regtest</option>
-    </select>
-    <label>Esplora API URL</label>
-    <input id="esplora" placeholder="https://mempool.space/api" />
-    <label>WebSocket bridge URL <span class="hint">(websockify → peer :9735)</span></label>
-    <input id="bridge" placeholder="wss://your-bridge.example/" />
-    <label>Rapid Gossip Sync URL <span class="hint">(mainnet only, for multi-hop routing)</span></label>
-    <input id="rgs" placeholder="https://…/rgs/snapshot" />
-    <button id="save-config">Save settings</button>
-    <div class="msg" id="config-msg"></div>
+    <section class="card">
+      <h2>Backup &amp; recovery</h2>
+      <p class="hint">
+        Your seed lives inside an encrypted backup. Keep a copy — a cleared browser loses the wallet
+        otherwise. Requires the node to be running (start it from the popup).
+      </p>
+      <button id="export" class="ghost">Download encrypted backup</button>
+      <label style="display:flex;align-items:center;gap:8px;margin:14px 0 0;font-weight:400">
+        <input type="checkbox" id="auto-download" style="width:auto" />
+        Auto-save a backup file to Downloads when my wallet changes
+      </label>
+    </section>
 
-    <h2>Backup &amp; recovery</h2>
-    <p class="hint">
-      Your seed lives inside an encrypted backup. Keep a copy — a cleared browser loses the wallet
-      otherwise. Requires the node to be running (start it from the popup).
-    </p>
-    <button id="export" class="ghost">Download encrypted backup</button>
-    <label style="display:flex;align-items:center;gap:8px;margin:14px 0 0;font-weight:400">
-      <input type="checkbox" id="auto-download" style="width:auto" />
-      Auto-save a backup file to Downloads when my wallet changes
-    </label>
+    <section class="card">
+      <h2>Recovery phrase &amp; seed</h2>
+      <p class="hint">
+        Two forms of the same key — anyone who reads either can spend your funds, so write them down
+        and keep them offline. Both restore <b>this wallet only</b> (extension or web app).
+        Entering the 24 words in another wallet app (BlueWallet, Phoenix, LND…) will
+        <b>not</b> recover your funds — it shows an empty wallet, because those apps derive keys
+        differently. To move funds into another app, set a sweep address you control under
+        <b>Force-close recovery</b> below: if a channel ever closes, the funds land on-chain there.
+      </p>
+      <label class="hint" style="display:block;margin-top:4px">64-hex seed — for copy/paste (restore field, backups)</label>
+      <textarea id="seed-hex" class="phrase-blur" readonly rows="2"
+        style="width:100%;box-sizing:border-box;font:13px/1.6 monospace;word-break:break-all"></textarea>
+      <label class="hint" style="display:block;margin-top:8px">24-word phrase — the same key, for writing down on paper (word list catches typos; hex doesn't)</label>
+      <textarea id="phrase-words" class="phrase-blur" readonly rows="3"
+        style="width:100%;box-sizing:border-box;font:13px/1.6 monospace"></textarea>
+      <div class="peer-row" style="margin-top:8px">
+        <button id="toggle-phrase-blur" class="ghost">Unhide</button>
+        <button id="copy-seed-hex" class="ghost">Copy hex</button>
+        <button id="copy-phrase" class="ghost">Copy phrase</button>
+      </div>
+      <div class="msg" id="phrase-msg"></div>
+    </section>
 
-    <h2>Recovery phrase &amp; seed</h2>
-    <p class="hint">
-      Two forms of the same key — anyone who reads either can spend your funds, so write them down
-      and keep them offline. The <b>24-word phrase</b> is portable to compatible wallets (not a
-      standard HD wallet like BlueWallet/LND); the <b>64-hex seed</b> is this app's native format —
-      paste it into the Seed field to restore here.
-    </p>
-    <label class="hint" style="display:block;margin-top:4px">24-word recovery phrase</label>
-    <textarea id="phrase-words" class="phrase-blur" readonly rows="3"
-      style="width:100%;box-sizing:border-box;font:13px/1.6 monospace"></textarea>
-    <label class="hint" style="display:block;margin-top:8px">64-hex seed</label>
-    <textarea id="seed-hex" class="phrase-blur" readonly rows="2"
-      style="width:100%;box-sizing:border-box;font:13px/1.6 monospace;word-break:break-all"></textarea>
-    <div class="peer-row" style="margin-top:8px">
-      <button id="toggle-phrase-blur" class="ghost">Unhide</button>
-      <button id="copy-phrase" class="ghost">Copy phrase</button>
-      <button id="copy-seed-hex" class="ghost">Copy hex</button>
-    </div>
-    <div class="msg" id="phrase-msg"></div>
+    <section class="card">
+      <h2>Google Drive backup</h2>
+      <p class="hint">
+        Optional: encrypted backups auto-sync to your Drive's private app folder. Create a Google
+        OAuth <b>Web application</b> client, add the redirect URI below to its authorized redirect
+        URIs, and paste the client ID here. Nothing but the already-encrypted backup ever leaves the
+        extension.
+      </p>
+      <label>Authorized redirect URI <span class="hint">(register this on your OAuth client)</span></label>
+      <input id="redirect-uri" readonly />
+      <label>Google OAuth Client ID</label>
+      <input id="google-client-id" placeholder="…apps.googleusercontent.com" />
+      <button id="save-drive">Save Drive settings</button>
+      <div class="msg" id="drive-msg"></div>
+      <div id="drive-status" class="hint" style="margin-top:14px">Google Drive: not connected</div>
+      <div class="peer-row">
+        <button id="drive-connect">Connect Drive</button>
+        <button id="drive-backup-now" class="ghost">Back up now</button>
+      </div>
+      <div class="msg" id="backup-msg"></div>
+    </section>
 
-    <h2>Google Drive backup</h2>
-    <p class="hint">
-      Optional: encrypted backups auto-sync to your Drive's private app folder. Create a Google
-      OAuth <b>Web application</b> client, add the redirect URI below to its authorized redirect
-      URIs, and paste the client ID here. Nothing but the already-encrypted backup ever leaves the
-      extension.
-    </p>
-    <label>Authorized redirect URI <span class="hint">(register this on your OAuth client)</span></label>
-    <input id="redirect-uri" readonly />
-    <label>Google OAuth Client ID</label>
-    <input id="google-client-id" placeholder="…apps.googleusercontent.com" />
-    <button id="save-drive">Save Drive settings</button>
-    <div class="msg" id="drive-msg"></div>
-    <div id="drive-status" class="hint" style="margin-top:14px">Google Drive: not connected</div>
-    <div class="peer-row">
-      <button id="drive-connect">Connect Drive</button>
-      <button id="drive-backup-now" class="ghost">Back up now</button>
-    </div>
-    <div class="msg" id="backup-msg"></div>
+    <section class="card">
+      <h2>Your channels</h2>
+      <p class="hint">Payment channels this wallet holds. Start the node (popup) to load them.</p>
+      <div id="channels-list" class="hint">—</div>
+    </section>
 
-    <h2>Your channels</h2>
-    <p class="hint">Payment channels this wallet holds. Start the node (popup) to load them.</p>
-    <div id="channels-list" class="hint">—</div>
+    <section class="card">
+      <h2>This wallet's node</h2>
+      <p class="hint">
+        This is what another node opens a channel to. A browser node can't be dialed, so connect out
+        to the peer first (next section) — then, from that node, open a channel to this Node ID and
+        it arrives over the connection you just made.
+      </p>
+      <label class="hint" style="display:block">Node ID</label>
+      <div class="peer-row">
+        <input id="node-id" readonly placeholder="(start the node to load)" style="font:12px/1.4 monospace" />
+      </div>
+      <div class="peer-row">
+        <button id="copy-node-id" class="ghost">Copy Node ID</button>
+      </div>
+      <div class="msg" id="node-id-msg"></div>
+    </section>
 
-    <h2>Open a channel</h2>
-    <p class="hint">
-      A browser node can't be dialed. Either dial a peer that opens a channel back to you (below),
-      or copy your <b>Node ID</b> from the popup and open a channel to it from your own node.
-      pubkey@host:port
-    </p>
-    <div class="peer-row">
-      <input id="peer-conn" placeholder="pubkey@host:port" />
-    </div>
-    <div class="peer-row">
-      <button id="connect-peer">Connect peer</button>
-      <button id="copy-peer" class="ghost">Copy pubkey@host:port</button>
-    </div>
-    <div class="msg" id="peer-msg"></div>
+    <section class="card">
+      <h2>Connect to another node</h2>
+      <p class="hint">
+        Enter a node's connection info and dial it. The live connection is what lets that node open
+        a channel back to your Node ID (above).
+      </p>
+      <div class="peer-row">
+        <input id="peer-conn" placeholder="pubkey@host:port" />
+      </div>
+      <div class="peer-row">
+        <button id="connect-peer">Connect peer</button>
+      </div>
+      <div class="msg" id="peer-msg"></div>
+    </section>
 
-    <h2>Add a channel to receive payments</h2>
-    <p class="hint">
-      To receive payments, a provider opens a payment channel to your wallet for a one-time fee. Get a
-      quote to see the price — you only pay if you want it. Your wallet needs to be running.
-    </p>
-    <label>LSP provider</label>
-    <select id="lsps1-provider">
-      <option value="megalith">Megalith — instant 0-conf, 150k–16M sat</option>
-      <option value="olympus">Olympus (ZEUS) — 100k–10M sat, ~3 confs</option>
-    </select>
-    <div class="hint" id="lsps1-provider-summary" style="margin-top:6px"></div>
-    <label>Requested channel size (sats)</label>
-    <input type="number" id="lsps1-amount" value="150000" min="150000" max="16000000" />
-    <div class="hint" id="lsps1-amount-msg" style="margin-top:6px"></div>
-    <label>Channel lease duration</label>
-    <select id="lsps1-lease">
-      <option value="">Longest available (recommended)</option>
-      <option value="4320">~1 month</option>
-      <option value="12960">~3 months</option>
-      <option value="25920">~6 months</option>
-      <option value="52560">~12 months</option>
-    </select>
-    <p class="hint">A leased channel can't be force-closed by the LSP before it expires. Clamped to what the LSP offers.</p>
-    <button id="lsps1-order">Get quote &amp; order</button>
-    <div class="msg" id="lsps1-msg"></div>
-    <div id="lsps1-fee-readout" class="hint" style="margin-top:10px;font-weight:600;display:none"></div>
-    <label id="lsps1-invoice-label" style="display:none">Payment invoice (pay to open the channel)</label>
-    <textarea id="lsps1-invoice" readonly rows="3" style="width:100%;box-sizing:border-box;display:none;font:12px/1.4 monospace"></textarea>
-    <img id="lsps1-invoice-qr" alt="invoice QR" style="display:none;margin-top:8px;border-radius:8px;background:#fff;padding:6px;max-width:220px" />
+    <section class="card">
+      <h2>Get a channel from an LSP</h2>
+      <p class="hint">
+        An <b>LSP</b> (Lightning Service Provider) opens a payment channel to your wallet for a
+        one-time fee so you can receive payments. Get a quote to see the price — you only pay if you
+        want it. Your wallet needs to be running.
+      </p>
+      <label>LSP provider</label>
+      <select id="lsps1-provider">
+        <option value="megalith">Megalith — instant 0-conf, 150k–16M sat</option>
+        <option value="olympus">Olympus (ZEUS) — 100k–10M sat, ~3 confs</option>
+      </select>
+      <div class="hint" id="lsps1-provider-summary" style="margin-top:6px"></div>
+      <label>Requested channel size (sats)</label>
+      <input type="number" id="lsps1-amount" value="150000" min="150000" max="16000000" />
+      <div class="hint" id="lsps1-amount-msg" style="margin-top:6px"></div>
+      <label>Channel lease duration</label>
+      <select id="lsps1-lease">
+        <option value="">Longest available (recommended)</option>
+        <option value="4320">~1 month</option>
+        <option value="12960">~3 months</option>
+        <option value="25920">~6 months</option>
+        <option value="52560">~12 months</option>
+      </select>
+      <p class="hint">A leased channel can't be force-closed by the LSP before it expires. Clamped to what the LSP offers.</p>
+      <button id="lsps1-order">Get quote &amp; order</button>
+      <div class="msg" id="lsps1-msg"></div>
+      <div id="lsps1-fee-readout" class="hint" style="margin-top:10px;font-weight:600;display:none"></div>
+      <label id="lsps1-invoice-label" style="display:none">Payment invoice (pay to open the channel)</label>
+      <textarea id="lsps1-invoice" readonly rows="3" style="width:100%;box-sizing:border-box;display:none;font:12px/1.4 monospace"></textarea>
+      <img id="lsps1-invoice-qr" alt="invoice QR" style="display:none;margin-top:8px;border-radius:8px;background:#fff;padding:6px;max-width:220px" />
+    </section>
 
-    <h2>Force-close recovery</h2>
-    <p class="hint">
-      If a channel ever force-closes, the wallet sweeps the reclaimed on-chain funds to this address.
-      Set a segwit address (<b>bc1q…</b> / <b>bc1p…</b>) you control — without one, force-closed funds
-      can't be recovered automatically. Can be changed anytime.
-    </p>
-    <label>On-chain sweep address</label>
-    <input id="sweep-address" placeholder="bc1q…" />
-    <button id="save-sweep">Save sweep address</button>
-    <div class="msg" id="sweep-msg"></div>
+    <section class="card">
+      <h2>Force-close recovery</h2>
+      <p class="hint">
+        If a channel ever force-closes, the wallet sweeps the reclaimed on-chain funds to this address.
+        Set a segwit address (<b>bc1q…</b> / <b>bc1p…</b>) you control — without one, the funds wait
+        unclaimed until you set it, so set it now and recovery is automatic. Can be changed anytime.
+      </p>
+      <label>On-chain sweep address</label>
+      <input id="sweep-address" placeholder="bc1q…" />
+      <button id="save-sweep">Save sweep address</button>
+      <div class="msg" id="sweep-msg"></div>
+    </section>
 
-    <h2>Approved sites</h2>
-    <p class="hint">Sites you've granted WebLN access, with their daily spending caps.</p>
-    <table id="grants"><tbody></tbody></table>
+    <section class="card">
+      <h2>Approved sites</h2>
+      <p class="hint">Sites you've granted WebLN access, with their daily spending caps.</p>
+      <table id="grants"><tbody></tbody></table>
+    </section>
 
-    <section class="danger">
+    <section class="card danger">
       <h2>Danger zone</h2>
       <p class="hint">
         Delete the wallet on the <b id="reset-network">current</b> network — erases its seed,
@@ -168,6 +188,33 @@
       </p>
       <button id="reset-wallet" class="danger-btn">Reset wallet on this network</button>
       <div class="msg" id="reset-msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>Developer settings</h2>
+      <p class="hint">
+        The defaults are already set up — you only need this if you run your own infrastructure or
+        test on another network.
+      </p>
+      <details>
+        <summary>Network &amp; connection endpoints</summary>
+        <p class="hint">Stop the node before changing these.</p>
+        <label>Network</label>
+        <select id="network">
+          <option value="mainnet">mainnet</option>
+          <option value="testnet">testnet</option>
+          <option value="signet">signet</option>
+          <option value="regtest">regtest</option>
+        </select>
+        <label>Esplora API URL</label>
+        <input id="esplora" placeholder="https://mempool.space/api" />
+        <label>WebSocket bridge URL <span class="hint">(websockify → peer :9735)</span></label>
+        <input id="bridge" placeholder="wss://your-bridge.example/" />
+        <label>Rapid Gossip Sync URL <span class="hint">(mainnet only, for multi-hop routing)</span></label>
+        <input id="rgs" placeholder="https://…/rgs/snapshot" />
+        <button id="save-config">Save settings</button>
+        <div class="msg" id="config-msg"></div>
+      </details>
     </section>
 
     <script type="module" src="options.js"></script>

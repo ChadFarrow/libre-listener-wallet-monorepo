@@ -2,8 +2,10 @@
 
 **Short answer: not as-is, and for most mobile browsers not at all.** The extension is
 built on Chrome/Brave *desktop* primitives that either don't exist on mobile or fight the
-mobile background lifecycle. The wallet's real mobile path is a **native wrapper of the SDK**
-(already anticipated in the codebase), not a mobile browser extension.
+mobile background lifecycle. The best mobile answer isn't to port the extension — it's to
+**run the wallet on your desktop and drive it from your phone over Nostr Wallet Connect
+(NWC)**, which already ships in this repo. A native SDK wrapper is the fallback if an
+on-device node ever becomes a hard requirement.
 
 ## Why the extension itself doesn't port to mobile
 
@@ -54,24 +56,49 @@ The only path that even resembles the current code is the **"move the node to a 
 background page"** refactor already on file for Firefox *desktop* — and on mobile that persistent
 page still gets killed.
 
-## The path that actually fits mobile
+## The path that actually fits mobile: desktop node + NWC on the phone
 
-The codebase already points here. `CLAUDE.md` describes the SDK as running "inside browser/PWA
-sandboxes **(and native mobile wrappers)**," and the dependency-injection design is built for it:
-the SDK takes injected `SecureStorageProvider` / `WebSocketStreamProvider` / `Logger`, with the
-explicit note "**Web injects IndexedDB; mobile injects Keychain.**"
+The strongest mobile answer isn't to run the node on the phone at all — it's to **run the
+wallet on your desktop (extension or PWA) and drive it from a mobile app over Nostr Wallet
+Connect (NWC / NIP-47).** This is already built end-to-end in this repo:
 
-So the intended mobile story is one of:
+- **The desktop wallet is the NWC *server*.** `NwcManager` (SDK) creates
+  `nostr+walletconnect://` pairings with a per-connection **daily spending cap**, and the
+  extension popup / PWA render the pairing QR **on-device** (never a third-party QR service —
+  the URI embeds the spend secret). It answers `pay_invoice`, `make_invoice`, `pay_keysend`
+  (the V4V boost path), `get_info`, etc.
+- **Your phone is just an NWC *client*.** Any NIP-47 app (a nostr client, a podcast app doing
+  V4V boosts, Bitcoin Connect) scans the QR and can spend **only up to the cap you set** — the
+  seed and node keys never leave the desktop sandbox.
+- **Offline desktop still works.** The `@libre/nwc-push-gateway` subscribes to relays and sends
+  **Web Push** to wake an offline PWA when an NWC request arrives; `NwcManager` emits NIP-47
+  `payment_sent` / `payment_received` notifications so the mobile app reconciles a settlement
+  even if its request timed out.
 
-- **A native app (React Native / Capacitor)** that embeds `@libre/listener-wallet`, injecting
-  Keychain-backed storage and a native socket/WS transport — where the OS provides real background
-  execution and a foreground service.
-- **The existing PWA installed to the home screen** — it already runs in the browser sandbox with
-  no extension platform needed, accepting the same background-suspension caveats.
+This lines up with the whole design philosophy: the node lives where it has a real lifecycle
+(desktop, always-on-ish), and the phone carries a **revocable, capped authority** rather than
+funds. It reuses the extension/PWA and gateway exactly as they are — **no mobile-extension or
+native-node work required.**
 
-Either option reuses the SDK as-is. A mobile *browser extension*, by contrast, would be a large
-rewrite targeting fringe browsers, on a lifecycle model that is actively unsafe for a node holding
-funds.
+### Fallbacks, if you ever want the node *on* the device
 
-**Recommendation:** if mobile is a goal, invest in a native SDK wrapper (or lean on the PWA), not
-a mobile browser extension.
+The DI design keeps these open. `CLAUDE.md` describes the SDK as running "inside browser/PWA
+sandboxes **(and native mobile wrappers)**"; it takes injected `SecureStorageProvider` /
+`WebSocketStreamProvider` / `Logger`, with the note "**Web injects IndexedDB; mobile injects
+Keychain.**"
+
+- **A native app (React Native / Capacitor)** embedding `@libre/listener-wallet` with
+  Keychain-backed storage and a native socket transport — real background execution / foreground
+  service.
+- **The existing PWA installed to the home screen** — already runs in the browser sandbox, no
+  extension platform needed, accepting mobile's background-suspension caveats.
+
+A mobile *browser extension*, by contrast, would be a large rewrite targeting fringe browsers on
+a lifecycle model that is actively unsafe for a node holding funds.
+
+## Recommendation
+
+**Run the wallet on desktop (extension or PWA) and connect your phone over NWC.** It's the
+lowest-risk option, it keeps the keys off the phone, and it already ships. Reach for a native
+SDK wrapper only if an on-device node becomes a hard requirement — and skip the mobile browser
+extension entirely.

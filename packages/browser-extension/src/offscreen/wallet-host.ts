@@ -329,12 +329,23 @@ export class WalletHost implements WalletRpc {
   // in the options UI (control-plane only — never a WebLN/page-reachable method, never logged).
   // Reads storage directly, so it works whether or not the node is running.
   async getRecoveryPhrase(): Promise<{ mnemonic: string }> {
+    return { mnemonic: seedHexToMnemonic(await this.readSeedHex()) };
+  }
+
+  // Return the active network's raw 64-hex seed (this app's native format — the simplest thing to
+  // paste back into the Seed field). Same control-plane/never-logged rules as getRecoveryPhrase.
+  async getSeed(): Promise<{ seedHex: string }> {
+    return { seedHex: await this.readSeedHex() };
+  }
+
+  // Read + validate the active network's stored seed. Throws if there's no wallet yet.
+  private async readSeedHex(): Promise<string> {
     const storage = this.storageForNetwork(await this.activeNetwork());
     const seedHex = await storage.getItem(SEED_KEY);
     if (!seedHex || !/^[0-9a-fA-F]{64}$/.test(seedHex)) {
       throw new Error("No wallet seed on this network — create or restore a wallet first.");
     }
-    return { mnemonic: seedHexToMnemonic(seedHex) };
+    return seedHex;
   }
 
   // Restore from an encrypted backup envelope. importState writes seed + channel state + network

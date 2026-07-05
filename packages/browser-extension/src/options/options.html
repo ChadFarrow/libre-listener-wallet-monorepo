@@ -55,17 +55,23 @@
       Auto-save a backup file to Downloads when my wallet changes
     </label>
 
-    <h2>Recovery phrase</h2>
+    <h2>Recovery phrase &amp; seed</h2>
     <p class="hint">
-      Your seed as a 24-word BIP39 phrase — write it down and keep it offline. It restores this
-      wallet (and compatible wallets); it's not meant for importing into a standard HD wallet, and
-      anyone who reads it can spend your funds.
+      Two forms of the same key — anyone who reads either can spend your funds, so write them down
+      and keep them offline. The <b>24-word phrase</b> is portable to compatible wallets (not a
+      standard HD wallet like BlueWallet/LND); the <b>64-hex seed</b> is this app's native format —
+      paste it into the Seed field to restore here.
     </p>
+    <label class="hint" style="display:block;margin-top:4px">24-word recovery phrase</label>
     <textarea id="phrase-words" class="phrase-blur" readonly rows="3"
-      style="width:100%;box-sizing:border-box;margin-top:4px;font:13px/1.6 monospace"></textarea>
+      style="width:100%;box-sizing:border-box;font:13px/1.6 monospace"></textarea>
+    <label class="hint" style="display:block;margin-top:8px">64-hex seed</label>
+    <textarea id="seed-hex" class="phrase-blur" readonly rows="2"
+      style="width:100%;box-sizing:border-box;font:13px/1.6 monospace;word-break:break-all"></textarea>
     <div class="peer-row" style="margin-top:8px">
       <button id="toggle-phrase-blur" class="ghost">Unhide</button>
       <button id="copy-phrase" class="ghost">Copy phrase</button>
+      <button id="copy-seed-hex" class="ghost">Copy hex</button>
     </div>
     <div class="msg" id="phrase-msg"></div>
 

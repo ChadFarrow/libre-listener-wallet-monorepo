@@ -16,6 +16,7 @@ describe("isAllowedWeblnMethod", () => {
       "exportBackup",
       "createWallet",
       "getRecoveryPhrase",
+      "getSeed",
       "restoreWallet",
       "setConfig",
       "getConfig",

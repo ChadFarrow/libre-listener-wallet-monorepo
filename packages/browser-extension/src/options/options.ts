@@ -474,36 +474,46 @@ async function loadChannels() {
 }
 
 // loadChannels reads currentNetwork (for the explorer link), which loadConfig sets — chain them.
-// Recovery phrase: show the seed as its 24-word BIP39 phrase, blurred until Unhide (anti
+// Recovery phrase + hex seed: show both forms of the key, blurred until Unhide (anti
 // shoulder-surf). Reads the stored seed via the offscreen host — works node running or not.
 async function loadPhrase() {
-  const box = $<HTMLTextAreaElement>("phrase-words");
+  const phraseBox = $<HTMLTextAreaElement>("phrase-words");
+  const hexBox = $<HTMLTextAreaElement>("seed-hex");
   try {
-    const { mnemonic } = await command<{ mnemonic: string }>("getRecoveryPhrase");
-    box.value = mnemonic;
+    const [{ mnemonic }, { seedHex }] = await Promise.all([
+      command<{ mnemonic: string }>("getRecoveryPhrase"),
+      command<{ seedHex: string }>("getSeed"),
+    ]);
+    phraseBox.value = mnemonic;
+    hexBox.value = seedHex;
   } catch (e: any) {
-    box.value = ""; // no wallet on this network yet, or read failed
+    phraseBox.value = ""; // no wallet on this network yet, or read failed
+    hexBox.value = "";
     setMsg("phrase-msg", e?.message || "No recovery phrase yet — create or restore a wallet first.");
   }
 }
+// One toggle un-blurs both the phrase and the hex seed.
 $("toggle-phrase-blur").addEventListener("click", () => {
   const blurred = $<HTMLTextAreaElement>("phrase-words").classList.toggle("phrase-blur");
+  $<HTMLTextAreaElement>("seed-hex").classList.toggle("phrase-blur", blurred);
   $("toggle-phrase-blur").textContent = blurred ? "Unhide" : "Hide";
-  if (!blurred) setMsg("phrase-msg", "Write these 24 words down in order and keep them offline.", "ok");
+  if (!blurred) setMsg("phrase-msg", "Write these down in order and keep them offline.", "ok");
 });
-$("copy-phrase").addEventListener("click", async () => {
-  const words = $<HTMLTextAreaElement>("phrase-words").value.trim();
-  if (!words) {
-    setMsg("phrase-msg", "No recovery phrase to copy.", "err");
+async function copyField(id: string, label: string) {
+  const value = $<HTMLTextAreaElement>(id).value.trim();
+  if (!value) {
+    setMsg("phrase-msg", `No ${label} to copy.`, "err");
     return;
   }
   try {
-    await navigator.clipboard.writeText(words);
-    setMsg("phrase-msg", "Recovery phrase copied to clipboard.", "ok");
+    await navigator.clipboard.writeText(value);
+    setMsg("phrase-msg", `${label} copied to clipboard.`, "ok");
   } catch {
     setMsg("phrase-msg", "Copy failed.", "err");
   }
-});
+}
+$("copy-phrase").addEventListener("click", () => void copyField("phrase-words", "Recovery phrase"));
+$("copy-seed-hex").addEventListener("click", () => void copyField("seed-hex", "Hex seed"));
 
 void loadConfig().then(() => void loadChannels());
 void loadGrants();

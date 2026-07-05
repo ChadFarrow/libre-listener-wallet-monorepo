@@ -38,6 +38,8 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.createWallet(params ?? {});
     case "getRecoveryPhrase":
       return host.getRecoveryPhrase();
+    case "getSeed":
+      return host.getSeed();
     case "restoreWallet":
       return host.restoreWallet(params.envelope, params.secret);
     case "startNode":

@@ -4,7 +4,7 @@ import {
   WebSocketStreamProvider,
   WebSocketConnection,
 } from "@libre/listener-wallet";
-import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl, channelConfLabel } from "@libre/shared";
+import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl, channelConfLabel, lsps1OrderStatus } from "@libre/shared";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -902,6 +902,42 @@ lsps1ProviderSelect.addEventListener("change", refreshLsps1Provider);
 lsps1AmountInput.addEventListener("input", refreshLsps1Provider);
 refreshLsps1Provider();
 
+// Polls get_order after the invoice is shown so the user sees payment land: paid → hide the invoice
+// + "opening your channel", COMPLETED → "channel open", FAILED → error. A token cancels a stale poll
+// when a new order is placed; transient errors are ignored (best-effort).
+let lsps1PollToken = 0;
+function startLsps1OrderPoll(apiUrl: string, orderId: string): void {
+  const token = ++lsps1PollToken;
+  const deadline = Date.now() + 15 * 60 * 1000;
+  const tick = async () => {
+    if (token !== lsps1PollToken || !wallet) return;
+    try {
+      const order = await wallet.getLSPS1Order(apiUrl, orderId);
+      if (token !== lsps1PollToken) return;
+      const status = lsps1OrderStatus(order);
+      if (status === "completed") {
+        lsps1InvoiceContainer.classList.add("hidden");
+        appendLog("[LSPS1] 🎉 Channel open! Check the channel status above.", "system");
+        refreshWalletView();
+        return;
+      }
+      if (status === "failed") {
+        appendLog("[LSPS1] Order failed — the LSP could not open the channel.", "error");
+        return;
+      }
+      if (status === "paid") {
+        lsps1InvoiceContainer.classList.add("hidden");
+        appendLog("[LSPS1] ✓ Payment received — opening your channel… (this can take a few confirmations)", "system");
+        refreshWalletView();
+      }
+    } catch {
+      /* transient — keep polling */
+    }
+    if (token === lsps1PollToken && Date.now() < deadline) setTimeout(() => void tick(), 4000);
+  };
+  setTimeout(() => void tick(), 4000);
+}
+
 purchaseLsps1Btn.addEventListener("click", async () => {
   if (!wallet || !isNodeRunning) return;
 
@@ -956,6 +992,7 @@ purchaseLsps1Btn.addEventListener("click", async () => {
     lsps1FeeReadout.classList.remove("hidden");
     lsps1InvoiceStr.value = order.invoice;
     lsps1InvoiceContainer.classList.remove("hidden");
+    startLsps1OrderPoll(provider.restBaseUrl, order.orderId);
   } catch (err: any) {
     appendLog(`[ERROR] LSPS1 purchase failed: ${err.message}`, "error");
   } finally {

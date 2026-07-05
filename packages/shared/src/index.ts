@@ -144,6 +144,20 @@ export interface Lsps1RestOrderResponse {
   channel?: unknown | null;
 }
 
+// Distills an LSPS1 order into the four states the UI cares about while polling get_order:
+// awaiting_payment → paid (invoice left EXPECT_PAYMENT) → completed / failed. order_state
+// (COMPLETED/FAILED) is authoritative and overrides the payment sub-state.
+export function lsps1OrderStatus(
+  order: Lsps1RestOrderResponse
+): "awaiting_payment" | "paid" | "completed" | "failed" {
+  if (order.order_state === "COMPLETED") return "completed";
+  if (order.order_state === "FAILED") return "failed";
+  const payState = order.payment?.bolt11?.state;
+  // EXPECT_PAYMENT = still unpaid; any other state (HOLD/PAID/…) means the LSP saw the payment.
+  if (payState && payState !== "EXPECT_PAYMENT") return "paid";
+  return "awaiting_payment";
+}
+
 // Known mainnet LSPS1-over-REST providers. Reference data the APP uses to build an LspProvider;
 // the SDK still takes injected config (no hardcoded endpoints inside the library behaviour).
 export interface Lsps1RestProvider {

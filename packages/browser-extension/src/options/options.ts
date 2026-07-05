@@ -3,7 +3,13 @@ import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
 import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer, parsePeerString, formatPeerString } from "../core/wallet-config";
 import { downloadBackupName } from "../core/backup-name";
-import { LSPS1_REST_PROVIDERS, mempoolTxUrl, channelConfLabel } from "@libre/shared";
+import {
+  LSPS1_REST_PROVIDERS,
+  mempoolTxUrl,
+  channelConfLabel,
+  lsps1OrderStatus,
+  type Lsps1RestOrderResponse,
+} from "@libre/shared";
 import type { ChannelInfo } from "@libre/listener-wallet";
 import {
   formatOpeningFee,
@@ -153,6 +159,47 @@ function refreshLsps1Provider() {
 $("lsps1-provider").addEventListener("change", refreshLsps1Provider);
 $("lsps1-amount").addEventListener("input", refreshLsps1Provider);
 
+// Polls get_order after the invoice is shown so the user gets live feedback: payment detected →
+// hide the invoice + "opening your channel", COMPLETED → "channel open", FAILED → error. A monotonic
+// token cancels a stale poll when a new order is placed. Best-effort: transient poll errors are ignored.
+let lsps1PollToken = 0;
+function hideLsps1Invoice() {
+  $("lsps1-invoice").style.display = "none";
+  $("lsps1-invoice-label").style.display = "none";
+  $("lsps1-invoice-qr").style.display = "none";
+}
+function startLsps1OrderPoll(apiUrl: string, orderId: string) {
+  const token = ++lsps1PollToken;
+  const deadline = Date.now() + 15 * 60 * 1000; // stop polling after 15 min
+  const tick = async () => {
+    if (token !== lsps1PollToken) return; // superseded by a newer order
+    try {
+      const order = await command<Lsps1RestOrderResponse>("getLSPS1Order", { apiUrl, orderId });
+      if (token !== lsps1PollToken) return;
+      const status = lsps1OrderStatus(order);
+      if (status === "completed") {
+        hideLsps1Invoice();
+        setMsg("lsps1-msg", "🎉 Channel open! It should appear under Your channels.", "ok");
+        void loadChannels();
+        return;
+      }
+      if (status === "failed") {
+        setMsg("lsps1-msg", "Order failed — the LSP could not open the channel. No sats were kept.", "err");
+        return;
+      }
+      if (status === "paid") {
+        hideLsps1Invoice();
+        setMsg("lsps1-msg", "✓ Payment received — opening your channel… (this can take a few confirmations)", "ok");
+        void loadChannels();
+      }
+    } catch {
+      /* transient (offline / LSP hiccup) — keep polling */
+    }
+    if (token === lsps1PollToken && Date.now() < deadline) setTimeout(() => void tick(), 4000);
+  };
+  setTimeout(() => void tick(), 4000);
+}
+
 $("lsps1-order").addEventListener("click", async () => {
   const providerKey = $<HTMLSelectElement>("lsps1-provider").value;
   const provider = LSPS1_REST_PROVIDERS[providerKey] ?? LSPS1_REST_PROVIDERS.megalith;
@@ -201,6 +248,7 @@ $("lsps1-order").addEventListener("click", async () => {
       console.warn("[LSPS1] could not render invoice QR:", qrErr?.message || qrErr);
     }
     setMsg("lsps1-msg", `Order ${order.orderId} placed. Pay the invoice below to open the channel.`, "ok");
+    startLsps1OrderPoll(provider.restBaseUrl, order.orderId);
   } catch (e: any) {
     setMsg("lsps1-msg", e.message, "err");
   } finally {

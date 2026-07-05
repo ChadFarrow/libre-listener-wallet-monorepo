@@ -51,6 +51,8 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.resetWallet();
     case "exportBackup":
       return host.exportBackup();
+    case "getRecoveryPhrase":
+      return host.getRecoveryPhrase();
     case "exportBackupBlob":
       return host.exportBackupBlob();
     case "getSweepAddress":

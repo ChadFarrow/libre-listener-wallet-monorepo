@@ -19,6 +19,7 @@ import { describe, it, expect } from "vitest";
 import { IndexedDBStorageProvider } from "../../indexed-db-storage";
 import { decryptAndParse, type BackupPayload } from "../../state-backup";
 import { BACKUP_DIRECT_KEYS } from "../../backup-keys";
+import { seedHexToMnemonic } from "../../seed-phrase";
 
 // --- Physical IndexedDB layout --------------------------------------------------
 // The default (legacy/un-namespaced) DB name, object store name, and DB version are
@@ -108,6 +109,16 @@ describe("storage contract: backup envelope is forward-restorable", () => {
     expect(env.v).toBe(1);
     expect(env.alg).toBe("AES-256-GCM");
     expect(env.kdf).toBe("HKDF-SHA256");
+  });
+
+  // The BIP39 recovery phrase is a pure encoding of the seed, so entering the
+  // 24-word phrase as the secret must decrypt the SAME frozen envelopes — proving
+  // the phrase path is a drop-in for the hex seed and did NOT alter any envelope.
+  it("the frozen v1/v2 backups also decrypt via the seed's 24-word recovery phrase", async () => {
+    const phrase = seedHexToMnemonic(SEED_HEX);
+    expect(phrase.split(" ")).toHaveLength(24);
+    expect(await decryptAndParse(GOLDEN_V1, phrase)).toEqual(GOLDEN_PAYLOAD);
+    expect(await decryptAndParse(GOLDEN_V2, phrase)).toEqual(GOLDEN_PAYLOAD);
   });
 });
 

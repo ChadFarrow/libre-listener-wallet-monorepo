@@ -2,6 +2,7 @@ import {
   LibreListenerWallet,
   IndexedDBStorageProvider,
   bytesToHex,
+  seedHexToMnemonic,
   type SecureStorageProvider,
 } from "@libre/listener-wallet";
 import type { BudgetRenewal, NwcMethod } from "@libre/shared";
@@ -363,6 +364,19 @@ export class WalletHost implements WalletRpc {
   async exportBackup(): Promise<string> {
     this.requireRunning();
     return this.wallet!.exportState();
+  }
+
+  // Return the active wallet's seed as its 24-word BIP39 recovery phrase, for
+  // exporting/moving the wallet to another BIP39-compatible wallet. Reads the
+  // stored seed directly (works whether or not the node is running). Privileged:
+  // reachable only from the extension's own options/popup, never from a page.
+  async getRecoveryPhrase(): Promise<{ mnemonic: string }> {
+    const storage = this.storageForNetwork(await this.activeNetwork());
+    const seedHex = await storage.getItem(SEED_KEY);
+    if (!seedHex || !/^[0-9a-fA-F]{64}$/.test(seedHex)) {
+      throw new Error("No wallet seed on this network — create or restore a wallet first.");
+    }
+    return { mnemonic: seedHexToMnemonic(seedHex) };
   }
 
   // ---- Force-close recovery: on-chain sweep address ----

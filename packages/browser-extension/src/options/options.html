@@ -54,6 +54,21 @@
       Auto-save a backup file to Downloads when my wallet changes
     </label>
 
+    <h2>Recovery phrase</h2>
+    <p class="hint">
+      Your seed as a 24-word BIP39 phrase — write it down to move this wallet to another
+      BIP39-compatible wallet. (A standard HD wallet like BlueWallet/LND derives different keys
+      from the words, so it won't show your Lightning funds — the encrypted backup above is the
+      simplest way to restore <em>this</em> wallet.) Anyone with these words controls your funds.
+    </p>
+    <button id="show-phrase" class="ghost">Show recovery phrase</button>
+    <textarea id="phrase-words" readonly rows="3" style="width:100%;box-sizing:border-box;display:none;margin-top:10px;font:13px/1.5 monospace"></textarea>
+    <div class="peer-row" id="phrase-actions" style="display:none">
+      <button id="copy-phrase" class="ghost">Copy phrase</button>
+      <button id="hide-phrase" class="ghost">Hide</button>
+    </div>
+    <div class="msg" id="phrase-msg"></div>
+
     <h2>Google Drive backup</h2>
     <p class="hint">
       Optional: encrypted backups auto-sync to your Drive's private app folder. Create a Google

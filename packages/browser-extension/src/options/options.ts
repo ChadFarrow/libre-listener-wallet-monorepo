@@ -269,6 +269,41 @@ $("export").addEventListener("click", async () => {
   }
 });
 
+// Recovery phrase: reveal the seed as its 24-word BIP39 phrase (for moving to another wallet).
+// Reads the stored seed via the offscreen host — works whether or not the node is running.
+$("show-phrase").addEventListener("click", async () => {
+  setMsg("phrase-msg", "Deriving recovery phrase…");
+  try {
+    const { mnemonic } = await command<{ mnemonic: string }>("getRecoveryPhrase");
+    const words = $<HTMLTextAreaElement>("phrase-words");
+    words.value = mnemonic;
+    words.style.display = "block";
+    $("phrase-actions").style.display = "flex";
+    setMsg("phrase-msg", "Write these 24 words down in order and keep them offline.", "ok");
+  } catch (e: any) {
+    setMsg("phrase-msg", e.message, "err");
+  }
+});
+
+$("copy-phrase").addEventListener("click", async () => {
+  const words = $<HTMLTextAreaElement>("phrase-words").value;
+  if (!words) return;
+  try {
+    await navigator.clipboard.writeText(words);
+    setMsg("phrase-msg", "Recovery phrase copied to clipboard.", "ok");
+  } catch {
+    setMsg("phrase-msg", "Clipboard blocked — select and copy the words manually.", "err");
+  }
+});
+
+$("hide-phrase").addEventListener("click", () => {
+  const words = $<HTMLTextAreaElement>("phrase-words");
+  words.value = "";
+  words.style.display = "none";
+  $("phrase-actions").style.display = "none";
+  setMsg("phrase-msg", "");
+});
+
 // Auto-download toggle: persisted in the background (chrome.storage.local).
 async function refreshAutoDownload() {
   const on = await command<boolean>("getAutoDownload").catch(() => false);

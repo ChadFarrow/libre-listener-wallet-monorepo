@@ -3,8 +3,10 @@ import {
   SecureStorageProvider,
   WebSocketStreamProvider,
   WebSocketConnection,
+  seedHexToMnemonic,
 } from "@libre/listener-wallet";
 import { LSPS1_REST_PROVIDERS, bridgeTargetUrl } from "@libre/shared";
+import { resolveSeedInput } from "./core/seed-input";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -120,6 +122,10 @@ const walletStatusBadge = document.getElementById("wallet-status-badge") as HTML
 const seedInput = document.getElementById("seed-input") as HTMLInputElement;
 const toggleSeedBtn = document.getElementById("toggle-seed-btn") as HTMLButtonElement;
 const copySeedBtn = document.getElementById("copy-seed-btn") as HTMLButtonElement;
+const showPhraseBtn = document.getElementById("show-phrase-btn") as HTMLButtonElement;
+const seedPhraseBox = document.getElementById("seed-phrase-box") as HTMLDivElement;
+const seedPhraseWords = document.getElementById("seed-phrase-words") as HTMLTextAreaElement;
+const copyPhraseBtn = document.getElementById("copy-phrase-btn") as HTMLButtonElement;
 const esploraUrlInput = document.getElementById("esplora-url-input") as HTMLInputElement;
 const networkSelect = document.getElementById("network-select") as HTMLSelectElement;
 const networkBadge = document.getElementById("network-badge") as HTMLSpanElement;
@@ -426,6 +432,38 @@ toggleSeedBtn.addEventListener("click", () => {
   }
 });
 
+// Show the current wallet's seed as its 24-word BIP39 recovery phrase. Works with
+// whatever is in the Seed field (phrase or hex) or the seed already in storage —
+// so a user who only has the legacy 64-hex seed can retrieve their words.
+showPhraseBtn.addEventListener("click", async () => {
+  try {
+    let seedHex = resolveSeedInput(seedInput.value);
+    if (!seedHex) {
+      const stored = await storage.getItem("ldk_seed");
+      if (stored && /^[0-9a-fA-F]{64}$/.test(stored)) seedHex = stored;
+    }
+    if (!seedHex) {
+      appendLog("[ERROR] No seed available — create or restore a wallet first.", "error");
+      return;
+    }
+    seedPhraseWords.value = seedHexToMnemonic(seedHex);
+    seedPhraseBox.classList.remove("hidden");
+    appendLog("[SYSTEM] Recovery phrase shown. Write down the 24 words in order.", "system");
+  } catch (e) {
+    appendLog(`[ERROR] Could not derive recovery phrase: ${e instanceof Error ? e.message : e}`, "error");
+  }
+});
+
+copyPhraseBtn.addEventListener("click", async () => {
+  if (!seedPhraseWords.value) return;
+  try {
+    await navigator.clipboard.writeText(seedPhraseWords.value);
+    appendLog("[SYSTEM] Recovery phrase copied to clipboard.", "system");
+  } catch {
+    appendLog("[WARN] Clipboard blocked — select and copy the phrase manually.", "warn");
+  }
+});
+
 initLogControls();
 
 // 6. Start LDK Node
@@ -526,10 +564,11 @@ startNodeBtn.addEventListener("click", async () => {
     appendLog("[SYSTEM] Initializing LibreListenerWallet...", "system");
     appendLog("[SYSTEM] Fetching and compiling LDK WebAssembly...", "system");
 
-    // Resolve the seed: prefer the field (manual entry / New Wallet), else fall
-    // back to the seed already in storage (e.g. after a passphrase-only restore).
-    let seed = seedInput.value.trim();
-    if (!/^[0-9a-fA-F]{64}$/.test(seed)) {
+    // Resolve the seed: prefer the field (24-word phrase or 64-hex, manual entry /
+    // New Wallet), else fall back to the seed already in storage (e.g. after a
+    // passphrase-only restore).
+    let seed = resolveSeedInput(seedInput.value) ?? "";
+    if (!seed) {
       const stored = await storage.getItem("ldk_seed");
       if (stored && /^[0-9a-fA-F]{64}$/.test(stored)) {
         seed = stored;
@@ -994,9 +1033,9 @@ importStateBtn.addEventListener("click", async () => {
     appendLog("[ERROR] Choose a backup file first.", "error");
     return;
   }
-  const seed = seedInput.value.trim();
-  if (!/^[0-9a-fA-F]{64}$/.test(seed)) {
-    appendLog("[ERROR] Paste your 64-hex seed in the Seed field to decrypt the backup.", "error");
+  const seed = resolveSeedInput(seedInput.value);
+  if (!seed) {
+    appendLog("[ERROR] Paste your 64-hex seed (or 24-word recovery phrase) in the Seed field to decrypt the backup.", "error");
     return;
   }
   try {
@@ -1046,11 +1085,15 @@ newWalletBtn.addEventListener("click", async () => {
     .join("");
   seedInput.value = pendingSeed;
   seedInput.type = "text"; // reveal so they can copy it
+  // Hex seed is the primary artifact (simplest). The 24-word BIP39 phrase is an
+  // optional export for moving to another wallet — available via "Show recovery
+  // phrase" — so keep its box hidden here.
+  seedPhraseBox.classList.add("hidden");
   seedSavedCheckbox.checked = false;
   updateCreateWalletBtnState();
   createWalletFields.classList.remove("hidden");
   createWalletStatus.textContent = "Save the seed above, tick the box, then Create Wallet";
-  appendLog("[SYSTEM] New seed generated and shown above. SAVE IT NOW (paper/password manager), then tick the box.", "system");
+  appendLog("[SYSTEM] New seed generated and shown above. SAVE IT NOW (paper/password manager), then tick the box. (Optional: export a 24-word recovery phrase via ‘Show recovery phrase’.)", "system");
 });
 
 // Step 2 — "Create Wallet": persist the new wallet, then start the node (which
@@ -1340,9 +1383,9 @@ backupDriveNowBtn.addEventListener("click", () => {
 
 
 restoreDriveBtn.addEventListener("click", async () => {
-  const seed = seedInput.value.trim();
-  if (!/^[0-9a-fA-F]{64}$/.test(seed)) {
-    appendLog("[ERROR] Paste your 64-hex seed in the Seed field to decrypt the Drive backup.", "error");
+  const seed = resolveSeedInput(seedInput.value);
+  if (!seed) {
+    appendLog("[ERROR] Paste your 64-hex seed (or 24-word recovery phrase) in the Seed field to decrypt the Drive backup.", "error");
     return;
   }
   if (isNodeRunning) {

@@ -11,3 +11,20 @@ export function reconnectDelayMs(attempt: number, baseMs = 1000, capMs = 30000):
   const n = attempt < 1 ? 1 : attempt;
   return Math.min(capMs, baseMs * 2 ** (n - 1));
 }
+
+/**
+ * Whether a scheduled redial should actually dial when its timer fires. `connectedInLdk`
+ * (PeerManager.list_peers()) matters independently of our own descriptor map: if a duplicate
+ * connection was ever opened and killed by LDK ("Got second connection with <peer>, closing"),
+ * the duplicate's registration overwrote — and its death then deleted — the map entry for the
+ * ORIGINAL still-live connection. Redialing in that state mints the next duplicate, forever
+ * (a 1↔2 peer-count flap). LDK's list is the ground truth for "already connected".
+ */
+export function shouldRedialNow(state: {
+  running: boolean;
+  desired: boolean;
+  connectedInMap: boolean;
+  connectedInLdk: boolean;
+}): boolean {
+  return state.running && state.desired && !state.connectedInMap && !state.connectedInLdk;
+}

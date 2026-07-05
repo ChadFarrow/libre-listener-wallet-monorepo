@@ -102,7 +102,7 @@ import { NwcManager } from "./nwc-manager";
 import { IndexedDBStorageProvider } from "./indexed-db-storage";
 import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayload } from "./state-backup";
 import { BACKUP_DIRECT_KEYS } from "./backup-keys";
-import { reconnectDelayMs } from "./peer-reconnect";
+import { reconnectDelayMs, shouldRedialNow } from "./peer-reconnect";
 import { normalizeBackupSecret } from "./seed-phrase";
 
 export { IndexedDBStorageProvider };
@@ -336,6 +336,9 @@ export class LibreListenerWallet {
   private connectedPeers: Map<string, WebSocketDescriptor> = new Map(); // hex pubkey -> descriptor
   // Peers we want to keep connected (hex pubkey -> address). Drives auto-reconnect.
   private desiredPeers: Map<string, { host: string; port: number }> = new Map();
+  // In-flight outbound dials (hex pubkey -> the dial promise). Coalesces concurrent
+  // connectPeer() calls to the same peer so a race can't open a duplicate connection.
+  private pendingDials: Map<string, Promise<void>> = new Map();
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
   // Persisted pubkey -> {host,port} of peers we've connected to, so start() can redial our
@@ -1264,7 +1267,31 @@ export class LibreListenerWallet {
   }
 
   getConnectedPeers(): string[] {
-    return Array.from(this.connectedPeers.keys());
+    // Union of our transport map and LDK's handshake-complete list: the map alone can lose a
+    // live peer after LDK kills a duplicate connection (see connectPeer), and LDK's list alone
+    // misses a socket still mid-handshake.
+    const peers = new Set(this.connectedPeers.keys());
+    try {
+      for (const p of this.peerManager?.list_peers() ?? []) {
+        peers.add(bytesToHex(p.get_counterparty_node_id()));
+      }
+    } catch {
+      // bindings hiccup — fall back to the map alone
+    }
+    return Array.from(peers);
+  }
+
+  // LDK's own view of whether a (handshake-complete) connection to this peer exists — the
+  // ground truth our descriptor map can drift from. NEVER call synchronously from inside an
+  // LDK callback (see the handleDisconnect re-entrancy note): list_peers() borrows PeerManager
+  // state and re-entrant use traps with BorrowMutError.
+  private ldkHasPeer(pubkey: string): boolean {
+    try {
+      const peers = this.peerManager?.list_peers() ?? [];
+      return peers.some((p) => bytesToHex(p.get_counterparty_node_id()) === pubkey);
+    } catch {
+      return false;
+    }
   }
 
   /** Set the on-chain scriptPubKey to sweep force-closed funds to. Pass undefined to clear. */
@@ -1326,19 +1353,35 @@ export class LibreListenerWallet {
       throw new Error("Wallet is not running");
     }
 
-    this.logger?.info(`Connecting to peer: ${pubkey}@${host}:${port}`);
-
-    // Remember this peer so we keep it connected (auto-reconnect on drop) and can redial it
+    // Remember this peer so we want it connected (auto-reconnect on drop) and can redial it
     // across reloads (persisted address book — see redialChannelPeers). Best-effort persist.
     this.desiredPeers.set(pubkey, { host, port });
     this.peerAddressBook.set(pubkey, { host, port });
     void this.persistPeerAddressBook();
 
-    // If already connected, do nothing
-    if (this.connectedPeers.has(pubkey)) {
+    // Already connected? Check LDK's own peer list too, not just our map: after a duplicate
+    // connection is killed ("Got second connection with <peer>, closing"), the duplicate's
+    // registration has overwritten — and its death deleted — the map entry for the ORIGINAL
+    // still-live connection, so the map alone under-reports. Dialing in that state would
+    // just mint the next duplicate (the 1↔2 peer-count flap loop).
+    if (this.connectedPeers.has(pubkey) || this.ldkHasPeer(pubkey)) {
       this.logger?.info(`Peer ${pubkey} is already connected`);
       return;
     }
+
+    // Coalesce concurrent dials (e.g. an app-level startup redial racing redialChannelPeers):
+    // both callers await the SAME in-flight dial instead of opening two sockets.
+    const pending = this.pendingDials.get(pubkey);
+    if (pending) return pending;
+    const dial = this.dialPeer(pubkey, host, port).finally(() => this.pendingDials.delete(pubkey));
+    this.pendingDials.set(pubkey, dial);
+    return dial;
+  }
+
+  // The actual socket dial + LDK registration. Only ever one in flight per pubkey
+  // (connectPeer coalesces); call through connectPeer, never directly.
+  private async dialPeer(pubkey: string, host: string, port: number): Promise<void> {
+    this.logger?.info(`Connecting to peer: ${pubkey}@${host}:${port}`);
 
     const connection = await this.socketProvider.connect(host, port);
     const descriptorId = this.nextDescriptorId++;
@@ -1370,6 +1413,11 @@ export class LibreListenerWallet {
       descriptorImpl.disconnect_socket();
     };
 
+    // Re-check after the async socket dial: stop() may have torn the node down meanwhile.
+    if (!this.peerManager) {
+      descriptorImpl.disconnect_socket();
+      throw new Error("Wallet is not running");
+    }
     const initialBytesResult = this.peerManager.new_outbound_connection(
       hexToBytes(pubkey),
       descriptor,
@@ -1472,7 +1520,19 @@ export class LibreListenerWallet {
 
     const timer = setTimeout(async () => {
       this.reconnectTimers.delete(pubkey);
-      if (!this.isRunning || !this.desiredPeers.has(pubkey) || this.connectedPeers.has(pubkey)) return;
+      // Re-check on fire — including LDK's own peer list (safe here: a timer callback is never
+      // inside an LDK call stack). If LDK still holds a live connection, this "drop" was a
+      // killed duplicate and redialing would mint the next one.
+      const redial = shouldRedialNow({
+        running: this.isRunning,
+        desired: this.desiredPeers.has(pubkey),
+        connectedInMap: this.connectedPeers.has(pubkey),
+        connectedInLdk: this.ldkHasPeer(pubkey),
+      });
+      if (!redial) {
+        this.reconnectAttempts.delete(pubkey); // nothing to chase — reset the backoff
+        return;
+      }
       try {
         await this.connectPeer(pubkey, target.host, target.port);
       } catch (e) {

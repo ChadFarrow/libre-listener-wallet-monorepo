@@ -96,6 +96,7 @@ export class WalletHost implements WalletRpc {
     nodeId?: string;
     balance?: { spendableSat: number; receivableSat: number };
     channels?: number;
+    usableChannels?: number;
     peers?: number;
   }> {
     const network = await this.activeNetwork();
@@ -107,15 +108,18 @@ export class WalletHost implements WalletRpc {
     let nodeId: string | undefined;
     let balance: { spendableSat: number; receivableSat: number } | undefined;
     let channels: number | undefined;
+    let usableChannels: number | undefined;
     let peers: number | undefined;
     if (running && this.wallet) {
       const mgr = this.wallet.getChannelManager();
       if (mgr) nodeId = bytesToHex(mgr.get_our_node_id());
       balance = this.wallet.getBalance();
-      channels = this.wallet.getChannels().length;
+      const chans = this.wallet.getChannels();
+      channels = chans.length;
+      usableChannels = chans.filter((c) => c.isUsable).length;
       peers = this.wallet.getConnectedPeers().length;
     }
-    return { network, running, hasSeed, hasChannelState, createdNew, nodeId, balance, channels, peers };
+    return { network, running, hasSeed, hasChannelState, createdNew, nodeId, balance, channels, usableChannels, peers };
   }
 
   // Build (but do not start) the wallet instance for the active network.

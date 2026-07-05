@@ -1,6 +1,7 @@
 import QRCode from "qrcode";
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
+import { channelCountLabel } from "../core/stat-format";
 import {
   parseBudgetRenewal,
   parseMaxAmount,
@@ -44,7 +45,7 @@ async function refresh() {
     if (hasWallet) {
       $("spendable").textContent = s.balance ? `${s.balance.spendableSat} sat` : "—";
       $("receivable").textContent = s.balance ? `${s.balance.receivableSat} sat` : "—";
-      $("channels").textContent = s.channels ?? "—";
+      $("channels").textContent = channelCountLabel(s.channels, s.usableChannels);
       $("peers").textContent = s.peers ?? "—";
       $("nodeid").textContent = s.nodeId || "(start the node to load)";
       show($("start"), !running);
@@ -327,3 +328,6 @@ $("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage
 
 onWalletEvent(() => refresh());
 void refresh();
+// Live-refresh while the popup stays open: peer connects/drops don't emit wallet events (only
+// channel-state persists do), so poll — the interval dies with the popup document on close.
+setInterval(() => void refresh(), 3000);

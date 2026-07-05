@@ -1,4 +1,5 @@
 import { hexToBytes } from "./storage-cache";
+import { normalizeBackupSecret } from "./seed-phrase";
 
 export interface BackupPayload {
   version: 1;
@@ -134,6 +135,9 @@ export async function serializeAndEncrypt(
 
 /** Decrypt a backup, auto-detecting v2 (passphrase or seed) or legacy v1 (seed). */
 export async function decryptAndParse(envelopeStr: string, secret: string): Promise<BackupPayload> {
+  // A 24-word BIP39 recovery phrase is just an encoding of the 64-hex seed;
+  // convert it up front so the rest of the seed/passphrase detection is unchanged.
+  secret = normalizeBackupSecret(secret);
   let env: { v?: number };
   try {
     env = JSON.parse(envelopeStr);

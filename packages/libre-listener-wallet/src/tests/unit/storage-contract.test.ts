@@ -18,6 +18,7 @@ import "fake-indexeddb/auto";
 import { describe, it, expect } from "vitest";
 import { IndexedDBStorageProvider } from "../../indexed-db-storage";
 import { decryptAndParse, type BackupPayload } from "../../state-backup";
+import { seedHexToMnemonic } from "../../seed-phrase";
 import { BACKUP_DIRECT_KEYS } from "../../backup-keys";
 
 // --- Physical IndexedDB layout --------------------------------------------------
@@ -89,6 +90,16 @@ describe("storage contract: backup envelope is forward-restorable", () => {
 
   it("a frozen v2 backup still decrypts with the seed", async () => {
     expect(await decryptAndParse(GOLDEN_V2, SEED_HEX)).toEqual(GOLDEN_PAYLOAD);
+  });
+
+  // The BIP39 recovery phrase is a pure encoding of the seed, so entering the
+  // 24-word phrase as the secret must decrypt the SAME frozen envelopes — proving
+  // the phrase path is a drop-in for the hex seed and did NOT alter any envelope.
+  it("the frozen v1/v2 backups also decrypt via the seed's 24-word recovery phrase", async () => {
+    const phrase = seedHexToMnemonic(SEED_HEX);
+    expect(phrase.split(" ")).toHaveLength(24);
+    expect(await decryptAndParse(GOLDEN_V1, phrase)).toEqual(GOLDEN_PAYLOAD);
+    expect(await decryptAndParse(GOLDEN_V2, phrase)).toEqual(GOLDEN_PAYLOAD);
   });
 
   it("the v2 envelope shape constants are unchanged", () => {

@@ -103,6 +103,7 @@ import { IndexedDBStorageProvider } from "./indexed-db-storage";
 import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayload } from "./state-backup";
 import { BACKUP_DIRECT_KEYS } from "./backup-keys";
 import { reconnectDelayMs } from "./peer-reconnect";
+import { normalizeBackupSecret } from "./seed-phrase";
 
 export { IndexedDBStorageProvider };
 
@@ -1207,12 +1208,15 @@ export class LibreListenerWallet {
     try {
       const payload = await decryptAndParse(envelope, secret);
       const seedInBackup = payload.entries["ldk_seed"];
-      const isHex = /^[0-9a-fA-F]{64}$/.test(secret);
+      // Accept a 24-word recovery phrase as the seed secret: normalize to hex so
+      // the seedMatches comparison below works for both phrase and raw-hex input.
+      const resolvedSecret = normalizeBackupSecret(secret);
+      const isHex = /^[0-9a-fA-F]{64}$/.test(resolvedSecret);
       return {
         ok: true,
         network: payload.network,
         hasSeed: !!seedInBackup,
-        seedMatches: isHex ? seedInBackup?.toLowerCase() === secret.toLowerCase() : undefined,
+        seedMatches: isHex ? seedInBackup?.toLowerCase() === resolvedSecret.toLowerCase() : undefined,
         entryKeys: Object.keys(payload.entries),
       };
     } catch (e) {
@@ -1827,3 +1831,10 @@ export type { WalletConfig } from "@libre/shared";
 export { LspsClient } from "./lsps-client";
 export { Lsps1RestClient, clampExpiryBlocks, isOrderComplete, isOrderFailed, orderInvoice } from "./lsps1-rest-client";
 export { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
+export {
+  seedHexToMnemonic,
+  mnemonicToSeedHex,
+  isValidSeedMnemonic,
+  normalizeMnemonic,
+  normalizeBackupSecret,
+} from "./seed-phrase";

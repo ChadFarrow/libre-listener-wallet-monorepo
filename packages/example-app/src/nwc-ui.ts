@@ -2,13 +2,24 @@
 // active-pairings list with revoke. Exposes setNwcEnabled/updateNwcConnectionsList
 // for the node start/stop handlers.
 import QRCode from "qrcode";
+import type { NwcMethod } from "@libre/shared";
 import { appendLog } from "./core/logger";
 import { copyToClipboard } from "./core/ui-helpers";
 import type { AppContext } from "./core/app-context";
+import {
+  parseBudgetRenewal,
+  parseMaxAmount,
+  buildAllowedMethods,
+  expiryFromDays,
+  renewalLabel,
+} from "./core/nwc-options";
 
 const createNwcBtn = document.getElementById("create-nwc-btn") as HTMLButtonElement;
 const nwcConnNameInput = document.getElementById("nwc-conn-name") as HTMLInputElement;
 const nwcSpendingLimitInput = document.getElementById("nwc-spending-limit") as HTMLInputElement;
+const nwcBudgetRenewalSelect = document.getElementById("nwc-budget-renewal") as HTMLSelectElement;
+const nwcMaxAmountInput = document.getElementById("nwc-max-amount") as HTMLInputElement;
+const nwcExpirySelect = document.getElementById("nwc-expiry") as HTMLSelectElement;
 const nwcRelayUrlInput = document.getElementById("nwc-relay-url") as HTMLInputElement;
 const nwcUriContainer = document.getElementById("nwc-uri-container") as HTMLDivElement;
 const nwcUriStr = document.getElementById("nwc-uri-str") as HTMLTextAreaElement;
@@ -44,11 +55,44 @@ export function initNwcUi(c: AppContext) {
       }
       const limit = parseInt(rawLimit, 10);
       if (limit === 0) {
-        appendLog(`[NWC] ⚠ Creating an UNLIMITED-spend pairing "${name}" (no daily cap).`, "system");
+        appendLog(`[NWC] ⚠ Creating an UNLIMITED-spend pairing "${name}" (no budget cap).`, "system");
       }
 
-      appendLog(`[NWC] Creating connection pairing: "${name}" with limit: ${limit === 0 ? "unlimited" : limit + " sats"} on relay ${relayUrl}...`, "system");
-      const uri = await wallet.nwc.createConnection(name, { spendingLimitSats: limit, relayUrl });
+      const budgetRenewal = parseBudgetRenewal(nwcBudgetRenewalSelect.value);
+
+      // Optional per-payment cap. A malformed entry is a hard error — a blank
+      // means "no cap", but garbage must never silently become unlimited.
+      const maxAmountRes = parseMaxAmount(nwcMaxAmountInput.value);
+      if (!maxAmountRes.ok) {
+        appendLog(`[ERROR] ${maxAmountRes.error}`, "error");
+        return;
+      }
+      const maxAmountSats = maxAmountRes.value;
+
+      const allowedMethods = buildAllowedMethods({
+        pay_invoice: (document.getElementById("nwc-method-pay_invoice") as HTMLInputElement).checked,
+        pay_keysend: (document.getElementById("nwc-method-pay_keysend") as HTMLInputElement).checked,
+        make_invoice: (document.getElementById("nwc-method-make_invoice") as HTMLInputElement).checked,
+        get_balance: (document.getElementById("nwc-method-get_balance") as HTMLInputElement).checked,
+      });
+
+      const expiresAt = expiryFromDays(parseInt(nwcExpirySelect.value, 10) || 0, Date.now());
+
+      const summary = [
+        `budget ${limit === 0 ? "unlimited" : limit + " sats"} (${renewalLabel(budgetRenewal)})`,
+        maxAmountSats ? `max/payment ${maxAmountSats} sats` : null,
+        allowedMethods ? `methods [${allowedMethods.join(", ") || "none"}]` : "all methods",
+        expiresAt ? `expires ${new Date(expiresAt).toLocaleDateString()}` : "no expiry",
+      ].filter(Boolean).join(", ");
+      appendLog(`[NWC] Creating connection pairing "${name}" — ${summary} on relay ${relayUrl}...`, "system");
+      const uri = await wallet.nwc.createConnection(name, {
+        spendingLimitSats: limit,
+        relayUrl,
+        budgetRenewal,
+        maxAmountSats,
+        allowedMethods,
+        expiresAt,
+      });
 
       appendLog(`[NWC] Connection created successfully!`, "system");
       nwcUriStr.value = uri;
@@ -120,8 +164,8 @@ export async function updateNwcConnectionsList() {
       const limitEl = document.createElement("span");
       limitEl.className = "connection-limit";
       limitEl.innerText = conn.spendingLimitSats > 0
-        ? `Limit: ${conn.spentTodaySats}/${conn.spendingLimitSats} sats`
-        : "Limit: Unlimited";
+        ? `Budget: ${conn.spentTodaySats}/${conn.spendingLimitSats} sats (${renewalLabel(conn.budgetRenewal)})`
+        : "Budget: Unlimited";
 
       const relayEl = document.createElement("span");
       relayEl.className = "connection-relay";
@@ -129,6 +173,31 @@ export async function updateNwcConnectionsList() {
 
       metaEl.appendChild(pubkeyEl);
       metaEl.appendChild(limitEl);
+
+      if (conn.maxAmountSats && conn.maxAmountSats > 0) {
+        const maxEl = document.createElement("span");
+        maxEl.className = "connection-max";
+        maxEl.innerText = `Max/payment: ${conn.maxAmountSats} sats`;
+        metaEl.appendChild(maxEl);
+      }
+
+      if (conn.allowedMethods) {
+        const methodsEl = document.createElement("span");
+        methodsEl.className = "connection-methods";
+        methodsEl.innerText = `Methods: ${conn.allowedMethods.join(", ") || "read-only"}`;
+        metaEl.appendChild(methodsEl);
+      }
+
+      if (conn.expiresAt) {
+        const expiryEl = document.createElement("span");
+        expiryEl.className = "connection-expiry";
+        const expired = Date.now() >= conn.expiresAt;
+        expiryEl.innerText = expired
+          ? `Expired ${new Date(conn.expiresAt).toLocaleDateString()}`
+          : `Expires: ${new Date(conn.expiresAt).toLocaleDateString()}`;
+        metaEl.appendChild(expiryEl);
+      }
+
       metaEl.appendChild(relayEl);
 
       details.appendChild(nameEl);

@@ -9,7 +9,10 @@ import { z } from "zod";
 import {
   nwcRequestSchema,
   NwcConnection,
-  NWCRequestInput
+  NWCRequestInput,
+  NwcMethod,
+  BudgetRenewal,
+  budgetWindowElapsed
 } from "@libre/shared";
 import {
   Bolt11Invoice,
@@ -210,7 +213,17 @@ export class NwcManager {
     });
   }
 
-  async createConnection(name: string, options?: { spendingLimitSats?: number; relayUrl?: string }): Promise<string> {
+  async createConnection(
+    name: string,
+    options?: {
+      spendingLimitSats?: number;
+      relayUrl?: string;
+      budgetRenewal?: BudgetRenewal;
+      maxAmountSats?: number;
+      allowedMethods?: NwcMethod[];
+      expiresAt?: number;
+    }
+  ): Promise<string> {
     const secretBytes = generateSecretKey();
     const secret = bytesToHex(secretBytes);
     const clientPubkey = getPublicKey(secretBytes);
@@ -228,7 +241,14 @@ export class NwcManager {
       lastSpentTimestamp: Date.now(),
       createdAt: Date.now(),
       enabled: true,
-      relayUrl
+      relayUrl,
+      // Only persist the new controls when a caller sets them, so a connection
+      // created without them keeps the legacy shape (daily budget, all methods,
+      // no per-payment cap, no expiry).
+      ...(options?.budgetRenewal ? { budgetRenewal: options.budgetRenewal } : {}),
+      ...(options?.maxAmountSats ? { maxAmountSats: options.maxAmountSats } : {}),
+      ...(options?.allowedMethods ? { allowedMethods: options.allowedMethods } : {}),
+      ...(options?.expiresAt ? { expiresAt: options.expiresAt } : {}),
     };
 
     this.connections.push(connection);
@@ -466,11 +486,29 @@ export class NwcManager {
 
     const request = parseResult.data;
     const now = Date.now();
-    const oneDayMs = 24 * 60 * 60 * 1000;
 
-    // Reset daily limits if 24 hours have passed
+    // Reject an expired connection before doing any work.
+    if (pairing.expiresAt && now >= pairing.expiresAt) {
+      await this.sendErrorResponse(event, "UNAUTHORIZED", "This connection has expired", relayUrl, rpcReq.id);
+      return;
+    }
+
+    // Enforce the per-connection method allowlist. `get_info` is always permitted
+    // (clients need it for the handshake and it exposes no funds); every other
+    // method must be in the allowlist when one is set. An undefined allowlist
+    // means "all methods" (legacy connections).
+    if (
+      pairing.allowedMethods &&
+      request.method !== "get_info" &&
+      !pairing.allowedMethods.includes(request.method as NwcMethod)
+    ) {
+      await this.sendErrorResponse(event, "RESTRICTED", `Method ${request.method} is not permitted for this connection`, relayUrl, rpcReq.id);
+      return;
+    }
+
+    // Reset the spending budget if its renewal window has elapsed.
     let spentToday = pairing.spentTodaySats;
-    if (now - pairing.lastSpentTimestamp >= oneDayMs) {
+    if (budgetWindowElapsed(pairing.budgetRenewal, pairing.lastSpentTimestamp, now)) {
       spentToday = 0;
       pairing.spentTodaySats = 0;
       pairing.lastSpentTimestamp = now;
@@ -483,6 +521,13 @@ export class NwcManager {
         if (!mgr) throw new Error("ChannelManager not available");
         const bestBlock = mgr.current_best_block();
 
+        // Advertise only the methods this connection is actually permitted to use
+        // (get_info is always available). An undefined allowlist means all methods.
+        const grantable = ["get_balance", "make_invoice", "pay_invoice", "pay_keysend"];
+        const permitted = pairing.allowedMethods
+          ? grantable.filter((m) => pairing.allowedMethods!.includes(m as NwcMethod))
+          : grantable;
+
         const result = {
           alias: "Libre Listener Wallet",
           color: "#3399ff",
@@ -492,7 +537,7 @@ export class NwcManager {
           block_height: bestBlock.get_height(),
           // Block hashes are displayed big-endian; LDK returns internal little-endian.
           block_hash: bytesToHex(Uint8Array.from(bestBlock.get_block_hash()).reverse()),
-          methods: ["pay_invoice", "pay_keysend", "make_invoice", "get_balance", "get_info"],
+          methods: [...permitted, "get_info"],
           notifications: ["payment_sent", "payment_received"]
         };
         await this.sendResultResponse(event, "get_info", result, relayUrl, rpcReq.id);
@@ -551,9 +596,15 @@ export class NwcManager {
         }
         const amtSats = Number(amtOpt.some / 1000n);
 
-        // Verify daily spending limits
+        // Enforce the per-payment cap before the running budget.
+        if (pairing.maxAmountSats && pairing.maxAmountSats > 0 && amtSats > pairing.maxAmountSats) {
+          await this.sendErrorResponse(event, "QUOTA_EXCEEDED", `Payment exceeds the per-payment limit of ${pairing.maxAmountSats} sats`, relayUrl, rpcReq.id);
+          return;
+        }
+
+        // Verify the budget spending limit
         if (pairing.spendingLimitSats > 0 && spentToday + amtSats > pairing.spendingLimitSats) {
-          await this.sendErrorResponse(event, "QUOTA_EXCEEDED", "Daily spending limit exceeded", relayUrl, rpcReq.id);
+          await this.sendErrorResponse(event, "QUOTA_EXCEEDED", "Spending budget exceeded", relayUrl, rpcReq.id);
           return;
         }
 
@@ -603,9 +654,15 @@ export class NwcManager {
         const amountMsat = BigInt(request.params.amount);
         const amtSats = Number(amountMsat / 1000n);
 
-        // Verify daily spending limits
+        // Enforce the per-payment cap before the running budget.
+        if (pairing.maxAmountSats && pairing.maxAmountSats > 0 && amtSats > pairing.maxAmountSats) {
+          await this.sendErrorResponse(event, "QUOTA_EXCEEDED", `Payment exceeds the per-payment limit of ${pairing.maxAmountSats} sats`, relayUrl, rpcReq.id);
+          return;
+        }
+
+        // Verify the budget spending limit
         if (pairing.spendingLimitSats > 0 && spentToday + amtSats > pairing.spendingLimitSats) {
-          await this.sendErrorResponse(event, "QUOTA_EXCEEDED", "Daily spending limit exceeded", relayUrl, rpcReq.id);
+          await this.sendErrorResponse(event, "QUOTA_EXCEEDED", "Spending budget exceeded", relayUrl, rpcReq.id);
           return;
         }
 

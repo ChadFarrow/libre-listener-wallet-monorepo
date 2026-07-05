@@ -445,6 +445,152 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
     });
   });
 
+  describe("Per-connection controls (expiry / methods / per-payment / renewal)", () => {
+    const RELAY = "wss://relay.test.io";
+
+    // Push a connection with explicit control fields and start the manager. Returns the
+    // client/wallet keys plus a helper to send an encrypted request and read back the
+    // decrypted kind-23195 response payload.
+    async function setup(controls: Partial<any>) {
+      const clientSecretBytes = generateSecretKey();
+      const clientSecretHex = bytesToHex(clientSecretBytes);
+      const clientPubkeyHex = getPublicKey(clientSecretBytes);
+      nwc["connections"].push({
+        name: "Controlled App",
+        clientPubkey: clientPubkeyHex,
+        secret: clientSecretHex,
+        spendingLimitSats: 0,
+        spentTodaySats: 0,
+        lastSpentTimestamp: Date.now(),
+        createdAt: Date.now(),
+        enabled: true,
+        relayUrl: RELAY,
+        ...controls,
+      });
+      await nwc["saveConnections"]();
+
+      vi.spyOn(wallet, "getChannelManager").mockReturnValue({
+        current_best_block: () => ({ get_height: () => 100, get_block_hash: () => new Uint8Array(32) }),
+        get_our_node_id: () => new Uint8Array(33),
+        list_channels: () => [],
+        send_payment: () => ({ is_ok: () => true }),
+      } as any);
+
+      await nwc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      const walletPubkeyHex = nwc["walletPubkey"]!;
+
+      const send = async (id: string, method: string, params: any) => {
+        const content = await nip04.encrypt(
+          clientSecretHex,
+          walletPubkeyHex,
+          JSON.stringify({ jsonrpc: "2.0", id, method, params })
+        );
+        mockPublish.mockClear();
+        await subHandler!({ kind: 23194, pubkey: clientPubkeyHex, content, id: `evt-${id}` });
+        const respCall = mockPublish.mock.calls.map((c) => c[0]).find((e: any) => e.kind === 23195);
+        if (!respCall) return null;
+        return JSON.parse(await nip04.decrypt(clientSecretHex, walletPubkeyHex, respCall.content));
+      };
+
+      return { send };
+    }
+
+    it("rejects any request from an expired connection with UNAUTHORIZED", async () => {
+      const { send } = await setup({ expiresAt: Date.now() - 1000 });
+      const resp = await send("exp-1", "get_info", {});
+      expect(resp.error.code).toBe("UNAUTHORIZED");
+    });
+
+    it("still serves requests before the expiry", async () => {
+      const { send } = await setup({ expiresAt: Date.now() + 60_000 });
+      const resp = await send("exp-2", "get_info", {});
+      expect(resp.result).toBeDefined();
+      expect(resp.error).toBeUndefined();
+    });
+
+    it("blocks a method absent from the allowlist with RESTRICTED", async () => {
+      const { send } = await setup({ allowedMethods: ["make_invoice", "get_balance"] });
+      const resp = await send("m-1", "get_balance", {});
+      expect(resp.result).toBeDefined();
+
+      // Build a well-formed keysend request (schema-valid) that the allowlist must reject.
+      const keysendResp = await send("m-2", "pay_keysend", {
+        pubkey: "02" + "a".repeat(64),
+        amount: 1000,
+      });
+      expect(keysendResp.error.code).toBe("RESTRICTED");
+    });
+
+    it("always permits get_info even with a restrictive allowlist", async () => {
+      const { send } = await setup({ allowedMethods: ["make_invoice"] });
+      const resp = await send("gi-1", "get_info", {});
+      expect(resp.result).toBeDefined();
+      // get_info advertises only the permitted (grantable) methods + get_info.
+      expect(resp.result.methods).toEqual(["make_invoice", "get_info"]);
+    });
+
+    it("rejects a payment above the per-payment cap even when the budget allows it", async () => {
+      // Budget is generous (unlimited) but a single payment is capped at 500 sats.
+      const { send } = await setup({ maxAmountSats: 500 });
+      vi.spyOn(Bolt11Invoice, "constructor_from_str").mockReturnValue({
+        is_ok: () => true,
+        res: { amount_milli_satoshis: () => Option_u64Z_Some.constructor_some(1_000_000n) }, // 1000 sats
+      } as any);
+
+      const resp = await send("pp-1", "pay_invoice", { invoice: "lnbc1000n..." });
+      expect(resp.error.code).toBe("QUOTA_EXCEEDED");
+      expect(resp.error.message).toContain("per-payment");
+    });
+
+    it("weekly renewal does not reset the budget before 7 days have passed", async () => {
+      // Spent 60 of a 100-sat weekly budget, 2 days ago. A 60-sat payment now (120 total)
+      // must be blocked — the weekly window has not elapsed, so the budget hasn't reset.
+      const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
+      const { send } = await setup({
+        spendingLimitSats: 100,
+        spentTodaySats: 60,
+        lastSpentTimestamp: twoDaysAgo,
+        budgetRenewal: "weekly",
+      });
+      vi.spyOn(Bolt11Invoice, "constructor_from_str").mockReturnValue({
+        is_ok: () => true,
+        res: { amount_milli_satoshis: () => Option_u64Z_Some.constructor_some(60_000n) }, // 60 sats
+      } as any);
+
+      const resp = await send("wk-1", "pay_invoice", { invoice: "lnbc60n..." });
+      expect(resp.error.code).toBe("QUOTA_EXCEEDED");
+      expect(resp.error.message).toBe("Spending budget exceeded");
+    });
+  });
+
+  describe("createConnection persists the new control fields", () => {
+    it("stores budgetRenewal, maxAmountSats, allowedMethods and expiresAt when provided", async () => {
+      const expiresAt = Date.now() + 86_400_000;
+      await nwc.createConnection("Full App", {
+        spendingLimitSats: 5000,
+        budgetRenewal: "monthly",
+        maxAmountSats: 1000,
+        allowedMethods: ["make_invoice", "get_balance"],
+        expiresAt,
+      });
+      const conn = (await nwc.listConnections()).find((c) => c.name === "Full App")!;
+      expect(conn.budgetRenewal).toBe("monthly");
+      expect(conn.maxAmountSats).toBe(1000);
+      expect(conn.allowedMethods).toEqual(["make_invoice", "get_balance"]);
+      expect(conn.expiresAt).toBe(expiresAt);
+    });
+
+    it("omits the new fields for a legacy-style connection (keeps the old shape)", async () => {
+      await nwc.createConnection("Legacy App", { spendingLimitSats: 1000 });
+      const conn = (await nwc.listConnections()).find((c) => c.name === "Legacy App")!;
+      expect(conn.budgetRenewal).toBeUndefined();
+      expect(conn.maxAmountSats).toBeUndefined();
+      expect(conn.allowedMethods).toBeUndefined();
+      expect(conn.expiresAt).toBeUndefined();
+    });
+  });
+
   describe("make_invoice response — no preimage leak (guardrail)", () => {
     it("does not include the unpaid-invoice preimage in the make_invoice response", async () => {
       const clientSecretBytes = generateSecretKey();

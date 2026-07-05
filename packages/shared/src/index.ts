@@ -293,4 +293,5 @@ export function bridgeTargetUrl(base: string, host: string, port: number): strin
 
 export * from "./v4v-utils";
 export * from "./nwc-schema";
+export * from "./nwc-options";
 

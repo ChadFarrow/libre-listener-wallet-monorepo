@@ -1,6 +1,12 @@
 import QRCode from "qrcode";
 import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
+import {
+  parseBudgetRenewal,
+  parseMaxAmount,
+  buildAllowedMethods,
+  expiryFromDays,
+} from "@libre/shared";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (el: HTMLElement, on: boolean) => el.classList.toggle("hidden", !on);
@@ -116,9 +122,26 @@ $("copy-invoice").addEventListener("click", async () => {
 $("create-nwc").addEventListener("click", async () => {
   setMsg("nwc-msg", "Creating pairing…");
   try {
+    // Optional spending controls (mirrors the PWA form). Blank/all-checked keep the
+    // permissive legacy shape; a bad per-payment cap is a hard error, never silently ignored.
+    const maxRes = parseMaxAmount(($("nwc-max") as HTMLInputElement).value);
+    if (!maxRes.ok) {
+      setMsg("nwc-msg", maxRes.error, "err");
+      return;
+    }
+    const allowedMethods = buildAllowedMethods({
+      pay_invoice: ($("nwc-m-pay_invoice") as HTMLInputElement).checked,
+      pay_keysend: ($("nwc-m-pay_keysend") as HTMLInputElement).checked,
+      make_invoice: ($("nwc-m-make_invoice") as HTMLInputElement).checked,
+      get_balance: ($("nwc-m-get_balance") as HTMLInputElement).checked,
+    });
     const { uri } = await command<{ uri: string }>("nwcCreateConnection", {
       name: ($("nwc-name") as HTMLInputElement).value.trim() || "Nostr Client App",
       spendingLimitSats: Number(($("nwc-limit") as HTMLInputElement).value) || 0,
+      budgetRenewal: parseBudgetRenewal(($("nwc-renewal") as HTMLSelectElement).value),
+      maxAmountSats: maxRes.value,
+      allowedMethods,
+      expiresAt: expiryFromDays(parseInt(($("nwc-expiry") as HTMLSelectElement).value, 10) || 0, Date.now()),
     });
     const out = $<HTMLTextAreaElement>("nwc-out");
     out.value = uri;

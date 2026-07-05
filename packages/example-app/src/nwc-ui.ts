@@ -12,7 +12,7 @@ import {
   buildAllowedMethods,
   expiryFromDays,
   renewalLabel,
-} from "./core/nwc-options";
+} from "@libre/shared";
 
 const createNwcBtn = document.getElementById("create-nwc-btn") as HTMLButtonElement;
 const nwcConnNameInput = document.getElementById("nwc-conn-name") as HTMLInputElement;

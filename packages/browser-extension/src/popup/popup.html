@@ -21,7 +21,7 @@
       button:disabled { opacity: 0.5; cursor: default; }
       .row { display: flex; gap: 8px; margin-top: 8px; }
       .row > * { flex: 1; }
-      input, textarea { width: 100%; box-sizing: border-box; padding: 7px; border-radius: 7px; border: 1px solid #8884; font: inherit; }
+      input, textarea, select { width: 100%; box-sizing: border-box; padding: 7px; border-radius: 7px; border: 1px solid #8884; font: inherit; }
       textarea { resize: vertical; min-height: 54px; font-family: monospace; font-size: 10px; }
       details { border-top: 1px solid #8883; margin-top: 12px; padding-top: 8px; }
       summary { cursor: pointer; font-weight: 600; font-size: 13px; }
@@ -86,8 +86,34 @@
         <p class="hint">Create a pairing string to connect a nostr app (Alby, Damus, …) to this wallet.</p>
         <div class="two">
           <input id="nwc-name" placeholder="app name" />
-          <input id="nwc-limit" type="number" min="0" placeholder="daily cap (sats, 0 = ∞)" />
+          <input id="nwc-limit" type="number" min="0" placeholder="budget (sats, 0 = ∞)" />
         </div>
+        <details id="nwc-adv" style="margin-top:8px">
+          <summary class="hint" style="cursor:pointer">Spending controls (optional)</summary>
+          <label style="margin-top:8px">Budget renews</label>
+          <select id="nwc-renewal">
+            <option value="daily" selected>Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="yearly">Yearly</option>
+            <option value="never">Never (one-time budget)</option>
+          </select>
+          <label style="margin-top:8px">Max per payment <span class="hint">(blank = no cap)</span></label>
+          <input id="nwc-max" type="number" min="1" placeholder="sats" />
+          <label style="margin-top:8px">Expires</label>
+          <select id="nwc-expiry">
+            <option value="0" selected>Never</option>
+            <option value="7">In 1 week</option>
+            <option value="30">In 30 days</option>
+            <option value="90">In 90 days</option>
+            <option value="365">In 1 year</option>
+          </select>
+          <label style="margin-top:8px">Allowed actions</label>
+          <label class="hint" style="font-weight:400;margin:2px 0"><input id="nwc-m-pay_invoice" type="checkbox" checked style="width:auto" /> Pay invoices</label>
+          <label class="hint" style="font-weight:400;margin:2px 0"><input id="nwc-m-pay_keysend" type="checkbox" checked style="width:auto" /> Send keysend / boosts</label>
+          <label class="hint" style="font-weight:400;margin:2px 0"><input id="nwc-m-make_invoice" type="checkbox" checked style="width:auto" /> Create invoices</label>
+          <label class="hint" style="font-weight:400;margin:2px 0"><input id="nwc-m-get_balance" type="checkbox" checked style="width:auto" /> Read balance</label>
+        </details>
         <button id="create-nwc" style="margin-top:8px;width:100%">Create connection</button>
         <textarea id="nwc-out" class="hidden" readonly></textarea>
         <button id="copy-nwc" class="ghost hidden" style="margin-top:8px;width:100%">Copy connection URI</button>

@@ -251,6 +251,56 @@ export function shouldZeroConfAccept(trusted: boolean, openerRequestsZeroConf: b
   return trusted && openerRequestsZeroConf;
 }
 
+// Peer address book: pubkey (hex) -> its last-known {host, port}. Persisted so the node can
+// redial its channel partners on start (LDK stores no peer addresses; a browser node forgets
+// them on reload otherwise, stranding funded channels until a manual reconnect).
+export type PeerAddress = { host: string; port: number };
+
+// Storage key for the persisted peer address book. Non-critical cache (re-discoverable), so it's
+// deliberately NOT part of the backup key set — a restore simply relearns addresses on reconnect.
+const PEER_ADDRESS_BOOK_KEY = "peer_addresses";
+
+/** Safely parse the stored address-book JSON, dropping any malformed entries. Never throws. */
+export function parsePeerAddressBook(raw: string | null | undefined): Record<string, PeerAddress> {
+  if (!raw) return {};
+  let obj: unknown;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+  const out: Record<string, PeerAddress> = {};
+  for (const [k, v] of Object.entries(obj as Record<string, any>)) {
+    if (v && typeof v.host === "string" && v.host && Number.isInteger(v.port)) {
+      out[k] = { host: v.host, port: v.port };
+    }
+  }
+  return out;
+}
+
+/**
+ * Given the pubkeys of our channel counterparties and the address book, produce the deduped
+ * list of peers to redial (only those we have a valid address for). Pure so the start-time
+ * reconnection decision is unit-testable without LDK/WASM.
+ */
+export function channelPeersToRedial(
+  counterpartyPubkeys: string[],
+  book: Record<string, PeerAddress>
+): Array<{ pubkey: string; host: string; port: number }> {
+  const seen = new Set<string>();
+  const out: Array<{ pubkey: string; host: string; port: number }> = [];
+  for (const pk of counterpartyPubkeys) {
+    if (seen.has(pk)) continue;
+    seen.add(pk);
+    const addr = book[pk];
+    if (addr && addr.host && Number.isInteger(addr.port)) {
+      out.push({ pubkey: pk, host: addr.host, port: addr.port });
+    }
+  }
+  return out;
+}
+
 export class LibreListenerWallet {
   private config: WalletConfig;
   private logger?: Logger;
@@ -287,6 +337,9 @@ export class LibreListenerWallet {
   private desiredPeers: Map<string, { host: string; port: number }> = new Map();
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
+  // Persisted pubkey -> {host,port} of peers we've connected to, so start() can redial our
+  // channel partners across reloads (LDK keeps no peer addresses). Loaded on start.
+  private peerAddressBook: Map<string, PeerAddress> = new Map();
   // scriptPubKey to sweep force-close outputs to (Event_SpendableOutputs). Set by the app.
   private sweepDestinationScript?: Uint8Array;
   // Whether we've already warned about claimable outputs with no sweep address — avoids
@@ -774,6 +827,10 @@ export class LibreListenerWallet {
         }
       }, 3600000); // hourly; RGS snapshots update ~daily
     }
+
+    // Reconnect to the peers we hold channels with (keeps funded channels alive across reloads).
+    // Fire-and-forget so a slow dial never blocks startup.
+    void this.redialChannelPeers();
 
     // Initialize and start Nostr Wallet Connect listeners
     await this.nwc.init();
@@ -1267,8 +1324,11 @@ export class LibreListenerWallet {
 
     this.logger?.info(`Connecting to peer: ${pubkey}@${host}:${port}`);
 
-    // Remember this peer so we keep it connected (auto-reconnect on drop).
+    // Remember this peer so we keep it connected (auto-reconnect on drop) and can redial it
+    // across reloads (persisted address book — see redialChannelPeers). Best-effort persist.
     this.desiredPeers.set(pubkey, { host, port });
+    this.peerAddressBook.set(pubkey, { host, port });
+    void this.persistPeerAddressBook();
 
     // If already connected, do nothing
     if (this.connectedPeers.has(pubkey)) {
@@ -1321,6 +1381,43 @@ export class LibreListenerWallet {
     } else {
       descriptorImpl.disconnect_socket();
       throw new Error("Failed to initialize outbound connection in PeerManager");
+    }
+  }
+
+  // Persist the peer address book. Best-effort: a failure just means we may need a manual
+  // reconnect next start — never let it break a connect or reject.
+  private async persistPeerAddressBook(): Promise<void> {
+    try {
+      const obj = Object.fromEntries(this.peerAddressBook);
+      await this.storage.setItem(PEER_ADDRESS_BOOK_KEY, JSON.stringify(obj));
+    } catch (e) {
+      this.logger?.warn(`[Peer] Could not persist address book: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  // On start, redial the peers we hold channels with, using their last-known addresses. This is
+  // what keeps a funded channel alive across a reload — LDK stores no peer addresses, and the
+  // in-memory desiredPeers list is empty on a fresh start. Gated by autoReconnectPeers; fully
+  // best-effort (connectPeer is idempotent + self-schedules backoff redials on failure).
+  private async redialChannelPeers(): Promise<void> {
+    if (this.config.autoReconnectPeers === false || !this.channelManager) return;
+    try {
+      this.peerAddressBook = new Map(
+        Object.entries(parsePeerAddressBook(await this.storage.getItem(PEER_ADDRESS_BOOK_KEY)))
+      );
+      const counterparties = this.channelManager
+        .list_channels()
+        .map((ch: ChannelDetails) => bytesToHex(ch.get_counterparty().get_node_id()));
+      const targets = channelPeersToRedial(counterparties, Object.fromEntries(this.peerAddressBook));
+      for (const t of targets) {
+        this.logger?.info(`[Peer] Auto-reconnecting channel partner ${t.pubkey}@${t.host}:${t.port}`);
+        // Fire-and-forget: don't block startup on a slow dial; a failure schedules its own redial.
+        this.connectPeer(t.pubkey, t.host, t.port).catch((e) =>
+          this.logger?.warn(`[Peer] Auto-reconnect to ${t.pubkey} failed: ${e instanceof Error ? e.message : e}`)
+        );
+      }
+    } catch (e) {
+      this.logger?.warn(`[Peer] redialChannelPeers failed: ${e instanceof Error ? e.message : e}`);
     }
   }
 

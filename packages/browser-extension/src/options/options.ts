@@ -60,16 +60,12 @@ function prefillPeer(network: string, savedPeer?: string) {
   if (!peer) return;
   let parts;
   try {
-    parts = parsePeerString(peer);
+    parts = parsePeerString(peer); // validate before pre-filling; a corrupt saved peer = no pre-fill
   } catch {
-    return; // a corrupt saved peer just means no pre-fill
+    return;
   }
-  const pk = $<HTMLInputElement>("peer-pubkey");
-  const host = $<HTMLInputElement>("peer-host");
-  const port = $<HTMLInputElement>("peer-port");
-  if (!pk.value.trim()) pk.value = parts.pubkey;
-  if (!host.value.trim()) host.value = parts.host;
-  if (!port.value.trim() || port.value === "9735") port.value = String(parts.port);
+  const conn = $<HTMLInputElement>("peer-conn");
+  if (!conn.value.trim()) conn.value = formatPeerString(parts.pubkey, parts.host, parts.port);
 }
 
 $("save-config").addEventListener("click", async () => {
@@ -258,12 +254,15 @@ $("lsps1-order").addEventListener("click", async () => {
 });
 
 $("connect-peer").addEventListener("click", async () => {
+  let peer;
   try {
-    await command("connectPeer", {
-      pubkey: val("peer-pubkey"),
-      host: val("peer-host"),
-      port: Number(val("peer-port")) || 9735,
-    });
+    peer = parsePeerString(val("peer-conn")); // validates pubkey/host/port shape
+  } catch (e: any) {
+    setMsg("peer-msg", e.message, "err");
+    return;
+  }
+  try {
+    await command("connectPeer", { pubkey: peer.pubkey, host: peer.host, port: peer.port });
     setMsg("peer-msg", "Peer connected", "ok");
   } catch (e: any) {
     setMsg("peer-msg", e.message, "err");
@@ -271,12 +270,14 @@ $("connect-peer").addEventListener("click", async () => {
 });
 
 $("copy-peer").addEventListener("click", async () => {
-  const pubkey = val("peer-pubkey");
-  if (!pubkey) {
-    setMsg("peer-msg", "Enter a peer pubkey first.", "err");
+  let conn;
+  try {
+    const p = parsePeerString(val("peer-conn")); // normalize (lowercase pubkey, trimmed) before copying
+    conn = formatPeerString(p.pubkey, p.host, p.port);
+  } catch {
+    setMsg("peer-msg", "Enter a full pubkey@host:port first.", "err");
     return;
   }
-  const conn = formatPeerString(pubkey, val("peer-host"), Number(val("peer-port")) || 9735);
   try {
     await navigator.clipboard.writeText(conn);
     setMsg("peer-msg", `Copied ${conn}`, "ok");

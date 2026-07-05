@@ -84,6 +84,7 @@
       <details id="nwc-details">
         <summary>Nostr Wallet Connect (NWC)</summary>
         <p class="hint">Create a pairing string to connect a nostr app (Alby, Damus, …) to this wallet.</p>
+        <p class="hint" style="color:#e0a800">⚠️ This wallet only responds while it's running — the browser must be open. Requests sent while it's offline aren't answered, and an invoice you hand out can fail for the payer if the wallet is asleep when they try to pay it.</p>
         <div class="two">
           <input id="nwc-name" placeholder="app name" />
           <input id="nwc-limit" type="number" min="0" placeholder="budget (sats, 0 = ∞)" />

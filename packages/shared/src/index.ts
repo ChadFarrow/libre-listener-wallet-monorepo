@@ -218,6 +218,17 @@ export interface Lsps1CreateOrderResponse {
   };
 }
 
+// Short "X/N confs" label for a channel still confirming its funding tx. Empty once the channel is
+// ready or for a 0-conf / unknown-requirement channel. Missing confirmations count as 0.
+export function channelConfLabel(
+  confirmations: number | undefined,
+  confirmationsRequired: number | undefined,
+  isChannelReady: boolean
+): string {
+  if (isChannelReady || !confirmationsRequired) return "";
+  return `${confirmations ?? 0}/${confirmationsRequired} confs`;
+}
+
 // Build a mempool.space transaction URL for the given network (txid must be big-endian display order
 // — see the SDK's ldkTxidToDisplay). Returns null for regtest / unknown networks (no public explorer)
 // or an empty txid.

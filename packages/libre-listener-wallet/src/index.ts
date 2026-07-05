@@ -54,6 +54,7 @@ import {
   Result_CVec_u8ZPeerHandleErrorZ_OK,
   PhantomRouteHints,
   ChannelDetails,
+  Option_u32Z_Some,
   ChannelCounterparty,
   CounterpartyForwardingInfo,
   InitFeatures,
@@ -186,6 +187,14 @@ export interface ChannelInfo {
   // (block-explorer order) — pass straight to mempool.space. Undefined while still pre-funding.
   fundingTxid?: string;
   fundingOutputIndex?: number;
+  // Funding confirmation progress while a channel is still pending (undefined once ready / for 0-conf).
+  confirmations?: number;
+  confirmationsRequired?: number;
+}
+
+// Read an LDK Option_u32Z into a plain number | undefined.
+function optU32(o: Option_u32Z): number | undefined {
+  return o instanceof Option_u32Z_Some ? o.some : undefined;
 }
 
 // Map one LDK ChannelDetails to a plain ChannelInfo. msat getters are bigint.
@@ -212,6 +221,9 @@ export function mapChannelDetails(cd: ChannelDetails): ChannelInfo {
   } catch {
     /* channel not funded yet / null outpoint — leave fundingTxid unset */
   }
+  // Funding confirmation progress (both Option_u32Z; present while a channel is still confirming).
+  info.confirmations = optU32(cd.get_confirmations());
+  info.confirmationsRequired = optU32(cd.get_confirmations_required());
   return info;
 }
 

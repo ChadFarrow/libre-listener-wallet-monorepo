@@ -3,7 +3,7 @@ import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
 import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer, parsePeerString, formatPeerString } from "../core/wallet-config";
 import { downloadBackupName } from "../core/backup-name";
-import { LSPS1_REST_PROVIDERS, mempoolTxUrl } from "@libre/shared";
+import { LSPS1_REST_PROVIDERS, mempoolTxUrl, channelConfLabel } from "@libre/shared";
 import type { ChannelInfo } from "@libre/listener-wallet";
 import {
   formatOpeningFee,
@@ -404,7 +404,12 @@ async function loadChannels() {
   }
   el.innerHTML = chans
     .map((c) => {
-      const state = c.isUsable ? "active" : c.isChannelReady ? "ready (peer offline)" : "pending";
+      const conf = channelConfLabel(c.confirmations, c.confirmationsRequired, c.isChannelReady);
+      const state = c.isUsable
+        ? "active"
+        : c.isChannelReady
+          ? "ready (peer offline)"
+          : `pending${conf ? ` · ${conf}` : ""}`;
       const color = c.isUsable ? "#22c45e" : c.isChannelReady ? "#e0a800" : "#888";
       const txUrl = c.fundingTxid ? mempoolTxUrl(c.fundingTxid, currentNetwork) : null;
       const txLink = txUrl ? ` · <a href="${txUrl}" target="_blank" rel="noopener">funding tx ↗</a>` : "";

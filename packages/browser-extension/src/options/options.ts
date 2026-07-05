@@ -463,9 +463,9 @@ async function loadChannels() {
       const txLink = txUrl ? ` · <a href="${txUrl}" target="_blank" rel="noopener">funding tx ↗</a>` : "";
       return (
         `<div style="padding:8px 0;border-bottom:1px solid #8883">` +
-        `<div><b>${c.channelId.slice(0, 10)}…</b> <span style="color:${color}">● ${state}</span></div>` +
+        `<div style="word-break:break-all"><b>${c.channelId}</b> <span style="color:${color}">● ${state}</span></div>` +
         `<div class="hint">capacity ${c.capacitySat.toLocaleString()} sat · send ${c.outboundSendableSat.toLocaleString()} / recv ${c.inboundSat.toLocaleString()}${txLink}</div>` +
-        `<div class="hint">peer ${c.counterpartyNodeId.slice(0, 16)}…</div>` +
+        `<div class="hint" style="word-break:break-all">peer ${c.counterpartyNodeId}</div>` +
         `</div>`
       );
     })

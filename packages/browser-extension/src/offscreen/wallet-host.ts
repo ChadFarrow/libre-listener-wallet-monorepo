@@ -3,6 +3,7 @@ import {
   IndexedDBStorageProvider,
   bytesToHex,
   type SecureStorageProvider,
+  type ChannelInfo,
 } from "@libre/listener-wallet";
 import type { BudgetRenewal, NwcMethod } from "@libre/shared";
 import {
@@ -539,6 +540,11 @@ export class WalletHost implements WalletRpc {
   async getBalanceSats(): Promise<number> {
     this.requireRunning();
     return this.wallet!.getBalance().spendableSat;
+  }
+
+  async getChannels(): Promise<ChannelInfo[]> {
+    this.requireRunning();
+    return this.wallet!.getChannels();
   }
 
   async makeInvoice(args: { amountSats: number; memo: string; expirySeconds: number }): Promise<{ paymentRequest: string }> {

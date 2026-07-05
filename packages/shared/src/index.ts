@@ -218,6 +218,22 @@ export interface Lsps1CreateOrderResponse {
   };
 }
 
+// Build a mempool.space transaction URL for the given network (txid must be big-endian display order
+// — see the SDK's ldkTxidToDisplay). Returns null for regtest / unknown networks (no public explorer)
+// or an empty txid.
+export function mempoolTxUrl(txid: string, network: string): string | null {
+  if (!txid) return null;
+  const base =
+    network === "mainnet"
+      ? "https://mempool.space"
+      : network === "testnet"
+        ? "https://mempool.space/testnet"
+        : network === "signet"
+          ? "https://mempool.space/signet"
+          : null;
+  return base ? `${base}/tx/${txid}` : null;
+}
+
 // Append the desired peer target (host:port) to a WebSocket bridge base URL. The multi-target
 // ws-bridge reads ?target= and connects there; an old single-target websockify ignores the query,
 // so the default-peer path stays backward-compatible during rollout.

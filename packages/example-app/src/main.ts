@@ -4,7 +4,7 @@ import {
   WebSocketStreamProvider,
   WebSocketConnection,
 } from "@libre/listener-wallet";
-import { LSPS1_REST_PROVIDERS, bridgeTargetUrl } from "@libre/shared";
+import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl } from "@libre/shared";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -455,8 +455,12 @@ function refreshWalletView(): void {
           : c.isChannelReady
           ? '<span style="color:#f59e0b">● ready (peer offline)</span>'
           : '<span style="color:#9ca3af">● pending</span>';
+        const txUrl = c.fundingTxid ? mempoolTxUrl(c.fundingTxid, networkSelect.value) : null;
+        const txLink = txUrl
+          ? ` · <a href="${txUrl}" target="_blank" rel="noopener" class="value" style="text-decoration:underline">funding tx ↗</a>`
+          : "";
         return `<div class="status-line"><span class="value">${c.channelId.slice(0, 8)}… ${badge}</span>` +
-          `<span class="value">cap ${c.capacitySat} · send ${c.outboundSendableSat} / recv ${c.inboundSat}</span></div>`;
+          `<span class="value">cap ${c.capacitySat} · send ${c.outboundSendableSat} / recv ${c.inboundSat}${txLink}</span></div>`;
       })
       .join("");
   } catch (e) {

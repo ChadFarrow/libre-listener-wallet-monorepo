@@ -3,7 +3,8 @@ import { command, onWalletEvent } from "../ui/rpc";
 import { confirmModal } from "../ui/confirm-modal";
 import { defaultBridgeUrl, defaultRapidGossipSyncUrl, defaultPeer, parsePeerString, formatPeerString } from "../core/wallet-config";
 import { downloadBackupName } from "../core/backup-name";
-import { LSPS1_REST_PROVIDERS } from "@libre/shared";
+import { LSPS1_REST_PROVIDERS, mempoolTxUrl } from "@libre/shared";
+import type { ChannelInfo } from "@libre/listener-wallet";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -12,6 +13,8 @@ import {
   isLeaseOptionAvailable,
   clampLeaseSelectionValue,
 } from "../core/lsps1-provider-ui";
+
+let currentNetwork = "mainnet";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const val = (id: string) => $<HTMLInputElement>(id).value.trim();
@@ -25,6 +28,7 @@ async function loadConfig() {
   try {
     const c = await command<any>("getConfig");
     const network = c.network || "mainnet";
+    currentNetwork = network;
     $<HTMLSelectElement>("network").value = network;
     $("reset-network").textContent = network;
     // Fall back to the network's public defaults so the fields arrive pre-filled (mainnet ships the
@@ -380,7 +384,43 @@ $("reset-wallet").addEventListener("click", async () => {
   }
 });
 
-void loadConfig();
+// Render the channels this wallet holds, with a funding-tx block-explorer link per channel.
+async function loadChannels() {
+  const el = $("channels-list");
+  const running = await command<{ running: boolean }>("getState")
+    .then((s) => !!s.running)
+    .catch(() => false);
+  if (!running) {
+    el.textContent = "Start the node in the popup to see your channels.";
+    return;
+  }
+  const chans = await command<ChannelInfo[]>("getChannels").catch((e) => {
+    console.warn("[Options] getChannels failed:", e?.message || e);
+    return [] as ChannelInfo[];
+  });
+  if (!chans.length) {
+    el.textContent = "No channels yet.";
+    return;
+  }
+  el.innerHTML = chans
+    .map((c) => {
+      const state = c.isUsable ? "active" : c.isChannelReady ? "ready (peer offline)" : "pending";
+      const color = c.isUsable ? "#22c45e" : c.isChannelReady ? "#e0a800" : "#888";
+      const txUrl = c.fundingTxid ? mempoolTxUrl(c.fundingTxid, currentNetwork) : null;
+      const txLink = txUrl ? ` · <a href="${txUrl}" target="_blank" rel="noopener">funding tx ↗</a>` : "";
+      return (
+        `<div style="padding:8px 0;border-bottom:1px solid #8883">` +
+        `<div><b>${c.channelId.slice(0, 10)}…</b> <span style="color:${color}">● ${state}</span></div>` +
+        `<div class="hint">capacity ${c.capacitySat.toLocaleString()} sat · send ${c.outboundSendableSat.toLocaleString()} / recv ${c.inboundSat.toLocaleString()}${txLink}</div>` +
+        `<div class="hint">peer ${c.counterpartyNodeId.slice(0, 16)}…</div>` +
+        `</div>`
+      );
+    })
+    .join("");
+}
+
+// loadChannels reads currentNetwork (for the explorer link), which loadConfig sets — chain them.
+void loadConfig().then(() => void loadChannels());
 void loadGrants();
 void loadSweep();
 void refreshBackupState();
@@ -389,7 +429,10 @@ void refreshDriveStatus();
 refreshLsps1Provider();
 
 // Keep node-running-gated controls live if the node is started/stopped from the popup while this
-// page is open (backup buttons + the LSPS1 order button).
+// page is open (backup buttons + the LSPS1 order button + the channels list).
 onWalletEvent((event) => {
-  if (event === "state-changed" || event === "status") void refreshBackupState();
+  if (event === "state-changed" || event === "status") {
+    void refreshBackupState();
+    void loadChannels();
+  }
 });

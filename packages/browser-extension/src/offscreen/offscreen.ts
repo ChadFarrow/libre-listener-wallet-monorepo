@@ -67,6 +67,8 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.getLSPS1Order(params.apiUrl, params.orderId);
     case "getBalance":
       return host.getBalanceSats();
+    case "getChannels":
+      return host.getChannels();
     case "createInvoice":
       return host.createInvoice(params.amountSats, params.memo, params.expirySeconds);
     case "nwcCreateConnection":

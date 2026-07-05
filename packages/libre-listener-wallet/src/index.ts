@@ -95,7 +95,7 @@ import { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
 import { getSecureRandomBytes } from "./crypto-utils";
 import { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
 import { selectHintChannels, prioritizeHints, forwardingInfoFromLdk, type HintableChannel } from "./hint-selection";
-import { EsploraSyncClient } from "./esplora-client";
+import { EsploraSyncClient, ldkTxidToDisplay } from "./esplora-client";
 import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
 import { IndexedDBStorageProvider } from "./indexed-db-storage";
@@ -182,11 +182,15 @@ export interface ChannelInfo {
   inboundSat: number;
   isUsable: boolean;
   isChannelReady: boolean;
+  // On-chain funding outpoint, once the channel has a funding tx. txid is big-endian DISPLAY order
+  // (block-explorer order) — pass straight to mempool.space. Undefined while still pre-funding.
+  fundingTxid?: string;
+  fundingOutputIndex?: number;
 }
 
 // Map one LDK ChannelDetails to a plain ChannelInfo. msat getters are bigint.
 export function mapChannelDetails(cd: ChannelDetails): ChannelInfo {
-  return {
+  const info: ChannelInfo = {
     channelId: bytesToHex(cd.get_channel_id().get_a()),
     counterpartyNodeId: bytesToHex(cd.get_counterparty().get_node_id()),
     capacitySat: Number(cd.get_channel_value_satoshis()),
@@ -195,6 +199,20 @@ export function mapChannelDetails(cd: ChannelDetails): ChannelInfo {
     isUsable: cd.get_is_usable(),
     isChannelReady: cd.get_is_channel_ready(),
   };
+  // Funding outpoint. LDK hands the txid little-endian (internal); convert to big-endian display for
+  // explorers. A not-yet-funded channel yields an all-zero txid (or a null-ptr OutPoint wrapper whose
+  // getters silently return zeros) — omit fundingTxid then.
+  try {
+    const outpoint = cd.get_funding_txo();
+    const txidBytes = outpoint?.get_txid?.();
+    if (txidBytes && txidBytes.some((b) => b !== 0)) {
+      info.fundingTxid = ldkTxidToDisplay(txidBytes);
+      info.fundingOutputIndex = outpoint.get_index();
+    }
+  } catch {
+    /* channel not funded yet / null outpoint — leave fundingTxid unset */
+  }
+  return info;
 }
 
 // Aggregate spendable/receivable over USABLE channels only.

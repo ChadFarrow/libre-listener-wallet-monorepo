@@ -26,6 +26,7 @@ describe("isAllowedWeblnMethod", () => {
       "connectPeer",
       "syncGossip",
       "getBalance",
+      "getPayments",
     ]) {
       expect(isAllowedWeblnMethod(m)).toBe(false);
     }

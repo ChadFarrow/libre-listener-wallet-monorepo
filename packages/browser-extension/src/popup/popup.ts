@@ -7,6 +7,7 @@ import {
   parseMaxAmount,
   buildAllowedMethods,
   expiryFromDays,
+  isChannelStateRegressionError,
 } from "@libre/shared";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -24,6 +25,7 @@ function randomSeedHex(): string {
 }
 
 let running = false;
+let needsRestore = false;
 
 async function refresh() {
   try {
@@ -35,6 +37,12 @@ async function refresh() {
     const hasWallet = s.hasSeed || s.createdNew || s.hasChannelState;
     show($("wallet-view"), hasWallet);
     show($("setup-view"), !hasWallet);
+    if (needsRestore) {
+      show($("setup-view"), true);
+      show($("wallet-view"), false);
+      show($("create-panel"), false);
+      show($("restore-panel"), true);
+    }
 
     const line = $("status-line");
     line.classList.toggle("on", running);
@@ -69,8 +77,22 @@ $("start").addEventListener("click", async () => {
   setMsg("msg", "Starting node…");
   try {
     await command("startNode");
+    needsRestore = false;
     setMsg("msg", "Node started", "ok");
   } catch (e: any) {
+    if (isChannelStateRegressionError(e)) {
+      needsRestore = true;
+      show($("setup-view"), true);
+      show($("wallet-view"), false);
+      show($("create-panel"), false);
+      show($("restore-panel"), true);
+      setMsg(
+        "restore-msg",
+        "This wallet's channel state is behind what it durably reached — starting now would force-close your channels. Restore from your latest backup to continue.",
+        "err"
+      );
+      return; // skip the trailing refresh()
+    }
     setMsg("msg", e.message, "err");
   }
   void refresh();

@@ -89,3 +89,20 @@ the same Pages project.
 
 `vite.config.ts` uses `base: "./"`, so the same build works at a domain root or a subpath. Backups
 made here restore in the extension / example-app and vice versa.
+
+### Automated deploy (GitHub Actions)
+
+`.github/workflows/deploy-wallet-pwa.yml` builds and deploys to Cloudflare Pages on every push to
+`master` that touches `packages/wallet-pwa`, `packages/shared`, or `packages/libre-listener-wallet`
+(and via manual dispatch). It runs `check:storage` first, then `wrangler pages deploy`. One-time
+setup:
+
+1. Create the Pages project once:
+   `pnpm dlx wrangler@3 pages project create libre-wallet-pwa --production-branch master`
+2. Add repo **Secrets**: `CLOUDFLARE_API_TOKEN` (with *Cloudflare Pages: Edit* permission) and
+   `CLOUDFLARE_ACCOUNT_ID`.
+3. Add repo **Variables** (optional): `CLOUDFLARE_PAGES_PROJECT` (defaults to `libre-wallet-pwa`) and
+   `VITE_GOOGLE_CLIENT_ID`.
+
+This is separate from the example-app's `deploy-pages.yml` (which is untouched) and targets a
+different origin.

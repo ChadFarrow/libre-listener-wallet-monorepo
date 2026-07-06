@@ -14,8 +14,12 @@ name: Deploy wallet-pwa to Cloudflare Pages
 #        CLOUDFLARE_API_TOKEN    a token with the "Cloudflare Pages: Edit" permission
 #        CLOUDFLARE_ACCOUNT_ID   your Cloudflare account id
 #   3. Repository *Variables* (non-secret):
+#        CLOUDFLARE_DEPLOY_ENABLED  set to "true" to arm this workflow (see the job `if:` below)
 #        CLOUDFLARE_PAGES_PROJECT   Pages project name (optional; defaults to "libre-wallet-pwa")
 #        VITE_GOOGLE_CLIENT_ID      Google OAuth client id (optional; only needed for Drive backup)
+#
+# Until CLOUDFLARE_DEPLOY_ENABLED is "true" the deploy job is SKIPPED (not failed), so master's Actions
+# stays green before Cloudflare is set up. A job-level `if:` can't read a secret, hence a plain variable.
 
 on:
   push:
@@ -38,6 +42,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Stays dormant until Cloudflare is configured: skips (green) unless the repo var is armed.
+    if: ${{ vars.CLOUDFLARE_DEPLOY_ENABLED == 'true' }}
     steps:
       # Third-party actions pinned to a full commit SHA (supply-chain safety); the trailing comment
       # records the human-readable version.

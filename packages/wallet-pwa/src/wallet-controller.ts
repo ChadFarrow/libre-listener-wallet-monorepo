@@ -386,19 +386,23 @@ export class WalletController {
 
   async setSweepAddress(address: string): Promise<{ address: string }> {
     const addr = (address || "").trim();
-    if (addr) addressToScriptPubKey(addr); // throws on an invalid address
-    const storage = this.storageForNetwork(await this.activeNetwork());
+    const network = await this.activeNetwork();
+    // Pass the active network so a wrong-chain address (e.g. tb1…/bcrt1… on mainnet) is rejected —
+    // otherwise force-closed funds could sweep to a script that's unspendable on the real chain.
+    if (addr) addressToScriptPubKey(addr, network); // throws on an invalid or wrong-network address
+    const storage = this.storageForNetwork(network);
     if (addr) await storage.setItem(SWEEP_ADDRESS_KEY, addr);
     else await storage.removeItem(SWEEP_ADDRESS_KEY);
-    if (this.wallet) this.wallet.setSweepDestination(addr ? addressToScriptPubKey(addr) : undefined);
+    if (this.wallet) this.wallet.setSweepDestination(addr ? addressToScriptPubKey(addr, network) : undefined);
     return { address: addr };
   }
 
   private async applySweepAddress(): Promise<void> {
     try {
-      const storage = this.storageForNetwork(await this.activeNetwork());
+      const network = await this.activeNetwork();
+      const storage = this.storageForNetwork(network);
       const addr = (await storage.getItem(SWEEP_ADDRESS_KEY))?.trim();
-      if (addr && this.wallet) this.wallet.setSweepDestination(addressToScriptPubKey(addr));
+      if (addr && this.wallet) this.wallet.setSweepDestination(addressToScriptPubKey(addr, network));
     } catch (e) {
       console.warn("[Sweep] could not apply saved sweep address:", (e as Error)?.message || e);
     }

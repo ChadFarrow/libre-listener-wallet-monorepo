@@ -8,15 +8,43 @@ import {
 } from "lightningdevkit";
 import type { Logger } from "./index";
 
+// A live LDK binding wrapper has a non-zero internal `ptr`; a Rust None is a wrapper with ptr 0n
+// (every accessor on it silently returns 0). Mirrors hint-selection.ts's null-ptr guard.
+export function isPresentWrapper(w: unknown): boolean {
+  if (w == null) return false;
+  const ptr = (w as { ptr?: unknown }).ptr;
+  return !(ptr === undefined || ptr === null || ptr === 0 || ptr === 0n);
+}
+
+// Pick the update id to ack. LDK's Persist.new_impl trampoline hands update_persisted_channel a
+// TRUTHY wrapper whose internal ptr === 0n for a Rust None update (NOT a JS null), so a naive
+// `update ? update.get_update_id() : latest` always takes the truthy branch and reads a bogus id
+// off the None-wrapper. Detect the None-wrapper by its ptr and fall back to the monitor's latest.
+export function pickUpdateId(
+  update: { get_update_id?: () => bigint } | null,
+  latestUpdateId: bigint,
+): bigint {
+  return isPresentWrapper(update)
+    ? (update as { get_update_id: () => bigint }).get_update_id()
+    : latestUpdateId;
+}
+
 // Schedule the durable acknowledgement: only ack (mark the monitor update complete to LDK) once the
 // write is durably committed; on a failed flush, do NOT ack — LDK stays paused on that channel,
-// which is the safe outcome. Pure; unit-testable without LDK.
+// which is the safe outcome. A synchronous throw inside `ack` is routed to onError too (never left
+// as an unobserved rejection). Pure; unit-testable without LDK.
 export function scheduleDurableAck(
   flush: () => Promise<void>,
   ack: () => void,
-  onFlushError: (e: unknown) => void,
+  onError: (e: unknown) => void,
 ): void {
-  flush().then(ack, onFlushError);
+  flush().then(() => {
+    try {
+      ack();
+    } catch (e) {
+      onError(e);
+    }
+  }, onError);
 }
 
 // Wrap an inner Persist so it advertises InProgress and only signals ChainMonitor.channel_monitor_updated
@@ -32,7 +60,12 @@ export function createDurablePersist(
 ): Persist {
   const ackDurable = (txidLe: Uint8Array, index: number, updateId: bigint): void => {
     const cm = getChainMonitor();
-    if (!cm) return;
+    if (!cm) {
+      logger?.warn(
+        `[DurablePersist] chain monitor unavailable; skipping durable ack for update ${updateId}`,
+      );
+      return;
+    }
     const txo = OutPoint.constructor_new(txidLe, index);
     const res = cm.channel_monitor_updated(txo, updateId);
     if (!res.is_ok()) {
@@ -62,7 +95,8 @@ export function createDurablePersist(
       inner.update_persisted_channel(txo, update as any, monitor);
       const txidLe = txo.get_txid();
       const index = txo.get_index();
-      const updateId = update ? update.get_update_id() : monitor.get_latest_update_id();
+      const latest = monitor.get_latest_update_id();
+      const updateId = pickUpdateId(update as any, latest);
       scheduleDurableAck(flush, () => ackDurable(txidLe, index, updateId), onFlushError);
       return ChannelMonitorUpdateStatus.LDKChannelMonitorUpdateStatus_InProgress;
     },

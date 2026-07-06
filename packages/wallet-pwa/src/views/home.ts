@@ -10,6 +10,7 @@ import {
   parseMaxAmount,
   buildAllowedMethods,
   expiryFromDays,
+  isChannelStateRegressionError,
 } from "@libre/shared";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -29,6 +30,10 @@ function randomSeedHex(): string {
 export function initHome(ctx: AppContext): void {
   const controller = ctx.controller;
   let running = false;
+  // Latch set when start() throws a channel-state regression: refresh() would otherwise re-hide
+  // the restore panel (it only shows setup-view when there's no wallet, but a regression means a
+  // wallet DOES exist) — so refresh() must re-assert the restore view while this is true.
+  let needsRestore = false;
 
   async function refresh() {
     try {
@@ -40,6 +45,12 @@ export function initHome(ctx: AppContext): void {
       const hasWallet = s.hasSeed || s.createdNew || s.hasChannelState;
       show($("wallet-view"), hasWallet);
       show($("setup-view"), !hasWallet);
+      if (needsRestore) {
+        show($("setup-view"), true);
+        show($("wallet-view"), false);
+        show($("create-panel"), false);
+        show($("restore-panel"), true);
+      }
 
       const line = $("status-line");
       line.classList.toggle("on", running);
@@ -70,8 +81,22 @@ export function initHome(ctx: AppContext): void {
     setMsg("msg", "Starting node…");
     try {
       await controller.startNode();
+      needsRestore = false;
       setMsg("msg", "Node started", "ok");
     } catch (e) {
+      if (isChannelStateRegressionError(e)) {
+        needsRestore = true;
+        show($("setup-view"), true);
+        show($("wallet-view"), false);
+        show($("create-panel"), false);
+        show($("restore-panel"), true);
+        setMsg(
+          "restore-msg",
+          "This wallet's channel state is behind what it durably reached — starting now would force-close your channels. Restore from your latest backup to continue.",
+          "err"
+        );
+        return; // skip the trailing refresh() so the panel isn't re-hidden
+      }
       setMsg("msg", (e as Error).message, "err");
     }
     void refresh();

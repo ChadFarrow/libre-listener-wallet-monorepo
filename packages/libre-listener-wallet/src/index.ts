@@ -108,6 +108,16 @@ import { reconnectDelayMs, shouldRedialNow } from "./peer-reconnect";
 import { normalizeBackupSecret } from "./seed-phrase";
 import { PaymentLogger, boostNoteFromCustomRecords } from "./payment-log";
 import type { PaymentRecord } from "@libre/shared";
+import {
+  parseHighwater,
+  serializeHighwater,
+  mergeHighwater,
+  findRegression,
+  highwaterEquals,
+  ChannelStateRegressionError,
+  type Highwater,
+} from "./state-highwater";
+export { ChannelStateRegressionError } from "./state-highwater";
 
 export { IndexedDBStorageProvider };
 
@@ -269,6 +279,10 @@ export type PeerAddress = { host: string; port: number };
 // deliberately NOT part of the backup key set — a restore simply relearns addresses on reconnect.
 const PEER_ADDRESS_BOOK_KEY = "peer_addresses";
 
+// Per-channel high-water of ChannelMonitor.get_latest_update_id(). Non-critical (re-derivable,
+// NOT in the encrypted backup): drives the channel-state regression guard. See state-highwater.ts.
+const MONITOR_HIGHWATER_KEY = "monitor_update_highwater";
+
 /** Safely parse the stored address-book JSON, dropping any malformed entries. Never throws. */
 export function parsePeerAddressBook(raw: string | null | undefined): Record<string, PeerAddress> {
   if (!raw) return {};
@@ -340,6 +354,8 @@ export class LibreListenerWallet {
   private nodeAnnTickCount = 0;
   private nextDescriptorId: number = 1;
   private stateVersion: number = 0;
+  private monitorHighwater: Highwater = new Map();
+  private loadedMonitors: ChannelMonitor[] = [];
   private stateListeners: (() => void)[] = [];
   private connectedPeers: Map<string, WebSocketDescriptor> = new Map(); // hex pubkey -> descriptor
   // Peers we want to keep connected (hex pubkey -> address). Drives auto-reconnect.
@@ -520,6 +536,28 @@ export class LibreListenerWallet {
         this.logger?.info(`Registered ${channelMonitors.length} channel monitors with ChainMonitor`);
       }
     }
+
+    // Channel-state regression guard (Layer A). Refuse to start if any loaded monitor is BEHIND a
+    // point this wallet durably reached — reconnecting stale channel state makes the peer force-close
+    // it (2026-07-06 mainnet incident). Halting sends the user to restore-from-backup instead. Runs
+    // BEFORE PeerManager/redial setup, so a regressed node never dials or reestablishes.
+    this.loadedMonitors = channelMonitors;
+    const storedHighwater = parseHighwater(await this.storage.getItem(MONITOR_HIGHWATER_KEY));
+    const summaries = channelMonitors.map((m) => ({
+      channelId: bytesToHex(m.channel_id().get_a()),
+      latestUpdateId: m.get_latest_update_id(),
+    }));
+    const regression = findRegression(summaries, storedHighwater);
+    if (regression) {
+      this.logger?.error(
+        `[Guard] Channel-state regression on ${regression.channelId}: loaded update ${regression.loaded} < high-water ${regression.highwater}. Refusing to start.`,
+      );
+      throw new ChannelStateRegressionError(regression);
+    }
+    this.monitorHighwater = mergeHighwater(storedHighwater, summaries);
+    this.storage
+      .setItem(MONITOR_HIGHWATER_KEY, serializeHighwater(this.monitorHighwater))
+      .catch((e) => this.logger?.error(`Failed to persist ${MONITOR_HIGHWATER_KEY}: ${e instanceof Error ? e.message : e}`));
 
     // 8. Load or construct NetworkGraph & Scorer
     let ldkNetwork: Network;
@@ -819,6 +857,7 @@ export class LibreListenerWallet {
             );
           this.notifyStateChanged();
         }
+        this.advanceMonitorHighwater();
       }
       if (this.chainMonitor) {
         this.chainMonitor.as_EventsProvider().process_pending_events(eventHandler);
@@ -943,6 +982,23 @@ export class LibreListenerWallet {
         this.logger?.error(`onStateChanged listener error: ${e instanceof Error ? e.message : e}`);
       }
     }
+  }
+
+  /** Advance the persisted per-channel high-water from the live (shared-by-reference) monitors.
+   *  Monotonic + best-effort. Covers every channel present at start; channels opened mid-session
+   *  are picked up on the next start when their monitors load. */
+  private advanceMonitorHighwater(): void {
+    if (this.loadedMonitors.length === 0) return;
+    const summaries = this.loadedMonitors.map((m) => ({
+      channelId: bytesToHex(m.channel_id().get_a()),
+      latestUpdateId: m.get_latest_update_id(),
+    }));
+    const merged = mergeHighwater(this.monitorHighwater, summaries);
+    if (highwaterEquals(merged, this.monitorHighwater)) return;
+    this.monitorHighwater = merged;
+    this.storage
+      .setItem(MONITOR_HIGHWATER_KEY, serializeHighwater(merged))
+      .catch((e) => this.logger?.error(`Failed to persist ${MONITOR_HIGHWATER_KEY}: ${e instanceof Error ? e.message : e}`));
   }
 
   /**
@@ -1230,6 +1286,11 @@ export class LibreListenerWallet {
     if (seedEntry !== undefined) {
       await this.storage.setItem("ldk_seed", seedEntry);
     }
+
+    // A restore is authoritative: drop any stale high-water in the destination storage so a
+    // marker from a prior/other wallet can't false-halt the restored (possibly lower) monitors.
+    // The next start() re-initializes the mark from the restored monitors.
+    await this.storage.removeItem(MONITOR_HIGHWATER_KEY);
   }
 
   /**

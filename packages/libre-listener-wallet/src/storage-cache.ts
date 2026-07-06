@@ -45,6 +45,9 @@ export class StorageCache implements KVStoreInterface {
   // write/remove returns an IOError so LDK STOPS advancing channel state instead
   // of compounding on storage it can't trust.
   private persistenceHealthy = true;
+  // Outstanding async commits (setItem/removeItem/index). flush() awaits these so a caller can
+  // block channel-state advancement until the write is DURABLE (Layer C).
+  private pending = new Set<Promise<unknown>>();
 
   constructor(storage: SecureStorageProvider, logger?: Logger) {
     this.storage = storage;
@@ -56,11 +59,28 @@ export class StorageCache implements KVStoreInterface {
     return this.persistenceHealthy;
   }
 
+  /** Resolve once every write/remove issued before this call has durably committed; reject if any
+   *  failed. Callers use this to hold channel-state advancement until the write is durable. */
+  async flush(): Promise<void> {
+    const snapshot = Array.from(this.pending);
+    const results = await Promise.allSettled(snapshot);
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) throw new Error(`StorageCache.flush: ${failed} pending write(s) failed`);
+  }
+
   private onPersistError(op: string, storeKey: string, err: unknown): void {
     this.persistenceHealthy = false;
     const msg = err instanceof Error ? err.message : String(err);
     this.logger?.error(
       `[StorageCache] Persist ${op} for "${storeKey}" FAILED — channel-state persistence is now degraded; refusing further writes: ${msg}`,
+    );
+  }
+
+  private track(p: Promise<unknown>): void {
+    this.pending.add(p);
+    void p.then(
+      () => this.pending.delete(p),
+      () => this.pending.delete(p),
     );
   }
 
@@ -114,11 +134,15 @@ export class StorageCache implements KVStoreInterface {
 
     if (!this.keys.has(storeKey)) {
       this.keys.add(storeKey);
-      this.persistIndex().catch((e) => this.onPersistError("index", this.indexKey, e));
+      const ip = this.persistIndex();
+      this.track(ip);
+      ip.catch((e) => this.onPersistError("index", this.indexKey, e));
     }
 
     const hexVal = bytesToHex(buf);
-    this.storage.setItem(storeKey, hexVal).catch((e) => this.onPersistError("write", storeKey, e));
+    const wp = this.storage.setItem(storeKey, hexVal);
+    this.track(wp);
+    wp.catch((e) => this.onPersistError("write", storeKey, e));
 
     return Result_NoneIOErrorZ.constructor_ok();
   }
@@ -133,10 +157,14 @@ export class StorageCache implements KVStoreInterface {
 
     if (this.keys.has(storeKey)) {
       this.keys.delete(storeKey);
-      this.persistIndex().catch((e) => this.onPersistError("index", this.indexKey, e));
+      const ip = this.persistIndex();
+      this.track(ip);
+      ip.catch((e) => this.onPersistError("index", this.indexKey, e));
     }
 
-    this.storage.removeItem(storeKey).catch((e) => this.onPersistError("remove", storeKey, e));
+    const rp = this.storage.removeItem(storeKey);
+    this.track(rp);
+    rp.catch((e) => this.onPersistError("remove", storeKey, e));
 
     return Result_NoneIOErrorZ.constructor_ok();
   }

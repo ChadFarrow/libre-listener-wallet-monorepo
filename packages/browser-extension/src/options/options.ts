@@ -10,7 +10,8 @@ import {
   lsps1OrderStatus,
   type Lsps1RestOrderResponse,
 } from "@libre/shared";
-import type { ChannelInfo } from "@libre/listener-wallet";
+import type { ChannelInfo, PaymentRecord } from "@libre/listener-wallet";
+import { formatAmount, statusColor, statusLabel, relativeTime } from "../core/tx-format";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -460,6 +461,48 @@ async function loadChannels() {
     .join("");
 }
 
+// Render the wallet's payment history, newest first. Node must be running (matches the
+// channels card). Escapes note/counterparty since they can contain arbitrary text.
+async function loadTransactions() {
+  const el = $("tx-list");
+  const running = await command<{ running: boolean }>("getState")
+    .then((s) => !!s.running)
+    .catch(() => false);
+  if (!running) {
+    el.textContent = "Start the node in the popup to see your transactions.";
+    return;
+  }
+  const txs = await command<PaymentRecord[]>("getPayments").catch((e) => {
+    console.warn("[Options] getPayments failed:", e?.message || e);
+    return [] as PaymentRecord[];
+  });
+  if (!txs.length) {
+    el.textContent = "No transactions yet.";
+    return;
+  }
+  const now = Date.now();
+  el.innerHTML = txs
+    .map((t) => {
+      const arrow = t.direction === "received" ? "↓" : "↑";
+      const detail = t.note || t.counterparty || (t.type === "bolt11" ? "invoice" : "keysend");
+      const fee = t.direction === "sent" && t.feeSats ? ` · fee ${Math.round(t.feeSats).toLocaleString()} sat` : "";
+      return (
+        `<div style="padding:8px 0;border-bottom:1px solid #8883">` +
+        `<div><b>${arrow} ${formatAmount(t)}</b> ` +
+        `<span style="color:${statusColor(t.status)}">● ${statusLabel(t.status)}</span> ` +
+        `<span class="hint">${relativeTime(t.timestamp, now)}${fee}</span></div>` +
+        `<div class="hint" style="word-break:break-all">${escapeHtml(detail)}</div>` +
+        `</div>`
+      );
+    })
+    .join("");
+}
+
+// Escape untrusted strings (a boostagram note / counterparty pubkey) before innerHTML.
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+}
+
 // loadChannels reads currentNetwork (for the explorer link), which loadConfig sets — chain them.
 // Recovery phrase + hex seed: show both forms of the key, blurred until Unhide (anti
 // shoulder-surf). Reads the stored seed via the offscreen host — works node running or not.
@@ -503,6 +546,7 @@ $("copy-phrase").addEventListener("click", () => void copyField("phrase-words", 
 $("copy-seed-hex").addEventListener("click", () => void copyField("seed-hex", "Hex seed"));
 
 void loadConfig().then(() => void loadChannels());
+void loadTransactions();
 void loadNodeInfo();
 void loadGrants();
 void loadSweep();
@@ -518,6 +562,7 @@ onWalletEvent((event) => {
   if (event === "state-changed" || event === "status") {
     void refreshBackupState();
     void loadChannels();
+    void loadTransactions();
     void loadPhrase();
     void loadNodeInfo();
   }

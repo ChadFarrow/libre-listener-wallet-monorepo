@@ -526,8 +526,41 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       const { send } = await setup({ allowedMethods: ["make_invoice"] });
       const resp = await send("gi-1", "get_info", {});
       expect(resp.result).toBeDefined();
-      // get_info advertises only the permitted (grantable) methods + get_info.
-      expect(resp.result.methods).toEqual(["make_invoice", "get_info"]);
+      // get_info advertises the permitted (grantable) methods + the always-available
+      // get_info and list_transactions (read-only, never allowlist-gated).
+      expect(resp.result.methods).toEqual(["make_invoice", "get_info", "list_transactions"]);
+    });
+
+    it("permits list_transactions even with a restrictive allowlist and returns mapped history", async () => {
+      const { send } = await setup({ allowedMethods: ["make_invoice"] });
+      vi.spyOn(wallet, "getPayments").mockResolvedValue([
+        { id: "out1", direction: "sent", status: "settled", amountSats: 1000, feeSats: 2, timestamp: 1_700_000_000_000, settledAt: 1_700_000_001_000, note: "Boost" },
+        { id: "in1", direction: "received", status: "settled", amountSats: 500, timestamp: 1_700_000_100_000 },
+      ]);
+      const resp = await send("lt-1", "list_transactions", {});
+      expect(resp.error).toBeUndefined();
+      expect(resp.result_type).toBe("list_transactions");
+      const txs = resp.result.transactions;
+      // newest first
+      expect(txs.map((t: any) => t.payment_hash)).toEqual(["in1", "out1"]);
+      const out = txs.find((t: any) => t.payment_hash === "out1");
+      expect(out.type).toBe("outgoing");
+      expect(out.amount).toBe(1_000_000); // msat
+      expect(out.fees_paid).toBe(2_000);
+      expect(out.created_at).toBe(1_700_000_000);
+      expect(out.settled_at).toBe(1_700_000_001);
+      expect(out.description).toBe("Boost");
+      expect(txs.find((t: any) => t.payment_hash === "in1").type).toBe("incoming");
+    });
+
+    it("filters list_transactions by type", async () => {
+      const { send } = await setup({});
+      vi.spyOn(wallet, "getPayments").mockResolvedValue([
+        { id: "out1", direction: "sent", status: "settled", amountSats: 1000, timestamp: 1 },
+        { id: "in1", direction: "received", status: "settled", amountSats: 500, timestamp: 2 },
+      ]);
+      const resp = await send("lt-2", "list_transactions", { type: "incoming" });
+      expect(resp.result.transactions.map((t: any) => t.payment_hash)).toEqual(["in1"]);
     });
 
     it("rejects a payment above the per-payment cap even when the budget allows it", async () => {

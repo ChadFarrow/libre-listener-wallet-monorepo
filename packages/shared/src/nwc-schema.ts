@@ -26,6 +26,20 @@ export const payKeysendParamsSchema = z.object({
   })).optional(),
 });
 
+// NIP-47 list_transactions params — all optional. Numeric fields accept number-or-string
+// (some clients send strings, matching make_invoice/pay_keysend above). Times are unix seconds.
+const numberOrString = z.union([z.number(), z.string().transform((v) => parseInt(v, 10))]);
+export const listTransactionsParamsSchema = z
+  .object({
+    from: numberOrString.optional(),
+    until: numberOrString.optional(),
+    limit: numberOrString.optional(),
+    offset: numberOrString.optional(),
+    unpaid: z.boolean().optional(),
+    type: z.enum(["incoming", "outgoing"]).optional(),
+  })
+  .optional();
+
 export const nwcRequestSchema = z.discriminatedUnion("method", [
   z.object({
     method: z.literal("get_info"),
@@ -47,6 +61,10 @@ export const nwcRequestSchema = z.discriminatedUnion("method", [
     method: z.literal("pay_keysend"),
     params: payKeysendParamsSchema,
   }),
+  z.object({
+    method: z.literal("list_transactions"),
+    params: listTransactionsParamsSchema,
+  }),
 ]);
 
 export type NWCRequestInput = z.infer<typeof nwcRequestSchema>;
@@ -60,6 +78,11 @@ export const NWC_GRANTABLE_METHODS = [
   "pay_invoice",
   "pay_keysend",
 ] as const;
+// `get_info` and `list_transactions` are intentionally NOT grantable: they're always
+// permitted (they expose no funds — a handshake capability and read-only history), so
+// clients like Alby Go get history regardless of a pairing's spend allowlist. See the
+// gate in nwc-manager.ts.
+export const NWC_ALWAYS_ALLOWED_METHODS = ["get_info", "list_transactions"] as const;
 export type NwcMethod = (typeof NWC_GRANTABLE_METHODS)[number];
 
 // How a connection's spending budget renews. "never" = a single lifetime budget

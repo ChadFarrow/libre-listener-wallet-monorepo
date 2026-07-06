@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Libre Listener Wallet</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#0b0f17" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Libre Wallet" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png" />
+    <link rel="icon" href="icons/icon-192.png" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand"><span class="dot" id="dot"></span> Libre Listener Wallet</div>
+      <div class="header-right">
+        <span class="badge" id="net">mainnet</span>
+        <button id="install-btn" class="btn ghost small hidden">Install</button>
+      </div>
+    </header>
+
+    <nav class="tabbar">
+      <button class="tab active" data-tab="home">Wallet</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <main>
+      <!-- ============================ HOME ============================ -->
+      <section id="home-view" class="view active">
+        <p class="status-line" id="status-line">Loading…</p>
+
+        <!-- setup (no wallet yet) -->
+        <div id="setup-view" class="hidden">
+          <div class="card">
+            <h2>Get started</h2>
+            <div class="row">
+              <button id="new-btn" class="btn primary">Create new wallet</button>
+              <button id="restore-btn" class="btn ghost">Restore from backup</button>
+            </div>
+
+            <div id="create-panel" class="panel hidden">
+              <p class="hint">Write this recovery seed down and keep it offline. It is the only way to recover this wallet.</p>
+              <code id="seed" class="seed-box"></code>
+              <p class="hint">Bringing back a seed you saved before? Paste it here instead (64 hex characters):</p>
+              <input id="seed-input" class="input" placeholder="optional: paste an existing 64-hex seed" />
+              <label class="check"><input type="checkbox" id="saved" /> I've saved my recovery seed</label>
+              <button id="create-confirm" class="btn primary" disabled>Create wallet</button>
+              <p class="msg" id="create-msg"></p>
+            </div>
+
+            <div id="restore-panel" class="panel hidden">
+              <p class="hint">Paste your encrypted backup JSON, or choose the file, then enter your seed to decrypt it.</p>
+              <textarea id="restore-env" class="input" rows="3" placeholder="encrypted backup JSON (optional if using a file or Drive)"></textarea>
+              <input id="restore-file" type="file" accept="application/json" class="input" />
+              <input id="restore-secret" class="input" placeholder="recovery seed (24 words or 64 hex) — decrypts the backup" />
+              <div class="row">
+                <button id="restore-confirm" class="btn primary">Restore from JSON</button>
+                <button id="restore-file-btn" class="btn ghost">Restore from file</button>
+                <button id="restore-drive" class="btn ghost">Restore from Drive</button>
+              </div>
+              <p class="msg" id="restore-msg"></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- wallet (exists) -->
+        <div id="wallet-view" class="hidden">
+          <div class="card">
+            <div class="stat-grid">
+              <div class="stat"><span class="k">Spendable</span><span class="v" id="spendable">—</span></div>
+              <div class="stat"><span class="k">Receivable</span><span class="v" id="receivable">—</span></div>
+              <div class="stat"><span class="k">Channels</span><span class="v" id="channels">—</span></div>
+              <div class="stat"><span class="k">Peers</span><span class="v" id="peers">—</span></div>
+            </div>
+            <div class="nodeid-row">
+              <code id="nodeid" class="nodeid">(start the node)</code>
+              <button id="copy-node" class="btn ghost small">Copy</button>
+            </div>
+            <div class="row">
+              <button id="start" class="btn primary">Start node</button>
+              <button id="stop" class="btn ghost hidden">Stop node</button>
+            </div>
+            <label class="check"><input type="checkbox" id="auto-start" /> Auto-start node on load</label>
+            <p class="msg" id="msg"></p>
+          </div>
+
+          <div class="card">
+            <h2>Receive (top up)</h2>
+            <div class="row">
+              <input id="invoice-amount" class="input" type="number" min="1" placeholder="amount (sats)" value="1000" />
+              <input id="invoice-memo" class="input" placeholder="memo (optional)" />
+            </div>
+            <button id="create-invoice" class="btn primary" disabled>Create invoice</button>
+            <img id="invoice-qr" class="qr hidden" alt="invoice QR" />
+            <textarea id="invoice-out" class="input hidden" rows="3" readonly></textarea>
+            <button id="copy-invoice" class="btn ghost small hidden">Copy invoice</button>
+            <p class="msg" id="receive-msg"></p>
+          </div>
+
+          <div class="card">
+            <h2>Connect an app (NWC)</h2>
+            <p class="hint">Pair a Nostr app so it can pay through this wallet. The pairing carries its own spending limit.</p>
+            <input id="nwc-name" class="input" placeholder="app name" />
+            <div class="row">
+              <input id="nwc-limit" class="input" type="number" min="0" placeholder="daily limit (sats, blank = none)" />
+              <select id="nwc-renewal" class="input">
+                <option value="never">no renewal</option>
+                <option value="daily" selected>daily</option>
+                <option value="weekly">weekly</option>
+                <option value="monthly">monthly</option>
+              </select>
+            </div>
+            <div class="row">
+              <input id="nwc-max" class="input" type="number" min="0" placeholder="max per payment (sats, optional)" />
+              <select id="nwc-expiry" class="input">
+                <option value="0" selected>no expiry</option>
+                <option value="7">7 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+              </select>
+            </div>
+            <div class="methods">
+              <label class="check"><input type="checkbox" id="nwc-m-pay_invoice" checked /> pay_invoice</label>
+              <label class="check"><input type="checkbox" id="nwc-m-pay_keysend" checked /> pay_keysend</label>
+              <label class="check"><input type="checkbox" id="nwc-m-make_invoice" checked /> make_invoice</label>
+              <label class="check"><input type="checkbox" id="nwc-m-get_balance" checked /> get_balance</label>
+            </div>
+            <button id="create-nwc" class="btn primary" disabled>Create pairing</button>
+            <textarea id="nwc-out" class="input hidden" rows="3" readonly></textarea>
+            <button id="copy-nwc" class="btn ghost small hidden">Copy URI</button>
+            <div id="nwc-list" class="nwc-list"></div>
+            <p class="msg" id="nwc-msg"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================ SETTINGS ============================ -->
+      <section id="settings-view" class="view">
+        <div class="card">
+          <h2>This wallet's node</h2>
+          <div class="nodeid-row">
+            <input id="node-id" class="input" readonly placeholder="start the node to load your Node ID" />
+            <button id="copy-node-id" class="btn ghost small">Copy</button>
+          </div>
+          <p class="hint">Share this Node ID for someone to open a channel to you.</p>
+          <p class="msg" id="node-id-msg"></p>
+        </div>
+
+        <div class="card">
+          <h2>Connect to another node</h2>
+          <input id="peer-conn" class="input" placeholder="pubkey@host:port" />
+          <button id="connect-peer" class="btn primary">Connect peer</button>
+          <p class="msg" id="peer-msg"></p>
+        </div>
+
+        <div class="card">
+          <h2>Get a channel from an LSP</h2>
+          <select id="lsps1-provider" class="input">
+            <option value="megalith">Megalith</option>
+            <option value="olympus">Olympus (ZEUS)</option>
+          </select>
+          <p class="hint" id="lsps1-provider-summary"></p>
+          <input id="lsps1-amount" class="input" type="number" placeholder="channel size (sats)" value="150000" />
+          <p class="msg" id="lsps1-amount-msg"></p>
+          <select id="lsps1-lease" class="input">
+            <option value="" selected>Longest available (recommended)</option>
+            <option value="4320">~1 month</option>
+            <option value="12960">~3 months</option>
+            <option value="25920">~6 months</option>
+            <option value="51840">~12 months</option>
+          </select>
+          <button id="lsps1-order" class="btn primary" disabled>Get quote &amp; order</button>
+          <p class="hint" id="lsps1-fee-readout" style="display:none"></p>
+          <p class="hint" id="lsps1-invoice-label" style="display:none">Pay this invoice to open the channel:</p>
+          <img id="lsps1-invoice-qr" class="qr" style="display:none" alt="LSP invoice QR" />
+          <textarea id="lsps1-invoice" class="input" rows="3" readonly style="display:none"></textarea>
+          <p class="msg" id="lsps1-msg"></p>
+        </div>
+
+        <div class="card">
+          <h2>Backup &amp; recovery</h2>
+          <div class="row">
+            <button id="export" class="btn primary" disabled>Export backup file</button>
+          </div>
+          <label class="check"><input type="checkbox" id="auto-download" /> Auto-save a backup file when the wallet changes</label>
+          <hr />
+          <p id="drive-status" class="hint">Google Drive: not connected</p>
+          <div class="row">
+            <button id="drive-connect" class="btn ghost">Connect Drive</button>
+            <button id="drive-backup-now" class="btn ghost" disabled>Back up now</button>
+          </div>
+          <details class="advanced">
+            <summary>Google Client ID (advanced)</summary>
+            <input id="google-client-id" class="input" placeholder="OAuth Client ID (defaults to the shipped one)" />
+            <button id="save-drive" class="btn ghost small">Save</button>
+            <p class="msg" id="drive-msg"></p>
+          </details>
+          <p class="msg" id="backup-msg"></p>
+        </div>
+
+        <div class="card">
+          <h2>Recovery phrase &amp; seed</h2>
+          <p class="hint">These restore <b>this wallet only</b>. An HD wallet (BlueWallet/Phoenix/LND) derives different keys and would show empty — use the sweep address to move funds elsewhere.</p>
+          <textarea id="phrase-words" class="input phrase-blur" rows="3" readonly></textarea>
+          <textarea id="seed-hex" class="input phrase-blur" rows="2" readonly></textarea>
+          <div class="row">
+            <button id="toggle-phrase-blur" class="btn ghost small">Unhide</button>
+            <button id="copy-phrase" class="btn ghost small">Copy phrase</button>
+            <button id="copy-seed-hex" class="btn ghost small">Copy hex</button>
+          </div>
+          <p class="msg" id="phrase-msg"></p>
+        </div>
+
+        <div class="card">
+          <h2>Force-close recovery</h2>
+          <p class="hint">On-chain address to sweep funds to if a channel force-closes.</p>
+          <input id="sweep-address" class="input" placeholder="bc1… on-chain address" />
+          <button id="save-sweep" class="btn ghost small">Save sweep address</button>
+          <p class="msg" id="sweep-msg"></p>
+        </div>
+
+        <div class="card">
+          <h2>Offline wake-ups (Web Push)</h2>
+          <p class="hint">Let the gateway wake this app to answer NWC requests while it's closed. On iOS, install to the home screen first.</p>
+          <input id="push-gateway-url" class="input" placeholder="push gateway URL" value="https://nwc-push-gateway-production.up.railway.app" />
+          <input id="push-relay-url" class="input" placeholder="NWC relay URL (wss://…)" value="wss://relay.getalby.com/v1" />
+          <div class="row">
+            <button id="push-enable" class="btn primary">Enable offline wake</button>
+            <button id="push-disable" class="btn ghost" disabled>Disable</button>
+          </div>
+          <p class="msg" id="push-msg"></p>
+        </div>
+
+        <div class="card">
+          <h2>Your channels</h2>
+          <div id="channels-list" class="hint">Start the node to see your channels.</div>
+        </div>
+
+        <details class="advanced card">
+          <summary>Developer settings</summary>
+          <label class="k">Network</label>
+          <select id="network" class="input">
+            <option value="mainnet">mainnet</option>
+            <option value="signet">signet</option>
+            <option value="testnet">testnet</option>
+            <option value="regtest">regtest</option>
+          </select>
+          <label class="k">Esplora URL</label>
+          <input id="esplora" class="input" placeholder="esplora API base" />
+          <label class="k">WebSocket bridge URL</label>
+          <input id="bridge" class="input" placeholder="wss://… ws-bridge" />
+          <label class="k">Rapid Gossip Sync URL</label>
+          <input id="rgs" class="input" placeholder="RGS snapshot base" />
+          <button id="save-config" class="btn ghost small">Save connection settings</button>
+          <p class="msg" id="config-msg"></p>
+        </details>
+
+        <div class="card danger-zone">
+          <h2>Danger zone</h2>
+          <p class="hint">Permanently delete the <b id="reset-network">mainnet</b> wallet from this browser. Funds in a live channel are lost without a backup.</p>
+          <button id="reset-wallet" class="btn danger">Delete wallet</button>
+          <p class="msg" id="reset-msg"></p>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

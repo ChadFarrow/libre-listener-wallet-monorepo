@@ -1,0 +1,82 @@
+name: Deploy wallet-pwa to Cloudflare Pages
+
+# Builds @libre/wallet-pwa and deploys the static dist/ to Cloudflare Pages.
+#
+# This deploys to a SEPARATE origin from the example-app GitHub Pages site — the wallet PWA must get
+# its own hostname (IndexedDB is scoped by origin, so sharing a host would share the wallet DB). See
+# packages/wallet-pwa/README.md.
+#
+# Requires (one-time):
+#   1. A Cloudflare Pages project (create once):
+#        pnpm dlx wrangler@3 pages project create libre-wallet-pwa --production-branch master
+#      (or in the dashboard: Workers & Pages → Create → Pages → Direct Upload / Connect to Git).
+#   2. Repository *Secrets* (Settings → Secrets and variables → Actions → Secrets):
+#        CLOUDFLARE_API_TOKEN    a token with the "Cloudflare Pages: Edit" permission
+#        CLOUDFLARE_ACCOUNT_ID   your Cloudflare account id
+#   3. Repository *Variables* (non-secret):
+#        CLOUDFLARE_DEPLOY_ENABLED  set to "true" to arm this workflow (see the job `if:` below)
+#        CLOUDFLARE_PAGES_PROJECT   Pages project name (optional; defaults to "libre-wallet-pwa")
+#        VITE_GOOGLE_CLIENT_ID      Google OAuth client id (optional; only needed for Drive backup)
+#
+# Until CLOUDFLARE_DEPLOY_ENABLED is "true" the deploy job is SKIPPED (not failed), so master's Actions
+# stays green before Cloudflare is set up. A job-level `if:` can't read a secret, hence a plain variable.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "packages/wallet-pwa/**"
+      - "packages/shared/**"
+      - "packages/libre-listener-wallet/**"
+      - ".github/workflows/deploy-wallet-pwa.yml"
+  workflow_dispatch:
+
+# Deploying via a Cloudflare API token; no elevated GitHub permissions needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-wallet-pwa
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Stays dormant until Cloudflare is configured: skips (green) unless the repo var is armed.
+    if: ${{ vars.CLOUDFLARE_DEPLOY_ENABLED == 'true' }}
+    steps:
+      # Third-party actions pinned to a full commit SHA (supply-chain safety); the trailing comment
+      # records the human-readable version.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Backstop: refuse to deploy to a wallet origin if a persisted storage invariant changed
+      # (renamed key / DB name / backup format). Unit-only — no docker needed.
+      - name: Storage contract check
+        run: pnpm check:storage
+
+      - name: Build workspace deps + wallet-pwa
+        env:
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+        run: |
+          pnpm --filter @libre/shared build
+          pnpm --filter @libre/listener-wallet build
+          pnpm --filter @libre/wallet-pwa build
+
+      # Deploy the built static site. Wrangler is pinned by version (no unpinned third-party action).
+      # --branch=master makes this a production deploy (matches the project's production branch).
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: >
+          pnpm dlx wrangler@3 pages deploy packages/wallet-pwa/dist
+          --project-name="${{ vars.CLOUDFLARE_PAGES_PROJECT || 'libre-wallet-pwa' }}"
+          --branch=master

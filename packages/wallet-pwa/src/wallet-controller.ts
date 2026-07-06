@@ -1,0 +1,535 @@
+import {
+  LibreListenerWallet,
+  IndexedDBStorageProvider,
+  bytesToHex,
+  seedHexToMnemonic,
+  type SecureStorageProvider,
+  type ChannelInfo,
+} from "@libre/listener-wallet";
+import { zeroConfTrustedPubkeys } from "@libre/shared";
+import type { BudgetRenewal, NwcMethod } from "@libre/shared";
+import {
+  dbNameForNetwork,
+  META_DB_NAME,
+  ACTIVE_NETWORK_KEY,
+} from "./core/storage-namespace";
+import {
+  parseConfig,
+  serializeConfig,
+  defaultEsploraUrl,
+  defaultBridgeUrl,
+  defaultRapidGossipSyncUrl,
+  defaultPeer,
+  parsePeerString,
+  formatPeerString,
+  CONFIG_KEY,
+  type AppConfig,
+} from "./core/wallet-config";
+import { autoStartPlan, connectWithRetry } from "./core/auto-start";
+import { createWebSocketStreamProvider } from "./core/ws-provider";
+import { restoreBlockReason } from "./core/restore-guard";
+import { addressToScriptPubKey } from "./core/address-script";
+
+// Keys the SDK / app persist that this controller reasons about.
+const CHANNEL_MANAGER_KEY = "channel_manager";
+const SEED_KEY = "ldk_seed";
+const CREATED_NEW_KEY = "wallet_created_new"; // provenance marker: this seed was created fresh here
+const SWEEP_ADDRESS_KEY = "libre_sweep_address"; // on-chain address to recover force-closed funds
+
+export type ControllerEvent = (event: string, payload?: unknown) => void;
+
+// Owns the single LDK node inside the PWA page. In the extension this same logic lived in the
+// offscreen document and was reached over chrome.runtime RPC; here it is called directly by the
+// home/settings views (no RPC, no chrome.*). WebLN is deliberately absent — the PWA cannot inject
+// into other sites, so NWC is the only app-connectivity surface.
+export class WalletController {
+  private wallet?: LibreListenerWallet;
+  private meta: SecureStorageProvider;
+  private emit: ControllerEvent;
+  private restoring = false; // serializes restoreWallet against a concurrent (double-click) call
+
+  constructor(emit: ControllerEvent = () => {}) {
+    this.meta = new IndexedDBStorageProvider(META_DB_NAME);
+    this.emit = emit;
+  }
+
+  isRunning(): boolean {
+    return !!this.wallet && this.wallet.status() === "Running";
+  }
+
+  // The NWC wallet-service pubkey the push gateway registers a subscription against.
+  walletPubkeyForPush(): string | null {
+    if (!this.wallet) return null;
+    try {
+      return this.wallet.nwc.getWalletPubkey() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async activeNetwork(): Promise<string> {
+    return (await this.meta.getItem(ACTIVE_NETWORK_KEY)) || "mainnet";
+  }
+
+  private storageForNetwork(network: string): SecureStorageProvider {
+    return new IndexedDBStorageProvider(dbNameForNetwork(network));
+  }
+
+  async getConfig(): Promise<AppConfig> {
+    const network = await this.activeNetwork();
+    const storage = this.storageForNetwork(network);
+    const cfg = parseConfig(await storage.getItem(CONFIG_KEY));
+    cfg.network = network as AppConfig["network"];
+    return cfg;
+  }
+
+  async setConfig(patch: Partial<AppConfig>): Promise<AppConfig> {
+    if (this.wallet) throw new Error("Stop the node before changing configuration.");
+    const network = patch.network || (await this.activeNetwork());
+    const storage = this.storageForNetwork(network);
+    const current = parseConfig(await storage.getItem(CONFIG_KEY));
+    const next: AppConfig = { ...current, ...patch, network: network as AppConfig["network"] };
+    await storage.setItem(CONFIG_KEY, serializeConfig(next));
+    await this.meta.setItem(ACTIVE_NETWORK_KEY, network);
+    return next;
+  }
+
+  // Snapshot for the home/settings views.
+  async getState(): Promise<{
+    network: string;
+    running: boolean;
+    hasSeed: boolean;
+    hasChannelState: boolean;
+    createdNew: boolean;
+    nodeId?: string;
+    balance?: { spendableSat: number; receivableSat: number };
+    channels?: number;
+    usableChannels?: number;
+    peers?: number;
+  }> {
+    const network = await this.activeNetwork();
+    const storage = this.storageForNetwork(network);
+    const hasSeed = !!(await storage.getItem(SEED_KEY));
+    const hasChannelState = !!(await storage.getItem(CHANNEL_MANAGER_KEY));
+    const createdNew = !!(await storage.getItem(CREATED_NEW_KEY));
+    const running = this.isRunning();
+    let nodeId: string | undefined;
+    let balance: { spendableSat: number; receivableSat: number } | undefined;
+    let channels: number | undefined;
+    let usableChannels: number | undefined;
+    let peers: number | undefined;
+    if (running && this.wallet) {
+      const mgr = this.wallet.getChannelManager();
+      if (mgr) nodeId = bytesToHex(mgr.get_our_node_id());
+      balance = this.wallet.getBalance();
+      const chans = this.wallet.getChannels();
+      channels = chans.length;
+      usableChannels = chans.filter((c) => c.isUsable).length;
+      peers = this.wallet.getConnectedPeers().length;
+    }
+    return { network, running, hasSeed, hasChannelState, createdNew, nodeId, balance, channels, usableChannels, peers };
+  }
+
+  // Build (but do not start) the wallet instance for the active network.
+  private async buildWallet(): Promise<LibreListenerWallet> {
+    const cfg = await this.getConfig();
+    const storage = this.storageForNetwork(cfg.network);
+    // Fall back to the network's public defaults so an unconfigured wallet still reaches its
+    // bridge/esplora/RGS (mainnet ships the same infra as the extension); user config always wins.
+    const bridgeUrl = cfg.bridgeUrl || defaultBridgeUrl(cfg.network);
+    const socketProvider = createWebSocketStreamProvider(() => bridgeUrl);
+    const wallet = new LibreListenerWallet({
+      config: {
+        network: cfg.network,
+        // Always a defined string — falls back to a public per-network endpoint so start() never
+        // crashes the SDK's EsploraSyncClient on an unconfigured wallet.
+        esploraUrl: cfg.esploraUrl || defaultEsploraUrl(cfg.network),
+        rapidGossipSyncUrl: cfg.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(cfg.network),
+        alias: "Libre Listener Wallet",
+        // Allowlist genuinely-0-conf LSPs (Megalith) so their channels are instant. The SDK only
+        // 0-conf-accepts a zeroconf-typed open, so a confirmed open still falls back safely.
+        trustedZeroConfPeers: zeroConfTrustedPubkeys(),
+      } as unknown as ConstructorParameters<typeof LibreListenerWallet>[0]["config"],
+      storage,
+      socketProvider,
+      // Base-aware so the build works at a domain root (Cloudflare) or a project subpath.
+      wasmUrl: `${import.meta.env.BASE_URL}liblightningjs.wasm`,
+      logger: {
+        info: (m, ...a) => console.log("[LDK]", m, ...a),
+        warn: (m, ...a) => console.warn("[LDK]", m, ...a),
+        error: (m, ...a) => console.error("[LDK]", m, ...a),
+      },
+    });
+    // Clear the brand-new provenance marker once real channel state exists (mirrors the
+    // wallet-readiness guard) and push live updates to the UI.
+    wallet.onStateChanged(() => {
+      void (async () => {
+        if (await storage.getItem(CHANNEL_MANAGER_KEY)) {
+          await storage.removeItem(CREATED_NEW_KEY);
+        }
+        this.emit("state-changed");
+      })();
+    });
+    return wallet;
+  }
+
+  // Serialize concurrent start calls (auto-start racing a manual Start click must not build two
+  // wallets over the same storage).
+  private startingPromise?: Promise<{ nodeId: string; network: string }>;
+
+  async startNode(): Promise<{ nodeId: string; network: string }> {
+    if (this.startingPromise) return this.startingPromise;
+    if (this.isRunning()) return this.currentNode();
+    this.startingPromise = this.doStartNode().finally(() => {
+      this.startingPromise = undefined;
+    });
+    return this.startingPromise;
+  }
+
+  // Start the node, enforcing the readiness guard: a seed with no channel state may start ONLY if
+  // it was created brand-new here. A stateless restored/injected seed that auto-starts would
+  // bootstrap an empty ChannelManager, connect the peer, and force-close the real channel on
+  // channel_reestablish — the exact mainnet failure documented in the SDK gotchas.
+  private async doStartNode(): Promise<{ nodeId: string; network: string }> {
+    const network = await this.activeNetwork();
+    const storage = this.storageForNetwork(network);
+    const hasSeed = !!(await storage.getItem(SEED_KEY));
+    const hasChannelState = !!(await storage.getItem(CHANNEL_MANAGER_KEY));
+    const createdNew = !!(await storage.getItem(CREATED_NEW_KEY));
+    if (!hasSeed && !createdNew) {
+      throw new Error("No wallet on this network. Create a new wallet or restore from a backup first.");
+    }
+    if (hasSeed && !hasChannelState && !createdNew) {
+      throw new Error(
+        "This seed has no channel state. Restore from a backup before starting — starting a stateless node can force-close existing channels."
+      );
+    }
+    const wallet = await this.buildWallet();
+    this.wallet = wallet;
+    try {
+      // start() already brings NWC up (nwc.init()+start()) — do NOT init it again here, or a second
+      // LDK event listener gets registered and every payment event is processed twice.
+      await wallet.start();
+    } catch (e) {
+      // Don't leave a half-built wallet assigned — otherwise setConfig ("stop the node first")
+      // stays blocked and the user can't fix a bad config after a failed start.
+      this.wallet = undefined;
+      throw e;
+    }
+    await this.applySweepAddress();
+    // Warm the routing graph best-effort (mainnet only serves RGS snapshots).
+    void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
+    this.emit("state-changed");
+    return this.currentNode();
+  }
+
+  // Load-time auto-start. NEVER throws — a failed or skipped auto-start leaves the controller
+  // stopped and manual Start working. `flagRaw` is the raw localStorage AUTO_START_KEY value. The
+  // plan mirrors assessStartReadiness: a stateless non-created-here seed is a silent skip here AND
+  // still a hard error in startNode() (two layers against empty-node-force-closes-the-channel).
+  async autoStart(flagRaw: string | null): Promise<void> {
+    try {
+      const network = await this.activeNetwork();
+      const storage = this.storageForNetwork(network);
+      const plan = autoStartPlan({
+        flagRaw,
+        hasSeed: !!(await storage.getItem(SEED_KEY)),
+        hasChannelState: !!(await storage.getItem(CHANNEL_MANAGER_KEY)),
+        createdNew: !!(await storage.getItem(CREATED_NEW_KEY)),
+      });
+      if (!plan.start) {
+        console.log(`[AutoStart] skipped: ${plan.reason}`);
+        return;
+      }
+      await this.startNode();
+      if (!plan.connectPeer) return;
+
+      const cfg = await this.getConfig();
+      const savedPeer = cfg.peer;
+      const peerStr = savedPeer || defaultPeer(network);
+      if (!peerStr) {
+        console.warn("[AutoStart] no saved or default peer for this network — skipping peer connect");
+        return;
+      }
+      if (!savedPeer) {
+        console.warn("[AutoStart] no saved peer — dialing the network default, which may not be your channel peer");
+      }
+      const { pubkey, host, port } = parsePeerString(peerStr);
+      const wallet = this.wallet; // abort the retry loop if stop()/restore swaps the instance
+      const connected = await connectWithRetry(
+        async () => {
+          await wallet!.connectPeer(pubkey, host, port);
+        },
+        {
+          shouldContinue: () => this.wallet === wallet && !!wallet && wallet.status() === "Running",
+          onAttemptFailed: (n, e) =>
+            console.warn(`[AutoStart] peer connect attempt ${n} failed:`, (e as Error)?.message || e),
+        }
+      );
+      if (connected) {
+        this.emit("state-changed");
+        console.log(`[AutoStart] node running, ${savedPeer ? "saved peer" : "default peer"} connected`);
+      } else {
+        console.warn("[AutoStart] peer connect gave up — use Connect peer in settings");
+      }
+    } catch (e) {
+      console.warn("[AutoStart] failed:", (e as Error)?.message || e);
+    }
+  }
+
+  // Wipe the wallet for the active network. DESTRUCTIVE — any funds in a live channel are lost; the
+  // UI gates this behind an explicit confirmation. Leaves the network pointer + saved config intact.
+  async resetWallet(): Promise<{ network: string }> {
+    if (this.startingPromise) await this.startingPromise.catch(() => {});
+    const network = await this.activeNetwork();
+    if (this.wallet) {
+      await this.wallet.nwc.stop().catch((e) => console.warn("[NWC] stop failed:", e?.message || e));
+      await this.wallet.stop();
+      this.wallet = undefined;
+    }
+    await new IndexedDBStorageProvider(dbNameForNetwork(network)).clear();
+    this.emit("state-changed");
+    return { network };
+  }
+
+  async stopNode(): Promise<void> {
+    if (this.startingPromise) await this.startingPromise.catch(() => {});
+    if (this.wallet) {
+      await this.wallet.nwc.stop().catch((e) => console.warn("[NWC] stop failed:", e?.message || e));
+      await this.wallet.stop();
+      this.wallet = undefined;
+      this.emit("state-changed");
+    }
+  }
+
+  // Create a fresh wallet: generate (or accept) a 32-byte seed, mark it brand-new, persist, and
+  // start. Refuses to clobber a wallet that already has channel state (funds-protection).
+  async createWallet(opts?: { seedHex?: string }): Promise<{ seedHex: string; nodeId: string; network: string }> {
+    const network = await this.activeNetwork();
+    const storage = this.storageForNetwork(network);
+    if (await storage.getItem(CHANNEL_MANAGER_KEY)) {
+      throw new Error("A funded wallet already exists on this network. Refusing to overwrite it.");
+    }
+    const seedHex = opts?.seedHex ?? bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+    if (!/^[0-9a-fA-F]{64}$/.test(seedHex)) throw new Error("Seed must be 64 hex characters (32 bytes).");
+    await storage.setItem(SEED_KEY, seedHex.toLowerCase());
+    await storage.setItem(CREATED_NEW_KEY, "1");
+    const node = await this.startNode();
+    return { seedHex: seedHex.toLowerCase(), ...node };
+  }
+
+  // Active network's seed as its 24-word BIP39 recovery phrase, for on-device display (never
+  // logged). Reads storage directly, so it works whether or not the node is running.
+  async getRecoveryPhrase(): Promise<{ mnemonic: string }> {
+    return { mnemonic: seedHexToMnemonic(await this.readSeedHex()) };
+  }
+
+  // Active network's raw 64-hex seed (this app's native format). Same never-logged rules.
+  async getSeed(): Promise<{ seedHex: string }> {
+    return { seedHex: await this.readSeedHex() };
+  }
+
+  private async readSeedHex(): Promise<string> {
+    const storage = this.storageForNetwork(await this.activeNetwork());
+    const seedHex = await storage.getItem(SEED_KEY);
+    if (!seedHex || !/^[0-9a-fA-F]{64}$/.test(seedHex)) {
+      throw new Error("No wallet seed on this network — create or restore a wallet first.");
+    }
+    return seedHex;
+  }
+
+  // Restore from an encrypted backup envelope. importState writes seed + channel state + network
+  // (and enforces the network match), so the readiness guard is satisfied afterwards.
+  async restoreWallet(envelope: string, secret: string): Promise<{ nodeId: string; network: string }> {
+    const early = restoreBlockReason({ running: !!this.wallet, restoring: this.restoring, targetHasChannelState: false });
+    if (early) throw new Error(early);
+    this.restoring = true;
+    try {
+      const probe = await this.buildWallet();
+      const verified = await probe.verifyBackup(envelope, secret);
+      if (!verified.ok) throw new Error("Backup could not be decrypted with that secret.");
+      const targetNetwork = verified.network || (await this.activeNetwork());
+      const targetStorage = this.storageForNetwork(targetNetwork);
+      const funded = restoreBlockReason({
+        running: false,
+        restoring: false,
+        targetHasChannelState: !!(await targetStorage.getItem(CHANNEL_MANAGER_KEY)),
+      });
+      if (funded) throw new Error(funded);
+      if (verified.network) {
+        await this.meta.setItem(ACTIVE_NETWORK_KEY, verified.network);
+      }
+      const wallet = await this.buildWallet();
+      await wallet.importState(envelope, secret);
+      this.wallet = wallet;
+      await wallet.start();
+      await this.applySweepAddress();
+      void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
+      this.emit("state-changed");
+      return this.currentNode();
+    } finally {
+      this.restoring = false;
+    }
+  }
+
+  async exportBackup(): Promise<string> {
+    this.requireRunning();
+    return this.wallet!.exportState();
+  }
+
+  // ---- Force-close recovery: on-chain sweep address ----
+
+  async getSweepAddress(): Promise<{ address: string }> {
+    const storage = this.storageForNetwork(await this.activeNetwork());
+    return { address: (await storage.getItem(SWEEP_ADDRESS_KEY)) || "" };
+  }
+
+  async setSweepAddress(address: string): Promise<{ address: string }> {
+    const addr = (address || "").trim();
+    const network = await this.activeNetwork();
+    // Pass the active network so a wrong-chain address (e.g. tb1…/bcrt1… on mainnet) is rejected —
+    // otherwise force-closed funds could sweep to a script that's unspendable on the real chain.
+    if (addr) addressToScriptPubKey(addr, network); // throws on an invalid or wrong-network address
+    const storage = this.storageForNetwork(network);
+    if (addr) await storage.setItem(SWEEP_ADDRESS_KEY, addr);
+    else await storage.removeItem(SWEEP_ADDRESS_KEY);
+    if (this.wallet) this.wallet.setSweepDestination(addr ? addressToScriptPubKey(addr, network) : undefined);
+    return { address: addr };
+  }
+
+  private async applySweepAddress(): Promise<void> {
+    try {
+      const network = await this.activeNetwork();
+      const storage = this.storageForNetwork(network);
+      const addr = (await storage.getItem(SWEEP_ADDRESS_KEY))?.trim();
+      if (addr && this.wallet) this.wallet.setSweepDestination(addressToScriptPubKey(addr, network));
+    } catch (e) {
+      console.warn("[Sweep] could not apply saved sweep address:", (e as Error)?.message || e);
+    }
+  }
+
+  // Top up: a BOLT11 invoice to receive into existing inbound capacity (open a channel first).
+  async createInvoice(amountSats: number, memo?: string, expirySeconds?: number): Promise<{ paymentRequest: string }> {
+    this.requireRunning();
+    const amt = Math.floor(Number(amountSats));
+    if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter an amount in sats greater than 0.");
+    const paymentRequest = await this.wallet!.createInvoice(amt, memo || "Libre Listener Wallet top-up", expirySeconds || 3600);
+    return { paymentRequest };
+  }
+
+  // ---- NWC (Nostr Wallet Connect) pairings ----
+
+  async nwcCreateConnection(
+    name: string,
+    opts?: {
+      spendingLimitSats?: number;
+      relayUrl?: string;
+      budgetRenewal?: BudgetRenewal;
+      maxAmountSats?: number;
+      allowedMethods?: NwcMethod[];
+      expiresAt?: number;
+    }
+  ): Promise<{ uri: string }> {
+    this.requireRunning();
+    const uri = await this.wallet!.nwc.createConnection(name || "Nostr Client App", {
+      spendingLimitSats: Number(opts?.spendingLimitSats) || 0,
+      relayUrl: opts?.relayUrl,
+      budgetRenewal: opts?.budgetRenewal,
+      maxAmountSats: opts?.maxAmountSats,
+      allowedMethods: opts?.allowedMethods,
+      expiresAt: opts?.expiresAt,
+    });
+    this.emit("state-changed");
+    return { uri };
+  }
+
+  async nwcListConnections(): Promise<Array<{ name: string; clientPubkey: string; relayUrl: string; spendingLimitSats: number; spentTodaySats?: number }>> {
+    this.requireRunning();
+    const list = await this.wallet!.nwc.listConnections();
+    // Deliberately omit each pairing's `secret` — it never leaves the wallet controller.
+    return list.map((c) => ({
+      name: c.name,
+      clientPubkey: c.clientPubkey,
+      relayUrl: c.relayUrl,
+      spendingLimitSats: c.spendingLimitSats ?? 0,
+      spentTodaySats: c.spentTodaySats ?? 0,
+    }));
+  }
+
+  async nwcDeleteConnection(clientPubkey: string): Promise<void> {
+    this.requireRunning();
+    await this.wallet!.nwc.deleteConnection(clientPubkey);
+    this.emit("state-changed");
+  }
+
+  async connectPeer(pubkey: string, host: string, port: number): Promise<void> {
+    this.requireRunning();
+    await this.wallet!.connectPeer(pubkey, host, port);
+    await this.savePeer(pubkey, host, port);
+    this.emit("state-changed");
+  }
+
+  // Remember the last successfully connected peer so auto-start can redial it. Best-effort: a
+  // persist failure must not fail the connect that already succeeded.
+  private async savePeer(pubkey: string, host: string, port: number): Promise<void> {
+    try {
+      const network = await this.activeNetwork();
+      const storage = this.storageForNetwork(network);
+      const cfg = parseConfig(await storage.getItem(CONFIG_KEY));
+      cfg.network = network as AppConfig["network"];
+      cfg.peer = formatPeerString(pubkey, host, port);
+      await storage.setItem(CONFIG_KEY, serializeConfig(cfg));
+    } catch (e) {
+      console.warn("[Peer] could not persist last-connected peer:", (e as Error)?.message || e);
+    }
+  }
+
+  async syncGossip(): Promise<void> {
+    this.requireRunning();
+    await this.wallet!.syncGossip();
+  }
+
+  async getChannels(): Promise<ChannelInfo[]> {
+    this.requireRunning();
+    return this.wallet!.getChannels();
+  }
+
+  // Buy inbound liquidity from a real mainnet LSP over the LSPS1 REST binding (Megalith / Olympus).
+  async purchaseLSPS1Capacity(params: {
+    amountSats: number;
+    apiUrl: string;
+    providerName: string;
+    channelExpiryBlocks?: number;
+  }): Promise<{ orderId: string; invoice: string; feeTotalSat?: string; onchainAddress?: string; lspPeerUri?: string }> {
+    this.requireRunning();
+    return this.wallet!.purchaseLSPS1Capacity({
+      amountSats: params.amountSats,
+      lsp: {
+        name: params.providerName,
+        pubkey: "",
+        connection_string: "",
+        api_url: params.apiUrl,
+        protocols: ["lsps1"],
+      },
+      ...(params.channelExpiryBlocks != null ? { channelExpiryBlocks: params.channelExpiryBlocks } : {}),
+    });
+  }
+
+  async getLSPS1Order(apiUrl: string, orderId: string): Promise<unknown> {
+    this.requireRunning();
+    return this.wallet!.getLSPS1Order(apiUrl, orderId);
+  }
+
+  private currentNode(): { nodeId: string; network: string } {
+    this.requireRunning();
+    const mgr = this.wallet!.getChannelManager();
+    return {
+      nodeId: mgr ? bytesToHex(mgr.get_our_node_id()) : "",
+      network: (this.wallet as unknown as { config?: { network?: string } }).config?.network ?? "",
+    };
+  }
+
+  private requireRunning(): void {
+    if (!this.isRunning()) throw new Error("Wallet is not running");
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Libre Listener Wallet",
+  "short_name": "Libre Wallet",
+  "description": "A non-custodial Bitcoin Lightning wallet that runs entirely in your browser.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0b0f17",
+  "background_color": "#0b0f17",
+  "categories": ["finance"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

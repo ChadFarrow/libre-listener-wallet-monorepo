@@ -985,9 +985,24 @@ export class LibreListenerWallet {
   }
 
   /** Advance the persisted per-channel high-water from the live (shared-by-reference) monitors.
-   *  Monotonic + best-effort. Covers every channel present at start; channels opened mid-session
-   *  are picked up on the next start when their monitors load. */
+   *  Monotonic + best-effort. Covers every channel present at start PLUS channels opened
+   *  mid-session (picked up when the live monitor set grows). */
   private advanceMonitorHighwater(): void {
+    if (!this.chainMonitor || !this.monitorUpdatingPersister) return;
+    // Pick up channels opened mid-session: when the live monitor set grows beyond our tracked
+    // snapshot, ADD the new channels' monitors so their high-water is tracked too. Existing
+    // entries keep their shared-by-reference (in-memory) monitor — do not replace them.
+    if (this.chainMonitor.list_monitors().length > this.loadedMonitors.length) {
+      const res = this.monitorUpdatingPersister.read_all_channel_monitors_with_updates();
+      if (res.is_ok()) {
+        const known = new Set(this.loadedMonitors.map((m) => bytesToHex(m.channel_id().get_a())));
+        const fresh = (res as Result_CVec_C2Tuple_ThirtyTwoBytesChannelMonitorZZIOErrorZ_OK).res;
+        for (const tuple of fresh) {
+          const mon = tuple.get_b();
+          if (!known.has(bytesToHex(mon.channel_id().get_a()))) this.loadedMonitors.push(mon);
+        }
+      }
+    }
     if (this.loadedMonitors.length === 0) return;
     const summaries = this.loadedMonitors.map((m) => ({
       channelId: bytesToHex(m.channel_id().get_a()),
@@ -1272,6 +1287,11 @@ export class LibreListenerWallet {
     if (payload.network !== this.config.network) {
       throw new Error(`Backup network mismatch: backup is "${payload.network}" but wallet is configured for "${this.config.network}"`);
     }
+    // A restore is authoritative: drop any stale high-water FIRST (before any entry writes) so a
+    // crash mid-restore can't leave a marker from a prior/other wallet that false-halts the
+    // restored (possibly lower) monitors. The next start() re-initializes it from the restored
+    // monitors.
+    await this.storage.removeItem(MONITOR_HIGHWATER_KEY);
     // Write the seed LAST for crash-safety. If the browser is killed mid-restore
     // and ldk_seed lands first, storage holds a bare seed with no channel_manager
     // — the seed-without-state condition that force-closes on the next start.
@@ -1286,11 +1306,6 @@ export class LibreListenerWallet {
     if (seedEntry !== undefined) {
       await this.storage.setItem("ldk_seed", seedEntry);
     }
-
-    // A restore is authoritative: drop any stale high-water in the destination storage so a
-    // marker from a prior/other wallet can't false-halt the restored (possibly lower) monitors.
-    // The next start() re-initializes the mark from the restored monitors.
-    await this.storage.removeItem(MONITOR_HIGHWATER_KEY);
   }
 
   /**

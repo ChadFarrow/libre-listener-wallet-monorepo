@@ -80,9 +80,14 @@ describe("channel-state regression guard", () => {
 
     const dbB = new Map<string, string>();
     dbB.set(HW_KEY, JSON.stringify({ [("bb".repeat(32))]: "42" })); // stale marker in destination
+    // Also seed unrelated non-marker keys: the clear must run regardless of write order, so a
+    // crash mid-restore can't leave a stale high-water. These keys are overwritten by the restore.
+    dbB.set("rgs_timestamp", "12345");
+    dbB.set("state_version", "7");
+    dbB.set("peer_addresses", "{}");
     const walletB = new LibreListenerWallet({ config: { network: "regtest", esploraUrl }, storage: makeStorage(dbB), socketProvider: noSocket, wasmBinary });
     await walletB.importState(blob, seed);
-    expect(dbB.get(HW_KEY)).toBeUndefined(); // cleared by importState
+    expect(dbB.get(HW_KEY)).toBeUndefined(); // cleared by importState (before any entry writes)
     await walletB.start(); // and no regression on the restored (empty) monitor set
     expect(walletB.status()).toBe("Running");
     await walletB.stop();

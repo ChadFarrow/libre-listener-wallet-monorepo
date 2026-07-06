@@ -37,6 +37,8 @@ New non-critical storage key **`monitor_update_highwater`**: a JSON map `{ [chan
 
 In the existing event-tick loop (`index.ts:797`, the `eventTickIntervalId` interval), after processing events, read each live monitor's `get_latest_update_id()` keyed by `channel_id()` and persist `highwater[id] = max(stored, live)`. This tracks the latest update ids the running node has reached. Advancing is best-effort and monotonic (write is fire-and-forget with a logged `.catch`, matching the surrounding persist calls).
 
+The advance tracks the start-time monitors PLUS channels opened mid-session: on each tick, if the live monitor count (`ChainMonitor.list_monitors()`) has grown beyond the tracked snapshot, the newly-opened channels' monitors are read (`read_all_channel_monitors_with_updates()`) and ADDED to the tracked set — existing entries keep their shared-by-reference (in-memory) monitor and are never replaced. This closes the false-negative where a channel opened after start would otherwise get no high-water entry until the next restart. Note `list_monitors()` is used only for the count: `get_monitor()` returns a `LockedChannelMonitor`, which exposes no `get_latest_update_id()` accessor, so the owned `ChannelMonitor` objects from `read_all_channel_monitors_with_updates()` are what's tracked.
+
 ### The guard (on load)
 
 In `start()`, at the point monitors are read and registered (`index.ts:492–509`, `read_all_channel_monitors_with_updates()` → `channelMonitors`), **before** the background loops and peer connection are set up:

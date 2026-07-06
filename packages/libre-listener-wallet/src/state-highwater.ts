@@ -20,13 +20,15 @@ export interface Regression {
 export function parseHighwater(raw: string | null): Highwater {
   const map: Highwater = new Map();
   if (!raw) return map;
-  let obj: Record<string, string>;
+  let obj: unknown;
   try {
-    obj = JSON.parse(raw) as Record<string, string>;
+    obj = JSON.parse(raw);
   } catch {
     return new Map();
   }
-  for (const [k, v] of Object.entries(obj)) {
+  // JSON.parse succeeds on valid-JSON non-objects (e.g. "null", "42"); those aren't a marker.
+  if (typeof obj !== "object" || obj === null) return new Map();
+  for (const [k, v] of Object.entries(obj as Record<string, string>)) {
     try {
       map.set(k, BigInt(v));
     } catch {

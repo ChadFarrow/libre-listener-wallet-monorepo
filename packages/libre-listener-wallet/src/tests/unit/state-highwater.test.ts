@@ -21,6 +21,10 @@ describe("parseHighwater", () => {
   it("degrades to empty on corrupt JSON (never throws — non-critical marker)", () => {
     expect(parseHighwater("not json").size).toBe(0);
   });
+  it("degrades to empty on valid-JSON non-object input (never throws)", () => {
+    expect(parseHighwater("null").size).toBe(0);
+    expect(parseHighwater("42").size).toBe(0);
+  });
   it("skips a single bad entry without discarding the rest", () => {
     const m = parseHighwater('{"aa":"5","bb":"xyz"}');
     expect(m.get("aa")).toBe(5n);

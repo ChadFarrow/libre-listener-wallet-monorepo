@@ -82,6 +82,8 @@ import {
   Event_ChannelPending,
   Event_ChannelReady,
   Event_PaymentClaimed,
+  Event_PaymentSent,
+  Event_PaymentFailed,
   Event_SpendableOutputs,
   Result_ThirtyTwoBytesNoneZ_OK,
   PaymentParameters,
@@ -104,6 +106,8 @@ import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayl
 import { BACKUP_DIRECT_KEYS } from "./backup-keys";
 import { reconnectDelayMs, shouldRedialNow } from "./peer-reconnect";
 import { normalizeBackupSecret } from "./seed-phrase";
+import { PaymentLogger, boostNoteFromCustomRecords } from "./payment-log";
+import type { PaymentRecord } from "@libre/shared";
 
 export { IndexedDBStorageProvider };
 
@@ -117,6 +121,10 @@ export interface SecureStorageProvider {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
   removeItem(key: string): Promise<void>;
+  // Optional key enumeration. IndexedDBStorageProvider implements it; providers that
+  // don't (e.g. a mobile Keychain) simply can't back the payment history (it stays
+  // empty) — no crash. Used by PaymentLogger to load per-record `tx_*` keys.
+  keys?(): Promise<string[]>;
 }
 
 export interface WebSocketConnection {
@@ -352,6 +360,8 @@ export class LibreListenerWallet {
   private registryCache?: LspProvider[];
   private eventListeners: ((event: Event) => void)[] = [];
   public nwc: NwcManager;
+  // Forward-only payment history (source of truth for getPayments + NWC list_transactions).
+  private paymentLog: PaymentLogger;
 
   constructor(options: {
     config: WalletConfig;
@@ -368,6 +378,7 @@ export class LibreListenerWallet {
     this.wasmBinary = options.wasmBinary;
     this.wasmUrl = options.wasmUrl;
     this.nwc = new NwcManager(this, { logger: this.logger, storage: this.storage, network: this.config.network });
+    this.paymentLog = new PaymentLogger({ storage: this.storage, logger: this.logger });
   }
 
   async start(): Promise<void> {
@@ -836,6 +847,31 @@ export class LibreListenerWallet {
     // Fire-and-forget so a slow dial never blocks startup.
     void this.redialChannelPeers();
 
+    // Load the forward-only payment history and attach a listener that records payment
+    // outcomes. Thin LDK `instanceof` demux here (minification-safe, per the event-dispatch
+    // gotcha) → plain PaymentLogger calls; the testable logic lives in payment-log.ts.
+    await this.paymentLog.load();
+    this.addEventListener((event: Event) => {
+      try {
+        if (event instanceof Event_PaymentSent) {
+          const feeMsat = event.fee_paid_msat instanceof Option_u64Z_Some ? Number(event.fee_paid_msat.some) : 0;
+          this.paymentLog.recordSent(
+            bytesToHex(event.payment_hash),
+            feeMsat / 1000,
+            bytesToHex(event.payment_preimage)
+          );
+        } else if (event instanceof Event_PaymentFailed) {
+          if (event.payment_hash instanceof Option_ThirtyTwoBytesZ_Some) {
+            this.paymentLog.recordFailed(bytesToHex(event.payment_hash.some));
+          }
+        } else if (event instanceof Event_PaymentClaimed) {
+          this.paymentLog.recordReceived(bytesToHex(event.payment_hash), Number(event.amount_msat) / 1000);
+        }
+      } catch (e) {
+        this.logger?.error(`[PaymentLog] event handling failed: ${e instanceof Error ? e.message : e}`);
+      }
+    });
+
     // Initialize and start Nostr Wallet Connect listeners
     await this.nwc.init();
     await this.nwc.start();
@@ -1244,6 +1280,20 @@ export class LibreListenerWallet {
   getChannels(): ChannelInfo[] {
     if (!this.isRunning || !this.channelManager) return [];
     return this.channelManager.list_channels().map(mapChannelDetails);
+  }
+
+  // Forward-only payment history, newest first. Backs the app's transaction-history UI
+  // and NWC `list_transactions`. Lazily loads from storage if start() hasn't run yet.
+  async getPayments(): Promise<PaymentRecord[]> {
+    if (!this.paymentLog.isLoaded()) await this.paymentLog.load();
+    return this.paymentLog.getRecords();
+  }
+
+  // Register an outbound payment intent so it appears in history with its amount even
+  // when initiated outside sendKeysendPayment (e.g. a BOLT11 send via NWC pay_invoice or
+  // the extension's payBolt11). Finalized on Event_PaymentSent / Event_PaymentFailed.
+  notePendingPayment(rec: PaymentRecord): void {
+    this.paymentLog.notePending(rec);
   }
 
   getBalance(): { spendableSat: number; receivableSat: number } {
@@ -1824,6 +1874,18 @@ export class LibreListenerWallet {
         } catch (e) {
           this.logger?.error(`[Keysend] Payment initiated but failed to persist preimage: ${e instanceof Error ? e.message : e}`);
         }
+        // Record the outbound intent for the payment history (finalized on Event_PaymentSent /
+        // Event_PaymentFailed). Amount + destination + boostagram note are only known here.
+        this.paymentLog.notePending({
+          id: paymentHashHex,
+          direction: "sent",
+          status: "pending",
+          amountSats,
+          timestamp: Date.now(),
+          counterparty: destinationPubkey,
+          type: "keysend",
+          note: boostNoteFromCustomRecords(customRecords),
+        });
         return {
           ok: true,
           paymentId: bytesToHex(paymentId),
@@ -1887,7 +1949,8 @@ export class LibreListenerWallet {
 
 export { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
 export { EsploraSyncClient } from "./esplora-client";
-export type { WalletConfig } from "@libre/shared";
+export type { WalletConfig, PaymentRecord } from "@libre/shared";
+export { PaymentLogger, boostNoteFromCustomRecords, TX_KEY_PREFIX } from "./payment-log";
 export { LspsClient } from "./lsps-client";
 export { Lsps1RestClient, clampExpiryBlocks, isOrderComplete, isOrderFailed, orderInvoice } from "./lsps1-rest-client";
 export { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";

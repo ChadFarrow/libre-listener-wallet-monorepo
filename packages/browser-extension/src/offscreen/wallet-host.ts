@@ -5,6 +5,7 @@ import {
   seedHexToMnemonic,
   type SecureStorageProvider,
   type ChannelInfo,
+  type PaymentRecord,
 } from "@libre/listener-wallet";
 import { zeroConfTrustedPubkeys } from "@libre/shared";
 import type { BudgetRenewal, NwcMethod } from "@libre/shared";
@@ -577,6 +578,14 @@ export class WalletHost implements WalletRpc {
   async getChannels(): Promise<ChannelInfo[]> {
     this.requireRunning();
     return this.wallet!.getChannels();
+  }
+
+  // Forward-only payment history for the options-page "Transaction history" card. Node
+  // must be running (matches the channels card gating). Control-plane only — never a
+  // WebLN/page-reachable method.
+  async getPayments(): Promise<PaymentRecord[]> {
+    this.requireRunning();
+    return this.wallet!.getPayments();
   }
 
   async makeInvoice(args: { amountSats: number; memo: string; expirySeconds: number }): Promise<{ paymentRequest: string }> {

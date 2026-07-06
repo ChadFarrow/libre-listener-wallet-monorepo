@@ -12,7 +12,9 @@ import {
   NWCRequestInput,
   NwcMethod,
   BudgetRenewal,
-  budgetWindowElapsed
+  budgetWindowElapsed,
+  NWC_ALWAYS_ALLOWED_METHODS,
+  paymentRecordsToNwcTransactions
 } from "@libre/shared";
 import {
   Bolt11Invoice,
@@ -493,13 +495,14 @@ export class NwcManager {
       return;
     }
 
-    // Enforce the per-connection method allowlist. `get_info` is always permitted
-    // (clients need it for the handshake and it exposes no funds); every other
-    // method must be in the allowlist when one is set. An undefined allowlist
+    // Enforce the per-connection method allowlist. `get_info` and `list_transactions`
+    // are always permitted (a handshake capability and read-only history — neither
+    // exposes funds, so Alby Go gets history regardless of a pairing's spend allowlist);
+    // every other method must be in the allowlist when one is set. An undefined allowlist
     // means "all methods" (legacy connections).
     if (
       pairing.allowedMethods &&
-      request.method !== "get_info" &&
+      !(NWC_ALWAYS_ALLOWED_METHODS as readonly string[]).includes(request.method) &&
       !pairing.allowedMethods.includes(request.method as NwcMethod)
     ) {
       await this.sendErrorResponse(event, "RESTRICTED", `Method ${request.method} is not permitted for this connection`, relayUrl, rpcReq.id);
@@ -537,7 +540,8 @@ export class NwcManager {
           block_height: bestBlock.get_height(),
           // Block hashes are displayed big-endian; LDK returns internal little-endian.
           block_hash: bytesToHex(Uint8Array.from(bestBlock.get_block_hash()).reverse()),
-          methods: [...permitted, "get_info"],
+          // get_info + list_transactions are always available (see the allowlist gate).
+          methods: [...permitted, "get_info", "list_transactions"],
           notifications: ["payment_sent", "payment_received"]
         };
         await this.sendResultResponse(event, "get_info", result, relayUrl, rpcReq.id);
@@ -625,6 +629,16 @@ export class NwcManager {
           this.pendingPayments.set(payInvoiceHashHex, { resolve, reject });
         });
         this.paymentContexts.set(payInvoiceHashHex, { clientPubkey: event.pubkey, relayUrl, amountMsat: Number(amtOpt.some) });
+        // Record the outbound intent so it shows in history with its amount (finalized on
+        // Event_PaymentSent / Event_PaymentFailed by the SDK's payment-log listener).
+        this.wallet.notePendingPayment({
+          id: payInvoiceHashHex,
+          direction: "sent",
+          status: "pending",
+          amountSats: amtSats,
+          timestamp: Date.now(),
+          type: "bolt11",
+        });
 
         const sendRes = this.wallet.getChannelManager()!.send_payment(
           paymentHash,
@@ -703,6 +717,14 @@ export class NwcManager {
         await this.saveConnections();
 
         await this.sendResultResponse(event, "pay_keysend", { preimage: preimageHex }, relayUrl, rpcReq.id);
+
+      } else if (request.method === "list_transactions") {
+        // Read-only history (Alby Go et al.). No spending-limit/budget checks. The wallet's
+        // forward-only payment log is the source of truth; the pure mapper handles unit
+        // conversions (sat→msat, ms→unix-seconds) and from/until/type/limit/offset filtering.
+        const records = await this.wallet.getPayments();
+        const transactions = paymentRecordsToNwcTransactions(records, request.params ?? {});
+        await this.sendResultResponse(event, "list_transactions", { transactions }, relayUrl, rpcReq.id);
       }
     } catch (err: any) {
       await this.sendErrorResponse(event, "INTERNAL_ERROR", err.message || "Failed to execute request", relayUrl, rpcReq.id);

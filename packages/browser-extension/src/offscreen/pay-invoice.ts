@@ -43,6 +43,17 @@ export async function payBolt11(
   const hashHex = bytesToHex(paymentHash);
   const settled = tracker.waitForSettlement(hashHex, SETTLEMENT_TIMEOUT_MS);
 
+  // Record the outbound intent so it shows in the payment history with its amount
+  // (finalized on Event_PaymentSent / Event_PaymentFailed by the SDK's payment-log listener).
+  wallet.notePendingPayment({
+    id: hashHex,
+    direction: "sent",
+    status: "pending",
+    amountSats,
+    timestamp: Date.now(),
+    type: "bolt11",
+  });
+
   const paymentId = crypto.getRandomValues(new Uint8Array(32));
   const sendRes = mgr.send_payment(paymentHash, onionFields, paymentId, routeParams, Retry.constructor_attempts(10));
   if (!sendRes.is_ok()) {

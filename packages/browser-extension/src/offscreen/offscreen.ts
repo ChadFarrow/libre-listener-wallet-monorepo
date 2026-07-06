@@ -73,6 +73,8 @@ async function dispatch(method: string, params: any): Promise<any> {
       return host.getBalanceSats();
     case "getChannels":
       return host.getChannels();
+    case "getPayments":
+      return host.getPayments();
     case "createInvoice":
       return host.createInvoice(params.amountSats, params.memo, params.expirySeconds);
     case "nwcCreateConnection":

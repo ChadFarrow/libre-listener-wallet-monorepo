@@ -54,8 +54,10 @@ jobs:
           pnpm --filter @libre/lsps2-server test
           pnpm --filter @libre/example-app test
           pnpm --filter @libre/browser-extension test
+          pnpm --filter @libre/wallet-pwa test
 
-      - name: Typecheck (extension + example-app)
+      - name: Typecheck (extension + example-app + wallet-pwa)
         run: |
           pnpm --filter @libre/browser-extension typecheck
           pnpm --filter @libre/example-app exec tsc --noEmit
+          pnpm --filter @libre/wallet-pwa exec tsc --noEmit

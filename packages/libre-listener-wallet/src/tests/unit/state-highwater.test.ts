@@ -93,4 +93,11 @@ describe("ChannelStateRegressionError", () => {
     expect(e.highwaterUpdateId).toBe(10n);
     expect(e.message).toMatch(/restore from a backup/i);
   });
+
+  it("carries a boundary-stable code, mirrored as a token in the message", () => {
+    const e = new ChannelStateRegressionError({ channelId: "aa", loaded: 3n, highwater: 10n });
+    // .code for in-process consumers; the token in .message survives cross-process error flattening.
+    expect(e.code).toBe("CHANNEL_STATE_REGRESSION");
+    expect(e.message).toContain("CHANNEL_STATE_REGRESSION");
+  });
 });

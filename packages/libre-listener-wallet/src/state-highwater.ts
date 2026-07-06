@@ -2,6 +2,8 @@
 // detect channel-state regression on load. A node that reloads channel state BEHIND a point it
 // durably reached must halt (not reconnect + get force-closed). Pure: no LDK, no storage.
 
+import { CHANNEL_STATE_REGRESSION_CODE } from "@libre/shared";
+
 export type Highwater = Map<string, bigint>;
 
 export interface MonitorSummary {
@@ -74,14 +76,17 @@ export function highwaterEquals(a: Highwater, b: Highwater): boolean {
 }
 
 export class ChannelStateRegressionError extends Error {
+  // Boundary-stable discriminator: .code for in-process consumers; the same token is embedded in
+  // .message so it survives cross-process error flattening (the extension's chrome.runtime hops).
+  readonly code = CHANNEL_STATE_REGRESSION_CODE;
   readonly channelId: string;
   readonly loadedUpdateId: bigint;
   readonly highwaterUpdateId: bigint;
   constructor(r: Regression) {
     super(
-      `Channel state regressed: channel ${r.channelId} loaded at monitor update ${r.loaded}, ` +
-        `but this wallet durably reached ${r.highwater}. Refusing to start to avoid force-closing ` +
-        `the channel — restore from a backup.`,
+      `[${CHANNEL_STATE_REGRESSION_CODE}] Channel state regressed: channel ${r.channelId} loaded ` +
+        `at monitor update ${r.loaded}, but this wallet durably reached ${r.highwater}. Refusing to ` +
+        `start to avoid force-closing the channel — restore from a backup.`,
     );
     this.name = "ChannelStateRegressionError";
     this.channelId = r.channelId;

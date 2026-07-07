@@ -60,12 +60,21 @@ export class StorageCache implements KVStoreInterface {
   }
 
   /** Resolve once every write/remove issued before this call has durably committed; reject if any
-   *  failed. Callers use this to hold channel-state advancement until the write is durable. */
+   *  failed OR if persistence is degraded. A degraded cache refuses writes synchronously (they never
+   *  enter `pending`), so flush() MUST consult the health flag directly — otherwise a refused monitor
+   *  write would be falsely reported durable and LDK would advance on state that never landed. */
   async flush(): Promise<void> {
+    if (!this.persistenceHealthy) {
+      throw new Error("StorageCache.flush: persistence degraded — writes are being refused");
+    }
     const snapshot = Array.from(this.pending);
     const results = await Promise.allSettled(snapshot);
     const failed = results.filter((r) => r.status === "rejected").length;
-    if (failed > 0) throw new Error(`StorageCache.flush: ${failed} pending write(s) failed`);
+    if (!this.persistenceHealthy || failed > 0) {
+      throw new Error(
+        `StorageCache.flush: ${!this.persistenceHealthy ? "persistence degraded" : `${failed} pending write(s) failed`}`,
+      );
+    }
   }
 
   private onPersistError(op: string, storeKey: string, err: unknown): void {

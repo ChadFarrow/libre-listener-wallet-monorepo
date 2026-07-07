@@ -68,4 +68,45 @@ describe("StorageCache.flush", () => {
     deferreds.forEach((d) => d.reject(new Error("commit failed")));
     await expect(p).rejects.toThrow(/flush/i);
   });
+
+  // Regression: a degraded cache refuses subsequent writes SYNCHRONOUSLY, before they
+  // ever reach `pending` — so flush() must consult the health flag directly, not just
+  // await whatever happens to be in `pending`. Otherwise a refused monitor write would
+  // be reported as durable (Promise.allSettled([]) resolves) and LDK would advance on
+  // state that was never persisted.
+  it("rejects flush once persistence has degraded, even though the refused write never entered pending", async () => {
+    const { storage, deferreds } = deferredStorage();
+    const cache = new StorageCache(storage);
+
+    // First write's async persist will fail, flipping the cache to degraded.
+    cache.write("monitors", "", "a", new Uint8Array([1]));
+    deferreds.forEach((d) => d.reject(new Error("commit failed")));
+    await new Promise((r) => setTimeout(r, 0)); // let the rejection settle + onPersistError run
+    expect(cache.isPersistenceHealthy()).toBe(false);
+
+    // A second write is now refused SYNCHRONOUSLY — no new setItem call, nothing added to pending.
+    const deferredCountBefore = deferreds.length;
+    const w2 = cache.write("monitors", "", "b", new Uint8Array([2]));
+    expect(w2.is_ok()).toBeFalsy();
+    expect(deferreds.length).toBe(deferredCountBefore); // confirms it never reached storage/pending
+
+    await expect(cache.flush()).rejects.toThrow(/degraded/i);
+  });
+
+  // Even with nothing whatsoever in `pending` (no writes issued at all after degrading),
+  // flush() must still reject — durability can't be claimed for a cache that is actively
+  // refusing writes.
+  it("rejects flush when degraded, even with an empty pending set", async () => {
+    const { storage, deferreds } = deferredStorage();
+    const cache = new StorageCache(storage);
+
+    cache.write("monitors", "", "a", new Uint8Array([1]));
+    deferreds.forEach((d) => d.reject(new Error("commit failed")));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(cache.isPersistenceHealthy()).toBe(false);
+
+    // Nothing is pending: the earlier write's promise already settled and was removed
+    // from `pending` by track()'s cleanup handler.
+    await expect(cache.flush()).rejects.toThrow(/degraded/i);
+  });
 });

@@ -52,6 +52,19 @@ VSS_RECOVER_CYCLES=5 pnpm --filter @libre/listener-wallet exec vitest run \
   src/tests/integration/soak-vss-recovery.test.ts
 ```
 
+### 4. Boost-split soak — the V4V fan-out
+The real v4vmusic workload: one boost fans out into `SPLITS_PER_BOOST` keysends (bLIP-10 TLV —
+shared `boost_uuid`, unique `uuid` per recipient), fired concurrently through the wallet's real
+`NwcManager` (`pay_keysend`), then a restart. Reproduces the many-rapid-in-flight-HTLC churn a boost
+generates, and verifies every split arrives at lnd carrying the shared `boost_uuid` (the split
+invariant). In regtest all splits land at the one channel peer; a real boost fans out to many nodes,
+but the local state churn is the same.
+
+```bash
+BOOST_CYCLES=5 SPLITS_PER_BOOST=6 pnpm --filter @libre/listener-wallet exec vitest run \
+  src/tests/integration/soak-nwc-boost-splits.test.ts
+```
+
 ## Reading the results
 
 - Each cycle logs a one-liner; the run ends with a `SUMMARY` and every `[GOTCHA] cycle N :: kind ::

@@ -95,6 +95,7 @@ import {
   Result_RecipientOnionFieldsNoneZ_OK,
 } from "lightningdevkit";
 import { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
+import { createDurablePersist } from "./durable-persist";
 import { getSecureRandomBytes } from "./crypto-utils";
 import { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
 import { selectHintChannels, prioritizeHints, forwardingInfoFromLdk, type HintableChannel } from "./hint-selection";
@@ -505,7 +506,14 @@ export class LibreListenerWallet {
       broadcaster,
       feeEstimator
     );
-    const monitorPersister = this.monitorUpdatingPersister.as_Persist();
+    // Layer C: wrap the persister so LDK only advances channel state after the write is durable.
+    // getChainMonitor is late-bound — the ChainMonitor is constructed with this persister below.
+    const monitorPersister = createDurablePersist(
+      this.monitorUpdatingPersister.as_Persist(),
+      () => this.storageCache!.flush(),
+      () => this.chainMonitor,
+      this.logger,
+    );
 
     this.chainMonitor = ChainMonitor.constructor_new(
       Option_FilterZ.constructor_some(Filter.new_impl(this.syncClient)),

@@ -118,6 +118,7 @@ class Reader {
     return this.pos >= this.buf.length;
   }
 
+  // Unsigned varint for tags/lengths and non-negative fields (values fit well under 2^53).
   varint(): number {
     let result = 0;
     let multiplier = 1;
@@ -129,6 +130,22 @@ class Reader {
       multiplier *= 128;
     }
     return result;
+  }
+
+  // Signed int64 varint via BigInt — needed to read the blind-write sentinel version = -1 (encoded as
+  // the 10-byte two's-complement all-ones varint) back as -1 rather than a giant positive number.
+  varintI64(): number {
+    let result = 0n;
+    let shift = 0n;
+    for (;;) {
+      if (this.pos >= this.buf.length) throw new Error("vss-protobuf: truncated varint");
+      const b = this.buf[this.pos++];
+      result += BigInt(b & 0x7f) << shift;
+      if ((b & 0x80) === 0) break;
+      shift += 7n;
+    }
+    if (result >= 1n << 63n) result -= 1n << 64n; // interpret as signed 64-bit
+    return Number(result);
   }
 
   tag(): { field: number; wire: number } {
@@ -225,7 +242,7 @@ export function decodeKeyValue(buf: Uint8Array): VssKeyValue {
   while (!r.eof()) {
     const { field, wire } = r.tag();
     if (field === 1 && wire === WIRE_LEN) kv.key = r.string();
-    else if (field === 2 && wire === WIRE_VARINT) kv.version = r.varint();
+    else if (field === 2 && wire === WIRE_VARINT) kv.version = r.varintI64(); // signed: handles the -1 sentinel
     else if (field === 3 && wire === WIRE_LEN) kv.value = new Uint8Array(r.bytes());
     else r.skip(wire);
   }
@@ -278,4 +295,84 @@ export function decodeErrorResponse(buf: Uint8Array): VssErrorResponse {
     else r.skip(wire);
   }
   return out;
+}
+
+// --- server-side codec (decode the requests we send, encode the responses we parse) ---
+// Symmetric with the client functions above; used by an in-process VSS server (tests) and handy for
+// anyone implementing the other end. All pure.
+
+export function decodeGetObjectRequest(buf: Uint8Array): { storeId: string; key: string } {
+  const r = new Reader(buf);
+  const out = { storeId: "", key: "" };
+  while (!r.eof()) {
+    const { field, wire } = r.tag();
+    if (field === 1 && wire === WIRE_LEN) out.storeId = r.string();
+    else if (field === 2 && wire === WIRE_LEN) out.key = r.string();
+    else r.skip(wire);
+  }
+  return out;
+}
+
+export function encodeGetObjectResponse(value: VssKeyValue): Uint8Array {
+  const w = new Writer();
+  w.message(2, encodeKeyValue(value));
+  return w.finish();
+}
+
+export interface DecodedPutObjectRequest {
+  storeId: string;
+  globalVersion?: number;
+  transactionItems: VssKeyValue[];
+  deleteItems: VssKeyValue[];
+}
+
+export function decodePutObjectRequest(buf: Uint8Array): DecodedPutObjectRequest {
+  const r = new Reader(buf);
+  const out: DecodedPutObjectRequest = { storeId: "", transactionItems: [], deleteItems: [] };
+  while (!r.eof()) {
+    const { field, wire } = r.tag();
+    if (field === 1 && wire === WIRE_LEN) out.storeId = r.string();
+    else if (field === 2 && wire === WIRE_VARINT) out.globalVersion = r.varint();
+    else if (field === 3 && wire === WIRE_LEN) out.transactionItems.push(decodeKeyValue(r.bytes()));
+    else if (field === 4 && wire === WIRE_LEN) out.deleteItems.push(decodeKeyValue(r.bytes()));
+    else r.skip(wire);
+  }
+  return out;
+}
+
+export function decodeListKeyVersionsRequest(buf: Uint8Array): {
+  storeId: string;
+  keyPrefix?: string;
+  pageSize?: number;
+  pageToken?: string;
+} {
+  const r = new Reader(buf);
+  const out: { storeId: string; keyPrefix?: string; pageSize?: number; pageToken?: string } = { storeId: "" };
+  while (!r.eof()) {
+    const { field, wire } = r.tag();
+    if (field === 1 && wire === WIRE_LEN) out.storeId = r.string();
+    else if (field === 2 && wire === WIRE_LEN) out.keyPrefix = r.string();
+    else if (field === 3 && wire === WIRE_VARINT) out.pageSize = r.varint();
+    else if (field === 4 && wire === WIRE_LEN) out.pageToken = r.string();
+    else r.skip(wire);
+  }
+  return out;
+}
+
+export function encodeListKeyVersionsResponse(
+  keyVersions: VssKeyValue[],
+  opts?: { nextPageToken?: string; globalVersion?: number },
+): Uint8Array {
+  const w = new Writer();
+  for (const kv of keyVersions) w.message(1, encodeKeyValue(kv));
+  w.string(2, opts?.nextPageToken);
+  w.optionalInt64(3, opts?.globalVersion);
+  return w.finish();
+}
+
+export function encodeErrorResponse(errorCode: number, message: string): Uint8Array {
+  const w = new Writer();
+  w.int64(1, errorCode);
+  w.string(2, message);
+  return w.finish();
 }

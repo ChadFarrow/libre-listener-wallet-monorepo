@@ -38,6 +38,11 @@ describe("vss-protobuf KeyValue", () => {
     expect(hex(bytes)).toBe("10 ff ff ff ff ff ff ff ff ff 01");
   });
 
+  it("decodes the -1 sentinel back to -1 (signed int64), not a giant positive", () => {
+    const decoded = decodeKeyValue(encodeKeyValue({ key: "k", version: -1, value: new Uint8Array(0) }));
+    expect(decoded.version).toBe(-1);
+  });
+
   it("round-trips through decode, including a large version", () => {
     const kv = { key: "channel_manager", version: 9007199254740000, value: Uint8Array.from([1, 2, 3, 255, 0]) };
     const decoded = decodeKeyValue(encodeKeyValue(kv));

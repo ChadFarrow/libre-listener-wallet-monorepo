@@ -6,7 +6,7 @@ import {
   seedHexToMnemonic,
 } from "@libre/listener-wallet";
 import { resolveSeedInput } from "./core/seed-input";
-import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl, channelConfLabel, lsps1OrderStatus, zeroConfTrustedPubkeys } from "@libre/shared";
+import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl, channelConfLabel, lsps1OrderStatus, zeroConfTrustedPubkeys, isChannelStateRegressionError } from "@libre/shared";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -731,7 +731,14 @@ startNodeBtn.addEventListener("click", async () => {
       }
     }
   } catch (err: any) {
-    appendLog(`[ERROR] Start failed: ${err.message}`, "error");
+    if (isChannelStateRegressionError(err)) {
+      const msg = "This wallet's channel state is behind what it durably reached — starting now would force-close your channels. Restore from your latest backup before starting.";
+      appendLog(`[ERROR] ${msg}`, "error");
+      restoreBanner.textContent = msg;
+      restoreBanner.classList.remove("hidden");
+    } else {
+      appendLog(`[ERROR] Start failed: ${err.message}`, "error");
+    }
     // A start() that threw mid-way may have left timers/sockets running on a
     // half-initialized instance. Tear it down and drop the reference so a retry
     // builds a clean instance instead of a second one writing the same storage.

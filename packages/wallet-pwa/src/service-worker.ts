@@ -1,5 +1,5 @@
 import { LibreListenerWallet, IndexedDBStorageProvider } from "@libre/listener-wallet";
-import { bridgeTargetUrl } from "@libre/shared";
+import { bridgeTargetUrl, isChannelStateRegressionError } from "@libre/shared";
 import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 import { resolveSwConfig } from "./core/sw-config";
 
@@ -192,6 +192,16 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
 
   } catch (err: any) {
     console.error("[SW] Error during offline payment processing:", err.message || err);
+    if (isChannelStateRegressionError(err)) {
+      await self.registration.showNotification("Libre Listener Wallet", {
+        body: "This wallet's channel state is behind what it durably reached — open the app and restore from backup before starting the node.",
+        tag: "nwc-restore-needed",
+        data: {
+          url: self.registration.scope
+        }
+      });
+      return;
+    }
   } finally {
     console.log("[SW] Stopping background wallet node...");
     try {

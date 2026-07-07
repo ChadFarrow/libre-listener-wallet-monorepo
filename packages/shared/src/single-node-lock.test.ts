@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   nodeLockName,
   acquireWebNodeLock,
@@ -36,6 +36,12 @@ describe("acquireWebNodeLock", () => {
   it("degrades to a no-op release when Web Locks is unavailable", async () => {
     const release = await acquireWebNodeLock("n", undefined);
     expect(typeof release).toBe("function"); // never blocks a legit start
+  });
+  it("degrades to a no-op release when request() throws synchronously", async () => {
+    const throwingLocks = { request: () => { throw new Error("SecurityError"); } } as unknown as LockManager;
+    const release = await acquireWebNodeLock("n", throwingLocks);
+    expect(typeof release).toBe("function"); // must NOT reject / block
+    release!();
   });
 });
 

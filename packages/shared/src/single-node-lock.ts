@@ -29,17 +29,21 @@ export function acquireWebNodeLock(
   name: string,
   locks: LockManager | undefined = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks,
 ): Promise<LockRelease | null> {
-  if (!locks || typeof (locks as LockManager).request !== "function") {
+  if (!locks || typeof locks.request !== "function") {
     return Promise.resolve<LockRelease>(() => {});
   }
   return new Promise<LockRelease | null>((resolveOuter) => {
     let settled = false;
     const settle = (v: LockRelease | null) => { if (!settled) { settled = true; resolveOuter(v); } };
-    Promise.resolve(
-      locks.request(name, { ifAvailable: true }, (lock) => {
-        if (!lock) { settle(null); return; }               // held elsewhere in this origin
-        return new Promise<void>((releaseInner) => settle(() => releaseInner())); // hold until release()
-      }),
-    ).catch(() => settle(() => {})); // request errored → don't block; no-op release
+    try {
+      Promise.resolve(
+        locks.request(name, { ifAvailable: true }, (lock) => {
+          if (!lock) { settle(null); return; }               // held elsewhere in this origin
+          return new Promise<void>((releaseInner) => settle(() => releaseInner())); // hold until release()
+        }),
+      ).catch(() => settle(() => {})); // async request rejection → don't block; no-op release
+    } catch {
+      settle(() => {}); // SYNCHRONOUS throw from request() → same degrade
+    }
   });
 }

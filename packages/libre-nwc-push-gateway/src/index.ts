@@ -1,6 +1,47 @@
 import webpush from "web-push";
 import Database from "better-sqlite3";
-import { Relay } from "nostr-tools";
+import { Relay, verifyEvent } from "nostr-tools";
+
+// NIP-98-style push-auth: the client proves control of its (public) walletPubkey by signing a
+// fresh, action/relay/endpoint-bound event. Without it, anyone who scrapes a wallet's public
+// Nostr pubkey off a relay could hijack or delete its push subscription. Kind + max age below.
+export const GATEWAY_AUTH_KIND = 27235;
+export const GATEWAY_AUTH_MAX_AGE_SEC = 300;
+
+/**
+ * True only if `auth` is a valid signed event that proves control of `walletPubkey`, targets this
+ * exact `action` + `relayUrl` (and, for register, `endpoint`), and is fresh. Every binding must
+ * match, so a captured event can't be replayed to a different action/relay/endpoint or reused
+ * after it expires. Pure (side-effect-free) and `now`-injectable for tests.
+ */
+export function verifyGatewayAuth(
+  auth: unknown,
+  walletPubkey: string,
+  action: "register" | "unregister",
+  relayUrl: string,
+  opts: { endpoint?: string; now?: number; maxAgeSec?: number } = {},
+): boolean {
+  if (!auth || typeof auth !== "object") return false;
+  const ev = auth as Record<string, unknown>;
+  if (ev.kind !== GATEWAY_AUTH_KIND) return false;
+  if (typeof ev.pubkey !== "string" || ev.pubkey !== walletPubkey) return false;
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  const maxAge = opts.maxAgeSec ?? GATEWAY_AUTH_MAX_AGE_SEC;
+  if (typeof ev.created_at !== "number" || Math.abs(now - ev.created_at) > maxAge) return false;
+  const tags: unknown[] = Array.isArray(ev.tags) ? ev.tags : [];
+  const tagVal = (name: string): string | undefined => {
+    const t = tags.find((x) => Array.isArray(x) && x[0] === name) as string[] | undefined;
+    return t?.[1];
+  };
+  if (tagVal("action") !== action) return false;
+  if (tagVal("relay") !== relayUrl) return false;
+  if (action === "register" && (!opts.endpoint || tagVal("endpoint") !== opts.endpoint)) return false;
+  try {
+    return verifyEvent(ev as any);
+  } catch {
+    return false;
+  }
+}
 
 export interface GatewayConfig {
   host?: string;
@@ -15,21 +56,73 @@ export interface GatewayConfig {
   allowPrivateRelays?: boolean;
   /** Hard cap on distinct relay listeners, to bound memory/FD growth. */
   maxRelayListeners?: number;
+  /**
+   * Hard cap on total subscription rows, to bound DB growth against a flood of
+   * random pubkeys. New rows past the cap are refused; updates to existing rows
+   * are always allowed.
+   */
+  maxSubscriptions?: number;
+  /**
+   * Require a valid NIP-98-style signature (proving control of walletPubkey) on register/unregister.
+   * Defaults to TRUE — it's the control that stops a stranger from hijacking/deleting a victim's push
+   * subscription. Set false ONLY in tests / trusted single-tenant setups.
+   */
+  requirePushAuth?: boolean;
 }
 
 const DEFAULT_MAX_RELAY_LISTENERS = 64;
+const DEFAULT_MAX_SUBSCRIPTIONS = 50_000;
 
-// Private / loopback / link-local / reserved IPv4 literals + IPv6 loopback/ULA.
-// Blocking these prevents an attacker-supplied relayUrl from making the server
-// probe internal services (e.g. cloud metadata at 169.254.169.254).
+// Absurd-length guards on attacker-controlled subscription fields (bytes/chars).
+// A real Web Push endpoint is well under 512 chars; keys are short base64url blobs.
+const MAX_ENDPOINT_LEN = 2048;
+const MAX_KEY_LEN = 512;
+
+// RGS passthrough hardening: bound upstream fetch time, response size, and re-fetch
+// churn (a small TTL cache keyed by the validated timestamp).
+const RGS_FETCH_TIMEOUT_MS = 15_000;
+const RGS_MAX_BYTES = 32 * 1024 * 1024; // 32 MB
+const RGS_CACHE_TTL_MS = 60_000;
+const RGS_MAX_CACHE_ENTRIES = 8;
+
+/** True for a private / loopback / link-local / reserved IPv4 literal. */
+function isPrivateIpv4(ip: string): boolean {
+  if (ip === "0.0.0.0") return true;
+  if (ip.startsWith("127.") || ip.startsWith("10.") || ip.startsWith("169.254.")) return true;
+  if (ip.startsWith("192.168.")) return true;
+  const m = ip.match(/^172\.(\d+)\./);
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
+  return false;
+}
+
+// If `h` is an IPv4-mapped IPv6 address (::ffff:a.b.c.d dotted, or its ::ffff:HHHH:HHHH
+// hex form — note new URL() normalizes the dotted form to hex), return the embedded
+// IPv4 so its privateness can be re-checked; otherwise null. This closes the SSRF hole
+// where `wss://[::ffff:127.0.0.1]` normalizes to `[::ffff:7f00:1]` and slips past a
+// naive string match to reach loopback.
+function mappedIpv4(h: string): string | null {
+  const dotted = h.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) return dotted[1];
+  const hex = h.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+  }
+  return null;
+}
+
+// Private / loopback / link-local / reserved IPv4 literals + IPv6 loopback/ULA/link-local
+// and IPv4-mapped IPv6. Blocking these prevents an attacker-supplied relayUrl from making
+// the server probe internal services (e.g. cloud metadata at 169.254.169.254).
 function isPrivateHost(host: string): boolean {
   const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h === "0.0.0.0" || h === "::1" || h === "::") return true;
-  if (h.startsWith("127.") || h.startsWith("10.") || h.startsWith("169.254.")) return true;
-  if (h.startsWith("192.168.")) return true;
-  const m = h.match(/^172\.(\d+)\./);
-  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
-  // IPv6 unique-local (fc00::/7) and link-local (fe80::/10)
+  if (h === "localhost" || h === "::1" || h === "::") return true;
+  // IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 / ::ffff:7f00:1) — judge by the embedded IPv4.
+  const mapped = mappedIpv4(h);
+  if (mapped) return isPrivateIpv4(mapped);
+  if (isPrivateIpv4(h)) return true;
+  // IPv6 unique-local (fc00::/7 → hex starts fc/fd) and link-local (fe80::/10)
   if (/^f[cd][0-9a-f]{2}:/.test(h) || h.startsWith("fe80:")) return true;
   return false;
 }
@@ -162,6 +255,8 @@ export class LibreNWCPushGateway {
   private vapidPublicKey: string = "";
   private listeners: Map<string, NostrRelayListener> = new Map();
   private server: any = null;
+  // In-memory TTL cache for RGS snapshots, keyed by validated timestamp.
+  private rgsCache: Map<string, { body: Buffer; expires: number }> = new Map();
 
   constructor(config: GatewayConfig) {
     this.config = {
@@ -171,6 +266,8 @@ export class LibreNWCPushGateway {
       dbPath: config.dbPath,
       allowPrivateRelays: config.allowPrivateRelays ?? false,
       maxRelayListeners: config.maxRelayListeners ?? DEFAULT_MAX_RELAY_LISTENERS,
+      maxSubscriptions: config.maxSubscriptions ?? DEFAULT_MAX_SUBSCRIPTIONS,
+      requirePushAuth: config.requirePushAuth ?? true,
     };
   }
 
@@ -250,6 +347,28 @@ export class LibreNWCPushGateway {
           res.status(400).json({ error: "subscription must have an https endpoint and keys" });
           return;
         }
+        // Reject absurdly long attacker-controlled fields (memory/DB abuse).
+        if (
+          typeof subscription.endpoint !== "string" ||
+          subscription.endpoint.length > MAX_ENDPOINT_LEN ||
+          typeof subscription.keys.p256dh !== "string" ||
+          subscription.keys.p256dh.length > MAX_KEY_LEN ||
+          typeof subscription.keys.auth !== "string" ||
+          subscription.keys.auth.length > MAX_KEY_LEN
+        ) {
+          res.status(400).json({ error: "subscription field exceeds maximum length" });
+          return;
+        }
+        // Prove control of walletPubkey (a public value) before mutating its subscription — else a
+        // stranger could overwrite a victim's push endpoint with their own. The signature is bound
+        // to this exact endpoint, so a captured auth can't be paired with a different subscription.
+        if (
+          this.config.requirePushAuth &&
+          !verifyGatewayAuth(req.body.auth, walletPubkey, "register", relayUrl, { endpoint: subscription.endpoint })
+        ) {
+          res.status(401).json({ error: "missing or invalid auth signature" });
+          return;
+        }
         // Bound the number of distinct relays we will ever connect to.
         if (
           !this.listeners.has(relayUrl) &&
@@ -257,6 +376,20 @@ export class LibreNWCPushGateway {
         ) {
           res.status(429).json({ error: "relay listener capacity reached" });
           return;
+        }
+        // Bound total subscription rows against a flood of random pubkeys. Updates to
+        // an existing (wallet_pubkey, relay_url) row are always allowed; only genuinely
+        // new rows are capped.
+        const maxSubs = this.config.maxSubscriptions ?? DEFAULT_MAX_SUBSCRIPTIONS;
+        const exists = this.db
+          .prepare("SELECT 1 FROM subscriptions WHERE wallet_pubkey = ? AND relay_url = ?")
+          .get(walletPubkey, relayUrl);
+        if (!exists) {
+          const { c } = this.db.prepare("SELECT COUNT(*) AS c FROM subscriptions").get() as { c: number };
+          if (c >= maxSubs) {
+            res.status(429).json({ error: "subscription capacity reached" });
+            return;
+          }
         }
 
         this.db.prepare(`
@@ -277,8 +410,9 @@ export class LibreNWCPushGateway {
 
         res.json({ success: true });
       } catch (err: any) {
+        // Log details server-side; never leak internal exception text to the client.
         console.error("Registration error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: "internal error" });
       }
     });
 
@@ -287,6 +421,14 @@ export class LibreNWCPushGateway {
         const { walletPubkey, relayUrl } = req.body;
         if (!walletPubkey || !relayUrl) {
           res.status(400).json({ error: "Missing parameters" });
+          return;
+        }
+        // Require proof of control so a stranger can't delete a victim's subscription.
+        if (
+          this.config.requirePushAuth &&
+          !verifyGatewayAuth(req.body.auth, walletPubkey, "unregister", relayUrl)
+        ) {
+          res.status(401).json({ error: "missing or invalid auth signature" });
           return;
         }
 
@@ -300,7 +442,9 @@ export class LibreNWCPushGateway {
 
         res.json({ success: true });
       } catch (err: any) {
-        res.status(500).json({ error: err.message });
+        // Log details server-side; never leak internal exception text to the client.
+        console.error("Unregister error:", err);
+        res.status(500).json({ error: "internal error" });
       }
     });
 
@@ -314,13 +458,41 @@ export class LibreNWCPushGateway {
         res.status(400).json({ error: "timestamp must be a non-negative integer" });
         return;
       }
+      // Serve a recent snapshot from cache so a burst of browser fetches doesn't
+      // re-hit upstream once per client.
+      const cached = this.rgsCache.get(ts);
+      if (cached && cached.expires > Date.now()) {
+        res.set("Content-Type", "application/octet-stream").send(cached.body);
+        return;
+      }
       try {
-        const upstream = await fetch(`https://rapidsync.lightningdevkit.org/snapshot/${ts}`);
+        // Bound how long we'll wait on the upstream fetch.
+        const upstream = await fetch(`https://rapidsync.lightningdevkit.org/snapshot/${ts}`, {
+          signal: AbortSignal.timeout(RGS_FETCH_TIMEOUT_MS),
+        });
         if (!upstream.ok) {
           res.status(upstream.status).end();
           return;
         }
+        // Reject an oversized body (before and after download) to bound memory.
+        const declared = Number(upstream.headers.get("content-length") ?? "");
+        if (Number.isFinite(declared) && declared > RGS_MAX_BYTES) {
+          console.warn(`[RGS] upstream snapshot too large (content-length ${declared})`);
+          res.status(502).json({ error: "rgs snapshot too large" });
+          return;
+        }
         const buf = Buffer.from(await upstream.arrayBuffer());
+        if (buf.length > RGS_MAX_BYTES) {
+          console.warn(`[RGS] upstream snapshot too large (${buf.length} bytes)`);
+          res.status(502).json({ error: "rgs snapshot too large" });
+          return;
+        }
+        // Cache with a short TTL, evicting the oldest entry past the cap.
+        this.rgsCache.set(ts, { body: buf, expires: Date.now() + RGS_CACHE_TTL_MS });
+        if (this.rgsCache.size > RGS_MAX_CACHE_ENTRIES) {
+          const oldest = this.rgsCache.keys().next().value;
+          if (oldest !== undefined) this.rgsCache.delete(oldest);
+        }
         res.set("Content-Type", "application/octet-stream").send(buf);
       } catch (err: any) {
         console.error("[RGS] proxy failed:", err.message || err);
@@ -432,6 +604,7 @@ export class LibreNWCPushGateway {
       listener.close();
     }
     this.listeners.clear();
+    this.rgsCache.clear();
 
     if (this.db) {
       this.db.close();

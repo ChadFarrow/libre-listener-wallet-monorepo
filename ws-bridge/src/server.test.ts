@@ -78,6 +78,30 @@ describe("ws-bridge server", () => {
     // The second bridge never started listening, so there's nothing to close.
   });
 
+  it("rejects the (N+1)th connection once the global cap is reached (close 1013)", async () => {
+    const echo = await startEcho();
+    cleanups.push(echo.close);
+    const bridge = startBridge({
+      port: 0,
+      allowlist: new Set([`127.0.0.1:${echo.port}`]),
+      allowPrivate: true,
+      maxTotalConns: 2,
+    });
+    cleanups.push(bridge.close);
+    const port = await bridge.ready;
+    const target = `?target=127.0.0.1:${echo.port}`;
+
+    // Two established connections fill the global cap.
+    await connectWs(`ws://127.0.0.1:${port}/${target}`);
+    await connectWs(`ws://127.0.0.1:${port}/${target}`);
+
+    // The third is refused with 1013 (server at capacity).
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/${target}`);
+    cleanups.push(() => ws.close());
+    const code = await new Promise<number>((r) => ws.on("close", (c) => r(c)));
+    expect(code).toBe(1013);
+  });
+
   it("falls back to BRIDGE_TARGET when no ?target is given", async () => {
     const echo = await startEcho();
     cleanups.push(echo.close);

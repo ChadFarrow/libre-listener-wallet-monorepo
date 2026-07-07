@@ -31,11 +31,23 @@ describe("paymentRecordsToNwcTransactions", () => {
     expect(tx.settled_at).toBe(1_700_000_005);
   });
 
-  it("omits settled_at until settled", () => {
-    const [pending] = paymentRecordsToNwcTransactions([rec({ status: "pending", settledAt: undefined })]);
+  it("excludes failed payments entirely (NIP-47 has no failed state)", () => {
+    // A failed payment shown with no settled_at renders forever as 'pending' in clients.
+    expect(
+      paymentRecordsToNwcTransactions([rec({ id: "f", status: "failed" })])
+    ).toEqual([]);
+    // Even with unpaid:true, a failed payment is not an unpaid invoice — still excluded.
+    expect(
+      paymentRecordsToNwcTransactions([rec({ id: "f", status: "failed" })], { unpaid: true })
+    ).toEqual([]);
+  });
+
+  it("excludes pending (unpaid) payments by default, includes them only when unpaid:true", () => {
+    const pendingRec = rec({ id: "p", status: "pending", settledAt: undefined });
+    expect(paymentRecordsToNwcTransactions([pendingRec])).toEqual([]);
+    const [pending] = paymentRecordsToNwcTransactions([pendingRec], { unpaid: true });
+    expect(pending.payment_hash).toBe("p");
     expect(pending.settled_at).toBeUndefined();
-    const [failed] = paymentRecordsToNwcTransactions([rec({ status: "failed" })]);
-    expect(failed.settled_at).toBeUndefined();
   });
 
   it("falls back to created_at when a settled record has no settledAt", () => {

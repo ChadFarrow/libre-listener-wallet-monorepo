@@ -3,7 +3,8 @@ import {
   getPublicKey,
   finalizeEvent,
   nip04,
-  Relay
+  Relay,
+  type VerifiedEvent
 } from "nostr-tools";
 import { z } from "zod";
 import {
@@ -44,6 +45,18 @@ const MAX_HANDLED_EVENT_IDS = 2000;
 const SETTLEMENT_TIMEOUT_MS = 90_000;
 const SETTLEMENT_TIMEOUT_MSG = "Payment initiated but not yet settled; you'll be notified when it completes.";
 
+// Max standing NWC pairings. Each is a spend authority, so the count is bounded as hygiene against
+// unbounded growth (a runaway UI, abuse) — not a scaling limit (all pairings share one relay socket).
+// A person connects a handful of apps; 10 is generous while still a firm ceiling.
+const MAX_NWC_CONNECTIONS = 10;
+
+// Reject request events older than this (seconds). NIP-47 requests are ephemeral and acted
+// on in near-real-time; a relay redelivering an OLD event after a restart (in-memory dedup
+// forgotten) — or an observer replaying a captured, still-signed pay_* event — must not be
+// re-executed, or it pays twice (LDK dedups sends by a random paymentId, not the payment
+// hash, so a bolt11 replay isn't caught downstream). Generous window tolerates clock skew.
+const NWC_REQUEST_MAX_AGE_SEC = 300;
+
 export class NwcManager {
   private wallet: LibreListenerWallet;
   private logger?: Logger;
@@ -61,10 +74,12 @@ export class NwcManager {
   private paymentContexts: Map<string, { clientPubkey: string; relayUrl: string; amountMsat: number }> = new Map();
   // Which client created each invoice (by payment-hash hex), so an inbound claim notifies
   // the make_invoice requester with a NIP-47 payment_received notification.
-  private invoiceContexts: Map<string, { clientPubkey: string; relayUrl: string }> = new Map();
+  private invoiceContexts: Map<string, { clientPubkey: string; relayUrl: string; expiresAt: number }> = new Map();
   private active: boolean = false;
   // Per-client request serialization so the spending-limit check-and-update is atomic.
   private requestChains: Map<string, Promise<void>> = new Map();
+  // The wallet event listener, registered once (see init) so restarts don't stack duplicates.
+  private walletEventListener?: (event: Event) => void;
   // Request event ids already handled, so a redelivered event (e.g. on resubscribe
   // after a reconnect) is not processed — and paid — twice. FIFO-bounded.
   private handledEventIds: Set<string> = new Set();
@@ -84,6 +99,29 @@ export class NwcManager {
 
   getWalletPubkey(): string | undefined {
     return this.walletPubkey;
+  }
+
+  /**
+   * Build a signed Nostr event that proves control of this wallet's pubkey when registering /
+   * unregistering a Web Push subscription with the gateway. The gateway can't tell the real owner
+   * of a (public) walletPubkey from an impersonator without this — the private key never leaves
+   * the sandbox; only the signature does. The event commits to the action, the relay, and (for a
+   * register) the push endpoint, and carries a fresh created_at, so a captured event can't be
+   * replayed to a different action/relay/endpoint or reused after it expires. NIP-98-style, kind 27235.
+   */
+  buildGatewayAuth(action: "register" | "unregister", relayUrl: string, endpoint?: string): VerifiedEvent {
+    if (!this.walletPrivKeyHex) throw new Error("NWC not initialized: cannot sign gateway auth");
+    const tags: string[][] = [["action", action], ["relay", relayUrl]];
+    if (endpoint) tags.push(["endpoint", endpoint]);
+    return finalizeEvent(
+      {
+        kind: 27235,
+        created_at: Math.floor(Date.now() / 1000),
+        tags,
+        content: "libre-push-auth",
+      },
+      hexToBytes(this.walletPrivKeyHex),
+    );
   }
 
   onRequestProcessed(listener: (result: { eventId: string; method: string; success: boolean; error?: string }) => void) {
@@ -117,28 +155,35 @@ export class NwcManager {
     this.walletPrivKeyHex = nwcPrivHex;
     this.walletPubkey = getPublicKey(hexToBytes(nwcPrivHex));
 
-    // Load active pairings
+    // Load active pairings, dropping any that have expired (dead — they can't be used again).
     const connJson = await storage.getItem("nwc_connections");
     this.connections = connJson ? JSON.parse(connJson) as NwcConnection[] : [];
+    await this.pruneExpiredConnections();
 
-    // Register LDK event listener to capture payment status resolutions
-    this.wallet.addEventListener((event: Event) => {
-      // Keep the LDK `instanceof` checks in this thin edge; the testable logic lives in
-      // handlePaymentSettled/handlePaymentFailed (so notifications are unit-testable
-      // without a real payment).
-      if (event instanceof Event_PaymentSent) {
-        const hashHex = bytesToHex(event.payment_hash);
-        const preimageHex = bytesToHex(event.payment_preimage);
-        const feePaidMsat = event.fee_paid_msat instanceof Option_u64Z_Some ? Number(event.fee_paid_msat.some) : 0;
-        void this.handlePaymentSettled(hashHex, preimageHex, feePaidMsat);
-      } else if (event instanceof Event_PaymentFailed) {
-        if (event.payment_hash instanceof Option_ThirtyTwoBytesZ_Some) {
-          this.handlePaymentFailed(bytesToHex(event.payment_hash.some));
+    // Register the LDK event listener ONCE. init() is called on every wallet start(); without
+    // this guard each restart stacks another listener on the wallet, and every LDK event then
+    // fires N settlement handlers (the first delete wins, but the duplicates are wasted work and
+    // a slow leak). The closure only touches persistent NwcManager state, so registering once is safe.
+    if (!this.walletEventListener) {
+      this.walletEventListener = (event: Event) => {
+        // Keep the LDK `instanceof` checks in this thin edge; the testable logic lives in
+        // handlePaymentSettled/handlePaymentFailed (so notifications are unit-testable
+        // without a real payment).
+        if (event instanceof Event_PaymentSent) {
+          const hashHex = bytesToHex(event.payment_hash);
+          const preimageHex = bytesToHex(event.payment_preimage);
+          const feePaidMsat = event.fee_paid_msat instanceof Option_u64Z_Some ? Number(event.fee_paid_msat.some) : 0;
+          void this.handlePaymentSettled(hashHex, preimageHex, feePaidMsat);
+        } else if (event instanceof Event_PaymentFailed) {
+          if (event.payment_hash instanceof Option_ThirtyTwoBytesZ_Some) {
+            this.handlePaymentFailed(bytesToHex(event.payment_hash.some));
+          }
+        } else if (event instanceof Event_PaymentClaimed) {
+          void this.handlePaymentReceived(bytesToHex(event.payment_hash), Number(event.amount_msat));
         }
-      } else if (event instanceof Event_PaymentClaimed) {
-        void this.handlePaymentReceived(bytesToHex(event.payment_hash), Number(event.amount_msat));
-      }
-    });
+      };
+      this.wallet.addEventListener(this.walletEventListener);
+    }
   }
 
   /**
@@ -165,6 +210,24 @@ export class NwcManager {
       } catch (e: any) {
         this.logger?.error(`[NWC] Failed to publish payment_sent notification: ${e?.message || e}`);
       }
+    }
+  }
+
+  /**
+   * Reverse an optimistic budget debit for a payment that definitively failed to initiate
+   * or settle. Uses a subtract-from-current (clamped ≥0) so it composes correctly rather
+   * than resetting to a possibly-stale snapshot. See the pay_invoice/pay_keysend debit sites.
+   */
+  private async refundBudget(pairing: NwcConnection, amtSats: number): Promise<void> {
+    pairing.spentTodaySats = Math.max(0, pairing.spentTodaySats - amtSats);
+    await this.saveConnections();
+  }
+
+  /** Drop invoice contexts whose invoice has expired (they can no longer be claimed). */
+  private pruneExpiredInvoiceContexts(): void {
+    const now = Math.floor(Date.now() / 1000);
+    for (const [hash, ctx] of this.invoiceContexts) {
+      if (ctx.expiresAt < now) this.invoiceContexts.delete(hash);
     }
   }
 
@@ -226,6 +289,15 @@ export class NwcManager {
       expiresAt?: number;
     }
   ): Promise<string> {
+    // Drop dead (expired) pairings first — they can never be used again and shouldn't occupy a slot
+    // — then enforce the cap on what remains.
+    await this.pruneExpiredConnections();
+    if (this.connections.length >= MAX_NWC_CONNECTIONS) {
+      throw new Error(
+        `NWC connection limit reached (${MAX_NWC_CONNECTIONS}). Remove an existing connection before adding another.`,
+      );
+    }
+
     const secretBytes = generateSecretKey();
     const secret = bytesToHex(secretBytes);
     const clientPubkey = getPublicKey(secretBytes);
@@ -269,6 +341,18 @@ export class NwcManager {
 
   async listConnections(): Promise<NwcConnection[]> {
     return this.connections;
+  }
+
+  /** Drop pairings whose expiry has passed (they're already rejected at request time and can never
+   *  be used again, so they shouldn't count toward the connection cap). Persists only if it changed. */
+  private async pruneExpiredConnections(): Promise<void> {
+    const now = Date.now();
+    const before = this.connections.length;
+    this.connections = this.connections.filter((c) => !(c.expiresAt && now >= c.expiresAt));
+    if (this.connections.length !== before) {
+      this.logger?.info(`[NWC] Pruned ${before - this.connections.length} expired connection(s)`);
+      await this.saveConnections();
+    }
   }
 
   async deleteConnection(clientPubkey: string): Promise<void> {
@@ -430,6 +514,20 @@ export class NwcManager {
   }
 
   private async handleNwcRequest(event: any, relayUrl: string): Promise<void> {
+    // Reject stale requests before anything else. A signed event carries its original
+    // created_at (you can't alter it without breaking the signature), so a replayed/redelivered
+    // pay_* event is caught here even after a restart wipes the in-memory dedup set. Events
+    // with no created_at (only synthetic/test events — a relay-delivered event always has one)
+    // skip the check so they aren't spuriously dropped.
+    const createdAt = typeof event?.created_at === "number" ? event.created_at : 0;
+    if (createdAt > 0) {
+      const ageSec = Math.floor(Date.now() / 1000) - createdAt;
+      if (ageSec > NWC_REQUEST_MAX_AGE_SEC) {
+        this.logger?.warn(`[NWC] Ignoring stale request event ${event?.id} (created_at age ${ageSec}s)`);
+        return;
+      }
+    }
+
     // Deduplicate by event id. The same request can be delivered more than once (a relay
     // redelivering recent events on resubscribe after a reconnect); processing a pay_*
     // request twice would pay twice. The check-and-mark is synchronous (no await before
@@ -449,7 +547,14 @@ export class NwcManager {
     const key = event.pubkey;
     const prev = this.requestChains.get(key) ?? Promise.resolve();
     const run = prev.then(() => this.processNwcRequest(event, relayUrl));
-    this.requestChains.set(key, run.catch(() => {}));
+    const chain = run.catch(() => {});
+    this.requestChains.set(key, chain);
+    // Drop the entry once this client's queue drains, so the map can't grow one permanent entry
+    // per (unauthenticated) sender pubkey over a long-lived session. Only delete if we're still
+    // the tail — a newer request may have replaced us.
+    void chain.finally(() => {
+      if (this.requestChains.get(key) === chain) this.requestChains.delete(key);
+    });
     return run;
   }
 
@@ -552,6 +657,10 @@ export class NwcManager {
         const channels = mgr.list_channels();
         let balanceMsat = 0n;
         for (const chan of channels) {
+          // Only count USABLE channels (matches the SDK's getBalance()). A ready-but-peer-offline
+          // channel has outbound capacity but can't actually route, so reporting it here would tell
+          // a client it can spend funds that the very next pay_invoice can't move.
+          if (!chan.get_is_usable()) continue;
           balanceMsat += chan.get_outbound_capacity_msat();
         }
         await this.sendResultResponse(event, "get_balance", { balance: Number(balanceMsat) }, relayUrl, rpcReq.id);
@@ -566,8 +675,15 @@ export class NwcManager {
         const parsed = Bolt11Invoice.constructor_from_str(invoiceStr);
         if (!parsed.is_ok()) throw new Error("Failed to parse created invoice");
         const paymentHashHex = bytesToHex((parsed as any).res.payment_hash());
-        // Remember which client created this invoice so an inbound claim notifies them.
-        this.invoiceContexts.set(paymentHashHex, { clientPubkey: event.pubkey, relayUrl });
+        // Remember which client created this invoice so an inbound claim notifies them. Drop any
+        // expired contexts first so a client that mints many never-paid invoices can't grow this
+        // map without bound (each entry is dead once its invoice expires and can't be claimed).
+        this.pruneExpiredInvoiceContexts();
+        this.invoiceContexts.set(paymentHashHex, {
+          clientPubkey: event.pubkey,
+          relayUrl,
+          expiresAt: Math.floor(Date.now() / 1000) + expiry,
+        });
 
         const result = {
           type: "incoming",
@@ -640,6 +756,16 @@ export class NwcManager {
           type: "bolt11",
         });
 
+        // Debit the budget at INITIATION, not after the settlement await. A payment that
+        // outlives the 90s await is still in flight and usually settles (the client then
+        // learns of it via the payment_sent notification); charging only on the synchronous
+        // resolve let a client repeatedly spend past its cap using slow/hodl invoices that
+        // always time out. We refund on a definitive failure (below); a bare timeout keeps
+        // the charge — matching the extension's settlement-pending semantics.
+        pairing.spentTodaySats = spentToday + amtSats;
+        pairing.lastSpentTimestamp = now;
+        await this.saveConnections();
+
         const sendRes = this.wallet.getChannelManager()!.send_payment(
           paymentHash,
           onionFields,
@@ -651,15 +777,21 @@ export class NwcManager {
         if (!sendRes.is_ok()) {
           this.pendingPayments.delete(payInvoiceHashHex);
           this.paymentContexts.delete(payInvoiceHashHex);
+          await this.refundBudget(pairing, amtSats); // never left the wallet — reverse the debit
           throw new Error(`LDK send_payment failed: ${(sendRes as any).err?.toString() || "Route not found"}`);
         }
 
-        const preimageHex = await this.awaitWithTimeout(promise, SETTLEMENT_TIMEOUT_MS, new Error(SETTLEMENT_TIMEOUT_MSG));
-
-        // Update spent quota
-        pairing.spentTodaySats = spentToday + amtSats;
-        pairing.lastSpentTimestamp = now;
-        await this.saveConnections();
+        let preimageHex: string;
+        try {
+          preimageHex = await this.awaitWithTimeout(promise, SETTLEMENT_TIMEOUT_MS, new Error(SETTLEMENT_TIMEOUT_MSG));
+        } catch (settleErr: any) {
+          // Definitive PaymentFailed → the money didn't move, refund. A 90s timeout
+          // (SETTLEMENT_TIMEOUT_MSG) → still in flight, KEEP the charge (anti-replay).
+          if (settleErr?.message !== SETTLEMENT_TIMEOUT_MSG) {
+            await this.refundBudget(pairing, amtSats);
+          }
+          throw settleErr;
+        }
 
         await this.sendResultResponse(event, "pay_invoice", { preimage: preimageHex }, relayUrl, rpcReq.id);
 
@@ -696,25 +828,46 @@ export class NwcManager {
         });
         this.paymentContexts.set(keysendHashHex, { clientPubkey: event.pubkey, relayUrl, amountMsat: Number(amountMsat) });
 
-        // The wallet owns the keysend construction (TLVs, onion, route, send).
-        const sendRes = await this.wallet.sendKeysendPayment({
-          destinationPubkey,
-          amountSats: amtSats,
-          customRecords,
-          preimage: keysendPreimage,
-        });
-        if (!sendRes.ok) {
-          this.pendingPayments.delete(keysendHashHex);
-          this.paymentContexts.delete(keysendHashHex);
-          throw new Error(`Keysend failed to initiate: ${sendRes.error}`);
-        }
-
-        const preimageHex = await this.awaitWithTimeout(settled, SETTLEMENT_TIMEOUT_MS, new Error(SETTLEMENT_TIMEOUT_MSG));
-
-        // Update spent quota
+        // Debit the budget at INITIATION (see the pay_invoice rationale above): a keysend
+        // that outlives the settlement await is in flight and typically settles, so charging
+        // only on resolve let a client spend past its cap via always-timing-out sends. Refund
+        // on any definitive initiation/settlement failure; a bare timeout keeps the charge.
         pairing.spentTodaySats = spentToday + amtSats;
         pairing.lastSpentTimestamp = now;
         await this.saveConnections();
+
+        // The wallet owns the keysend construction (TLVs, onion, route, send).
+        let sendRes: { ok: boolean; error?: string };
+        try {
+          sendRes = await this.wallet.sendKeysendPayment({
+            destinationPubkey,
+            amountSats: amtSats,
+            customRecords,
+            preimage: keysendPreimage,
+          });
+        } catch (initErr) {
+          // sendKeysendPayment can throw (e.g. node not running) rather than return ok:false.
+          this.pendingPayments.delete(keysendHashHex);
+          this.paymentContexts.delete(keysendHashHex);
+          await this.refundBudget(pairing, amtSats);
+          throw initErr;
+        }
+        if (!sendRes.ok) {
+          this.pendingPayments.delete(keysendHashHex);
+          this.paymentContexts.delete(keysendHashHex);
+          await this.refundBudget(pairing, amtSats); // never initiated — reverse the debit
+          throw new Error(`Keysend failed to initiate: ${sendRes.error}`);
+        }
+
+        let preimageHex: string;
+        try {
+          preimageHex = await this.awaitWithTimeout(settled, SETTLEMENT_TIMEOUT_MS, new Error(SETTLEMENT_TIMEOUT_MSG));
+        } catch (settleErr: any) {
+          if (settleErr?.message !== SETTLEMENT_TIMEOUT_MSG) {
+            await this.refundBudget(pairing, amtSats);
+          }
+          throw settleErr;
+        }
 
         await this.sendResultResponse(event, "pay_keysend", { preimage: preimageHex }, relayUrl, rpcReq.id);
 

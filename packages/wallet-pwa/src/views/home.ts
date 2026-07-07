@@ -3,6 +3,7 @@ import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
 import { confirmModal } from "../ui/confirm-modal";
 import { channelCountLabel } from "../core/stat-format";
+import { parseNwcLimit } from "../core/nwc-limit";
 import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
 import { driveRestore } from "../drive-integration";
 import {
@@ -113,9 +114,20 @@ export function initHome(ctx: AppContext): void {
   });
 
   $("copy-node").addEventListener("click", async () => {
-    const t = $("nodeid").textContent || "";
-    if (t) await navigator.clipboard.writeText(t).catch(() => {});
-    setMsg("msg", "Node ID copied — paste into your node's openchannel", "ok");
+    // Only report success for a REAL node id (the node is running) that actually copied — the
+    // display text can be a "(start the node)" placeholder, and clipboard writes can reject.
+    const s = await controller.getState().catch(() => null);
+    const id = s?.nodeId;
+    if (!id) {
+      setMsg("msg", "Start the node first — there's no Node ID to copy yet.", "err");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(id);
+      setMsg("msg", "Node ID copied — paste into your node's openchannel", "ok");
+    } catch {
+      setMsg("msg", "Couldn't copy to the clipboard — select the Node ID and copy it manually.", "err");
+    }
   });
 
   // ---- receive (top up) ----
@@ -150,11 +162,22 @@ export function initHome(ctx: AppContext): void {
 
   // ---- NWC pairing ----
   $("create-nwc").addEventListener("click", async () => {
+    // Guard against a double-tap minting two live pairings (two spend secrets) before the first
+    // resolves. Disabled for the whole async handler; re-enabled in finally.
+    const nwcBtn = $<HTMLButtonElement>("create-nwc");
+    if (nwcBtn.disabled) return;
+    nwcBtn.disabled = true;
     setMsg("nwc-msg", "Creating pairing…");
     try {
       const maxRes = parseMaxAmount(($("nwc-max") as HTMLInputElement).value);
       if (!maxRes.ok) {
         setMsg("nwc-msg", maxRes.error, "err");
+        return;
+      }
+      // Strict daily-limit parse — blank/NaN must NOT collapse to 0 (= unlimited).
+      const limitRes = parseNwcLimit(($("nwc-limit") as HTMLInputElement).value);
+      if (!limitRes.ok) {
+        setMsg("nwc-msg", limitRes.error, "err");
         return;
       }
       const allowedMethods = buildAllowedMethods({
@@ -166,7 +189,7 @@ export function initHome(ctx: AppContext): void {
       const { uri } = await controller.nwcCreateConnection(
         ($("nwc-name") as HTMLInputElement).value.trim() || "Nostr Client App",
         {
-          spendingLimitSats: Number(($("nwc-limit") as HTMLInputElement).value) || 0,
+          spendingLimitSats: limitRes.value,
           budgetRenewal: parseBudgetRenewal(($("nwc-renewal") as HTMLSelectElement).value),
           maxAmountSats: maxRes.value,
           allowedMethods,
@@ -183,6 +206,8 @@ export function initHome(ctx: AppContext): void {
       void refreshNwcList();
     } catch (e) {
       setMsg("nwc-msg", (e as Error).message, "err");
+    } finally {
+      nwcBtn.disabled = false;
     }
   });
   $("copy-nwc").addEventListener("click", async () => {
@@ -241,36 +266,45 @@ export function initHome(ctx: AppContext): void {
     ($("create-confirm") as HTMLButtonElement).disabled = !(e.target as HTMLInputElement).checked;
   });
   $("create-confirm").addEventListener("click", async () => {
-    const own = ($("seed-input") as HTMLInputElement).value.trim();
-    const seedHex = own || ($("seed").textContent || "");
-    if (own && !/^[0-9a-fA-F]{64}$/.test(own)) {
-      setMsg("create-msg", "That seed isn't valid — it must be 64 hex characters (32 bytes).", "err");
-      return;
-    }
-    // FORCE-CLOSE GUARD: creating with a pasted seed starts a FRESH, EMPTY node. If that seed
-    // already has a channel, connecting the peer force-closes it — a funded wallet must come back
-    // via Restore from backup.
-    if (own) {
-      const ok = await confirmModal({
-        title: "Only for a seed that has no channel",
-        body:
-          "Creating with a seed starts a brand-new, EMPTY wallet. If this seed already has a channel " +
-          "or a backup, this will FORCE-CLOSE that channel once you connect. To bring back a funded " +
-          "wallet, cancel and use Restore from backup instead.",
-        confirmLabel: "This seed has no channel — create",
-        cancelLabel: "Cancel",
-        danger: true,
-      });
-      if (!ok) return;
-    }
-    setMsg("create-msg", "");
-    setMsg("msg", "Creating wallet & starting node…");
+    // Disable for the whole async handler (incl. the confirm modal + createWallet) so a double-tap
+    // can't kick off two creates; re-enabled in finally.
+    const createBtn = $<HTMLButtonElement>("create-confirm");
+    if (createBtn.disabled) return;
+    createBtn.disabled = true;
     try {
-      await controller.createWallet({ seedHex });
-      setMsg("msg", "Wallet created", "ok");
-      void refresh();
-    } catch (e) {
-      setMsg("msg", (e as Error).message, "err");
+      const own = ($("seed-input") as HTMLInputElement).value.trim();
+      const seedHex = own || ($("seed").textContent || "");
+      if (own && !/^[0-9a-fA-F]{64}$/.test(own)) {
+        setMsg("create-msg", "That seed isn't valid — it must be 64 hex characters (32 bytes).", "err");
+        return;
+      }
+      // FORCE-CLOSE GUARD: creating with a pasted seed starts a FRESH, EMPTY node. If that seed
+      // already has a channel, connecting the peer force-closes it — a funded wallet must come back
+      // via Restore from backup.
+      if (own) {
+        const ok = await confirmModal({
+          title: "Only for a seed that has no channel",
+          body:
+            "Creating with a seed starts a brand-new, EMPTY wallet. If this seed already has a channel " +
+            "or a backup, this will FORCE-CLOSE that channel once you connect. To bring back a funded " +
+            "wallet, cancel and use Restore from backup instead.",
+          confirmLabel: "This seed has no channel — create",
+          cancelLabel: "Cancel",
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      setMsg("create-msg", "");
+      setMsg("msg", "Creating wallet & starting node…");
+      try {
+        await controller.createWallet({ seedHex });
+        setMsg("msg", "Wallet created", "ok");
+        void refresh();
+      } catch (e) {
+        setMsg("msg", (e as Error).message, "err");
+      }
+    } finally {
+      createBtn.disabled = false;
     }
   });
 

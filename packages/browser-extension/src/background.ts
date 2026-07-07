@@ -6,6 +6,7 @@ import { isAllowedWeblnMethod } from "./core/webln-gate";
 import { isFromExtensionContext } from "./core/sender-guard";
 import { invoiceAmountSats } from "./core/bolt11-amount";
 import { isSettlementPending } from "./core/settlement-pending";
+import { resolveGrantLimitSats, resolveGrantOrigin } from "./core/approval-grant";
 import { buildAuthUrl, parseTokenFromRedirect } from "./core/drive-oauth";
 import {
   uploadBackup,
@@ -454,7 +455,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } else if (msg.command === "revokeGrant") {
         reply(store.revoke(msg.params.origin));
       } else if (msg.command === "setGrantLimit") {
-        reply(store.grant(msg.params.origin, { spendingLimitSats: Number(msg.params.spendingLimitSats) || 0 }));
+        // Strict cap parse: a blank/NaN/"10,000" value must be refused, never coerced to 0 (=
+        // unlimited). resolveGrantLimitSats throws on invalid input, so wrap in a promise so the
+        // rejection surfaces through reply() instead of throwing out of the listener.
+        reply(
+          Promise.resolve().then(() =>
+            store.grant(msg.params.origin, { spendingLimitSats: resolveGrantLimitSats(msg.params.spendingLimitSats) })
+          )
+        );
       } else if (msg.command === "driveConnect") {
         reply(driveConnect());
       } else if (msg.command === "driveStatus") {
@@ -490,17 +498,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
       }
       const approved = !!msg.approved;
-      const spendingLimitSats = Number(msg.spendingLimitSats) || 0;
       // Persist the grant HERE (not only in the enable() promise): the MV3 SW can be reaped while
       // the approval window is open, dropping the in-memory pending promise. Granting on the
       // decision makes the approval durable — a retry of enable() then finds the grant. Requires
       // the approval page to send its origin.
       const finish = async () => {
-        if (approved && msg.origin) await store.grant(msg.origin, { spendingLimitSats });
+        // Grant the AUTHORITATIVE origin recorded when the prompt was created, not the origin
+        // echoed back in the (spoofable) decision message. Fall back to msg.origin only when the
+        // pending record was lost to an SW reap. And parse the cap strictly — a blank/NaN limit
+        // must NOT fail open to 0 (= unlimited); an invalid cap refuses the grant (fail closed).
+        const targetOrigin = resolveGrantOrigin(pendingApprovals.get(msg.id)?.origin, msg.origin);
+        let limit: number | null = null;
+        if (approved) {
+          try {
+            limit = resolveGrantLimitSats(msg.spendingLimitSats);
+          } catch (e) {
+            console.warn("[Approval] refusing grant: invalid spending limit:", (e as Error)?.message || e);
+            limit = null;
+          }
+        }
+        const granted = approved && !!targetOrigin && limit != null;
+        if (granted) await store.grant(targetOrigin!, { spendingLimitSats: limit! });
         const p = pendingApprovals.get(msg.id);
         if (p) {
           pendingApprovals.delete(msg.id);
-          p.resolve({ approved, spendingLimitSats });
+          p.resolve({ approved: granted, spendingLimitSats: limit ?? 0 });
         }
       };
       reply(finish());

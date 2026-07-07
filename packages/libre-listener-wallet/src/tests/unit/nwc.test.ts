@@ -445,6 +445,201 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
     });
   });
 
+  describe("Spending budget is charged at initiation, not only on synchronous settlement", () => {
+    const RELAY = "wss://relay.test.io";
+
+    async function setupPayable(spendingLimitSats: number) {
+      const clientSecretBytes = generateSecretKey();
+      const clientSecretHex = bytesToHex(clientSecretBytes);
+      const clientPubkeyHex = getPublicKey(clientSecretBytes);
+      nwc["connections"].push({
+        name: "Budget App",
+        clientPubkey: clientPubkeyHex,
+        secret: clientSecretHex,
+        spendingLimitSats,
+        spentTodaySats: 0,
+        lastSpentTimestamp: Date.now(),
+        createdAt: Date.now(),
+        enabled: true,
+        relayUrl: RELAY,
+      });
+      await nwc["saveConnections"]();
+      vi.spyOn(wallet, "getChannelManager").mockReturnValue({
+        current_best_block: () => ({ get_height: () => 100, get_block_hash: () => new Uint8Array(32) }),
+        get_our_node_id: () => new Uint8Array(33),
+        list_channels: () => [],
+        send_payment: () => ({ is_ok: () => true }),
+      } as any);
+      // A 60-sat invoice.
+      vi.spyOn(Bolt11Invoice, "constructor_from_str").mockReturnValue({
+        is_ok: () => true,
+        res: { amount_milli_satoshis: () => Option_u64Z_Some.constructor_some(60_000n) },
+      } as any);
+      vi.spyOn(UtilMethods, "constructor_payment_parameters_from_invoice").mockReturnValue({
+        is_ok: () => true,
+        res: { get_a: () => new Uint8Array(32), get_b: () => ({}), get_c: () => ({}) },
+      } as any);
+      vi.spyOn(Retry, "constructor_attempts").mockReturnValue({} as any);
+      await nwc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      const walletPubkeyHex = nwc["walletPubkey"]!;
+      const send = async (id: string) => {
+        const content = await nip04.encrypt(
+          clientSecretHex,
+          walletPubkeyHex,
+          JSON.stringify({ jsonrpc: "2.0", id, method: "pay_invoice", params: { invoice: "lnbc60n..." } })
+        );
+        mockPublish.mockClear();
+        await subHandler!({ kind: 23194, pubkey: clientPubkeyHex, content, id: `evt-${id}` });
+        const respCall = mockPublish.mock.calls.map((c) => c[0]).find((e: any) => e.kind === 23195);
+        return respCall ? JSON.parse(await nip04.decrypt(clientSecretHex, walletPubkeyHex, respCall.content)) : null;
+      };
+      return { send };
+    }
+
+    it("keeps the charge when the settlement await times out (the payment is still in flight)", async () => {
+      const { send } = await setupPayable(100);
+      // Force the settlement await to reject with the timeout error (payment still in flight).
+      vi.spyOn(nwc as any, "awaitWithTimeout").mockImplementation((...args: any[]) =>
+        Promise.reject(args[2])
+      );
+
+      const resp = await send("to-1");
+      // The client gets an error response (its request timed out) …
+      expect(resp.error).toBeDefined();
+      // … but the budget IS charged, so a replay/next request can't over-spend the cap.
+      expect((await nwc.listConnections())[0].spentTodaySats).toBe(60);
+
+      // A second 60-sat payment now exceeds the 100 cap and is blocked (the bug let this through).
+      const resp2 = await send("to-2");
+      expect(resp2.error.code).toBe("QUOTA_EXCEEDED");
+      expect((await nwc.listConnections())[0].spentTodaySats).toBe(60);
+    });
+
+    it("refunds the charge when the payment definitively fails", async () => {
+      const { send } = await setupPayable(100);
+      // Force the settlement await to reject as a definitive failure (not the timeout message).
+      vi.spyOn(nwc as any, "awaitWithTimeout").mockImplementation(() =>
+        Promise.reject(new Error("LDK payment execution failed"))
+      );
+
+      const resp = await send("fail-1");
+      expect(resp.error).toBeDefined();
+      // A definitive failure means the money never moved — the optimistic debit is reversed.
+      expect((await nwc.listConnections())[0].spentTodaySats).toBe(0);
+    });
+
+    it("refunds the charge when send_payment fails to initiate", async () => {
+      const { send } = await setupPayable(100);
+      vi.spyOn(wallet, "getChannelManager").mockReturnValue({
+        current_best_block: () => ({ get_height: () => 100, get_block_hash: () => new Uint8Array(32) }),
+        get_our_node_id: () => new Uint8Array(33),
+        list_channels: () => [],
+        send_payment: () => ({ is_ok: () => false, err: { toString: () => "no route" } }),
+      } as any);
+
+      const resp = await send("init-1");
+      expect(resp.error).toBeDefined();
+      expect((await nwc.listConnections())[0].spentTodaySats).toBe(0);
+    });
+  });
+
+  describe("Stale request rejection (replay guard)", () => {
+    const RELAY = "wss://relay.test.io";
+    it("ignores a request event whose created_at is older than the freshness window", async () => {
+      const clientSecretBytes = generateSecretKey();
+      const clientSecretHex = bytesToHex(clientSecretBytes);
+      const clientPubkeyHex = getPublicKey(clientSecretBytes);
+      nwc["connections"].push({
+        name: "Replay App",
+        clientPubkey: clientPubkeyHex,
+        secret: clientSecretHex,
+        spendingLimitSats: 0,
+        spentTodaySats: 0,
+        lastSpentTimestamp: Date.now(),
+        createdAt: Date.now(),
+        enabled: true,
+        relayUrl: RELAY,
+      });
+      await nwc["saveConnections"]();
+      vi.spyOn(wallet, "getChannelManager").mockReturnValue({
+        current_best_block: () => ({ get_height: () => 100, get_block_hash: () => new Uint8Array(32) }),
+        get_our_node_id: () => new Uint8Array(33),
+        list_channels: () => [],
+      } as any);
+      await nwc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      const walletPubkeyHex = nwc["walletPubkey"]!;
+      const content = await nip04.encrypt(
+        clientSecretHex,
+        walletPubkeyHex,
+        JSON.stringify({ jsonrpc: "2.0", id: "old-1", method: "get_info", params: {} })
+      );
+      mockPublish.mockClear();
+      // created_at 10 minutes ago → beyond the 5-minute window → dropped, no response.
+      const staleCreatedAt = Math.floor(Date.now() / 1000) - 600;
+      await subHandler!({ kind: 23194, pubkey: clientPubkeyHex, content, id: "evt-old-1", created_at: staleCreatedAt });
+      expect(mockPublish.mock.calls.map((c) => c[0]).find((e: any) => e.kind === 23195)).toBeUndefined();
+
+      // A fresh event (created_at now) IS processed.
+      mockPublish.mockClear();
+      await subHandler!({ kind: 23194, pubkey: clientPubkeyHex, content, id: "evt-fresh-1", created_at: Math.floor(Date.now() / 1000) });
+      expect(mockPublish.mock.calls.map((c) => c[0]).find((e: any) => e.kind === 23195)).toBeDefined();
+    });
+  });
+
+  describe("connection cap + expiry pruning", () => {
+    it("allows up to 10 connections and rejects the 11th", async () => {
+      for (let i = 0; i < 10; i++) await nwc.createConnection(`app-${i}`);
+      expect((await nwc.listConnections())).toHaveLength(10);
+      await expect(nwc.createConnection("one-too-many")).rejects.toThrow(/limit reached/i);
+      expect((await nwc.listConnections())).toHaveLength(10);
+    });
+
+    it("prunes an expired pairing, freeing a slot for a new one", async () => {
+      for (let i = 0; i < 9; i++) await nwc.createConnection(`app-${i}`);
+      await nwc.createConnection("expiring", { expiresAt: Date.now() - 1000 }); // already expired → 10 total
+      expect((await nwc.listConnections())).toHaveLength(10);
+      // Creating another prunes the expired one first, so it succeeds (back to 10).
+      await nwc.createConnection("fresh");
+      const conns = await nwc.listConnections();
+      expect(conns).toHaveLength(10);
+      expect(conns.find((c) => c.name === "expiring")).toBeUndefined();
+      expect(conns.find((c) => c.name === "fresh")).toBeDefined();
+    });
+
+    it("prunes expired pairings on init (load)", async () => {
+      await nwc.createConnection("keep");
+      await nwc.createConnection("gone", { expiresAt: Date.now() - 1000 });
+      // Reload from the same storage (simulates a restart).
+      const fresh = new NwcManager(wallet, { logger: undefined, storage: storageProvider, network: "regtest" });
+      await fresh.init();
+      const conns = await fresh.listConnections();
+      expect(conns.find((c) => c.name === "gone")).toBeUndefined();
+      expect(conns.find((c) => c.name === "keep")).toBeDefined();
+    });
+  });
+
+  describe("buildGatewayAuth (push-subscription proof-of-control)", () => {
+    it("signs a fresh kind-27235 event bound to action/relay/endpoint, verifiable under the wallet pubkey", async () => {
+      const { verifyEvent } = await import("nostr-tools");
+      const auth = nwc.buildGatewayAuth("register", "wss://relay.example", "https://push.example/ep");
+      expect(auth.kind).toBe(27235);
+      expect(auth.pubkey).toBe(nwc.getWalletPubkey());
+      expect(auth.tags).toContainEqual(["action", "register"]);
+      expect(auth.tags).toContainEqual(["relay", "wss://relay.example"]);
+      expect(auth.tags).toContainEqual(["endpoint", "https://push.example/ep"]);
+      expect(Math.abs(Math.floor(Date.now() / 1000) - auth.created_at)).toBeLessThan(5);
+      expect(verifyEvent(auth)).toBe(true); // valid id + signature
+    });
+
+    it("omits the endpoint tag for an unregister auth", () => {
+      const auth = nwc.buildGatewayAuth("unregister", "wss://relay.example");
+      expect(auth.tags).toContainEqual(["action", "unregister"]);
+      expect(auth.tags.find((t) => t[0] === "endpoint")).toBeUndefined();
+    });
+  });
+
   describe("Per-connection controls (expiry / methods / per-payment / renewal)", () => {
     const RELAY = "wss://relay.test.io";
 
@@ -551,6 +746,39 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       expect(out.settled_at).toBe(1_700_000_001);
       expect(out.description).toBe("Boost");
       expect(txs.find((t: any) => t.payment_hash === "in1").type).toBe("incoming");
+    });
+
+    it("get_balance counts only usable channels (not a ready-but-peer-offline one)", async () => {
+      const { send } = await setup({});
+      // Two channels: one usable (100k sat outbound), one ready-but-not-usable (peer offline, 50k).
+      vi.spyOn(wallet, "getChannelManager").mockReturnValue({
+        current_best_block: () => ({ get_height: () => 100, get_block_hash: () => new Uint8Array(32) }),
+        get_our_node_id: () => new Uint8Array(33),
+        list_channels: () => [
+          { get_is_usable: () => true, get_outbound_capacity_msat: () => 100_000_000n },
+          { get_is_usable: () => false, get_outbound_capacity_msat: () => 50_000_000n },
+        ],
+      } as any);
+      const resp = await send("gb-1", "get_balance", {});
+      // Only the usable channel's 100k sats (100_000_000 msat) is reported.
+      expect(resp.result.balance).toBe(100_000_000);
+    });
+
+    it("prunes expired invoice contexts when a new invoice is created (no unbounded growth)", async () => {
+      const { send } = await setup({});
+      // Seed an already-expired context directly.
+      nwc["invoiceContexts"].set("deadbeef", { clientPubkey: "x", relayUrl: RELAY, expiresAt: Math.floor(Date.now() / 1000) - 10 });
+      expect(nwc["invoiceContexts"].size).toBe(1);
+      // Creating a new invoice prunes the expired one and adds the fresh one.
+      (wallet as any).channelManager = {};
+      vi.spyOn(UtilMethods, "constructor_create_invoice_from_channelmanager_with_payment_hash").mockReturnValue({
+        is_ok: () => true, res: { to_str: () => "lnbc10u1pfake" },
+      } as any);
+      vi.spyOn(Bolt11Invoice, "constructor_from_str").mockReturnValue({
+        is_ok: () => true, res: { payment_hash: () => new Uint8Array(32).fill(1) },
+      } as any);
+      await send("mk-prune", "make_invoice", { amount: 1000, description: "x" });
+      expect(nwc["invoiceContexts"].has("deadbeef")).toBe(false); // expired one pruned
     });
 
     it("filters list_transactions by type", async () => {
@@ -785,7 +1013,7 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       const { clientSecretHex, clientPubkeyHex, walletPubkeyHex } = await setupConnAndStart();
       const hashHex = bytesToHex(new Uint8Array(32).fill(5));
       // Simulate make_invoice having recorded which client owns this invoice.
-      nwc["invoiceContexts"].set(hashHex, { clientPubkey: clientPubkeyHex, relayUrl: RELAY });
+      nwc["invoiceContexts"].set(hashHex, { clientPubkey: clientPubkeyHex, relayUrl: RELAY, expiresAt: Math.floor(Date.now() / 1000) + 3600 });
 
       fireClaimed(hashHex, 7000n);
       await new Promise((r) => setTimeout(r, 50));

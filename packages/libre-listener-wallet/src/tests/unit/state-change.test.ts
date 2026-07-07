@@ -37,4 +37,20 @@ describe("onStateChanged", () => {
     wallet["notifyStateChanged"]();
     expect(good).toBe(1);
   });
+
+  it("schedules a VSS mirror on each state change when a mirror is active", () => {
+    const wallet = makeWallet();
+    let scheduled = 0;
+    // Inject a stub mirror (the real one is built in start() only when config.vssUrl is set).
+    wallet["vssMirror"] = { schedule: () => { scheduled++; } } as any;
+    wallet["notifyStateChanged"]();
+    wallet["notifyStateChanged"]();
+    expect(scheduled).toBe(2);
+  });
+
+  it("does nothing VSS-related when no mirror is active (vssUrl unset)", () => {
+    const wallet = makeWallet();
+    // No vssMirror set — must not throw.
+    expect(() => wallet["notifyStateChanged"]()).not.toThrow();
+  });
 });

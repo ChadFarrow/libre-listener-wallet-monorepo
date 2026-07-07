@@ -150,4 +150,34 @@ describe("calculateSplits", () => {
     expect(keys).toContain(7629175); // feedGuid
     expect(keys).toContain(5482373484); // custom split-route key
   });
+
+  it("throws on all-zero shares instead of producing NaN payments", () => {
+    const destinations: SplitDestination[] = [
+      { destinationPubkey: "a", share: 0 },
+      { destinationPubkey: "b", share: 0 },
+    ];
+    expect(() =>
+      calculateSplits({ destinations, amountSats: 1000, boostRecordTemplate: template }),
+    ).toThrow(/total shares/i);
+  });
+
+  it("throws on a negative share instead of over-paying the last recipient", () => {
+    const destinations: SplitDestination[] = [
+      { destinationPubkey: "a", share: -1 },
+      { destinationPubkey: "b", share: 2 },
+    ];
+    expect(() =>
+      calculateSplits({ destinations, amountSats: 1000, boostRecordTemplate: template }),
+    ).toThrow(/share/i);
+  });
+
+  it("throws on a non-finite or negative amountSats", () => {
+    const destinations: SplitDestination[] = [{ destinationPubkey: "a", share: 1 }];
+    expect(() =>
+      calculateSplits({ destinations, amountSats: NaN, boostRecordTemplate: template }),
+    ).toThrow(/amountSats/i);
+    expect(() =>
+      calculateSplits({ destinations, amountSats: -500, boostRecordTemplate: template }),
+    ).toThrow(/amountSats/i);
+  });
 });

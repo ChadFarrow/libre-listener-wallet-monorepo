@@ -94,7 +94,7 @@ import {
   Result_ThirtyTwoBytesRetryableSendFailureZ_OK,
   Result_RecipientOnionFieldsNoneZ_OK,
 } from "lightningdevkit";
-import { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
+import { StorageCache, bytesToHex, hexToBytes, parseSeedHex } from "./storage-cache";
 import { createDurablePersist } from "./durable-persist";
 import { getSecureRandomBytes } from "./crypto-utils";
 import { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
@@ -105,6 +105,10 @@ import { NwcManager } from "./nwc-manager";
 import { IndexedDBStorageProvider } from "./indexed-db-storage";
 import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayload } from "./state-backup";
 import { BACKUP_DIRECT_KEYS } from "./backup-keys";
+import { VssClient } from "./vss-client";
+import { VssMirror, deriveVssStoreId, VSS_STATE_BACKUP_KEY } from "./vss-mirror";
+import { VssDeviceLease } from "./vss-device-lease";
+import { CrossDeviceLockError } from "./cross-device-lease-error";
 import { reconnectDelayMs, shouldRedialNow } from "./peer-reconnect";
 import { normalizeBackupSecret } from "./seed-phrase";
 import { PaymentLogger, boostNoteFromCustomRecords } from "./payment-log";
@@ -286,6 +290,11 @@ const PEER_ADDRESS_BOOK_KEY = "peer_addresses";
 // NOT in the encrypted backup): drives the channel-state regression guard. See state-highwater.ts.
 const MONITOR_HIGHWATER_KEY = "monitor_update_highwater";
 
+// Signed force-close sweep txs awaiting a successful broadcast. Non-critical (NOT in the backup):
+// a JSON array of tx-hex, so a transient broadcast failure or a restart can't strand recoverable
+// funds — retried on every sync tick until the node accepts each one. See broadcastPendingSweeps.
+const SWEEP_PENDING_KEY = "sweep_pending_txs";
+
 /** Safely parse the stored address-book JSON, dropping any malformed entries. Never throws. */
 export function parsePeerAddressBook(raw: string | null | undefined): Record<string, PeerAddress> {
   if (!raw) return {};
@@ -357,11 +366,11 @@ export class LibreListenerWallet {
   private eventTickIntervalId?: any;
   private gossipIntervalId?: any;
   private gossipSyncPromise?: Promise<void>;
+  private chainSyncPromise?: Promise<void>;
   private nodeAnnTickCount = 0;
   private nextDescriptorId: number = 1;
   private stateVersion: number = 0;
   private monitorHighwater: Highwater = new Map();
-  private loadedMonitors: ChannelMonitor[] = [];
   private stateListeners: (() => void)[] = [];
   private connectedPeers: Map<string, WebSocketDescriptor> = new Map(); // hex pubkey -> descriptor
   // Peers we want to keep connected (hex pubkey -> address). Drives auto-reconnect.
@@ -376,14 +385,25 @@ export class LibreListenerWallet {
   private peerAddressBook: Map<string, PeerAddress> = new Map();
   // scriptPubKey to sweep force-close outputs to (Event_SpendableOutputs). Set by the app.
   private sweepDestinationScript?: Uint8Array;
+  // Signed sweep txs queued for (re)broadcast, keyed by tx-hex. Persisted under SWEEP_PENDING_KEY.
+  private pendingSweeps: Map<string, Uint8Array> = new Map();
   // Whether we've already warned about claimable outputs with no sweep address — avoids
   // spamming the log every ~1s while the event replays. Reset when the destination changes.
   private sweepWarningShown = false;
   private registryCache?: LspProvider[];
   private eventListeners: ((event: Event) => void)[] = [];
+  // The SDK's own payment-log demux listener. Registered ONCE (a stop→start cycle must not
+  // stack a duplicate handler each time — each duplicate re-runs every LDK event).
+  private paymentLogListener?: (event: Event) => void;
   public nwc: NwcManager;
   // Forward-only payment history (source of truth for getPayments + NWC list_transactions).
   private paymentLog: PaymentLogger;
+  // Optional VSS durable-replica mirror (built in start() only when config.vssUrl is set). Best-effort
+  // off-device backup of the encrypted state envelope; never gates LDK. See vss-mirror.ts.
+  private vssMirror?: VssMirror;
+  // Optional cross-device single-instance lease (built in start() when config.vssUrl is set and
+  // enforceSingleDevice !== false). Refuses to start if another device holds a live lease. See vss-device-lease.ts.
+  private vssLease?: VssDeviceLease;
 
   constructor(options: {
     config: WalletConfig;
@@ -446,14 +466,54 @@ export class LibreListenerWallet {
 
     // 3. Setup key derivation & PhantomKeysManager
     let seedHex = await this.storage.getItem("ldk_seed");
+    const seedExistedInStorage = seedHex !== null;
     let seed: Uint8Array;
     if (!seedHex) {
       seed = getSecureRandomBytes(32);
       seedHex = bytesToHex(seed);
       await this.storage.setItem("ldk_seed", seedHex);
     } else {
-      seed = hexToBytes(seedHex);
+      // Fail loudly on a corrupt seed rather than silently deriving a different node identity.
+      seed = parseSeedHex(seedHex);
     }
+
+    // 3b. VSS durable-replica re-hydration (opt-in via config.vssUrl). If this origin has the seed
+    // but NO channel_manager — local storage was lost/reaped, or the user did a seed-only restore —
+    // pull the encrypted state envelope from VSS and restore it BEFORE loading the manager. This
+    // turns the classic "seed without channel state → fresh empty node → force-close" trap into an
+    // auto-recovery. Guarded to only run when the seed already existed (never a brand-new wallet)
+    // and channel_manager is absent (NEVER overwrites existing local channel state). Best-effort:
+    // any failure (network, wrong-network envelope, decrypt) falls through to the normal path, where
+    // the readiness/regression guards still apply.
+    if (this.config.vssUrl && seedExistedInStorage) {
+      const restored = await this.maybeRestoreStateFromVss(seedHex);
+      if (restored) {
+        // reload() (NOT load(), which no-ops once loaded) so the cache actually picks up the
+        // channel_manager + monitor keys importState just wrote straight to storage — otherwise
+        // the monitors never load and the restored manager fails to decode → force-close.
+        await this.storageCache.reload();
+        const v = await this.storage.getItem("state_version");
+        this.stateVersion = v ? parseInt(v, 10) || 0 : 0;
+      }
+    }
+
+    // 3c. Cross-device single-instance lease (opt-in via config.vssUrl; on by default, disable with
+    // enforceSingleDevice:false). The Web-Locks node lock only covers ONE origin — it can't see the
+    // same wallet running on another device. Claim a time-boxed lease in the shared VSS store BEFORE
+    // dialing any peer; if another device holds a live lease, throw CrossDeviceLockError so we never
+    // put a second node on the same channel (→ force-close). VSS unreachable → start with a warning.
+    if (this.config.vssUrl && this.config.enforceSingleDevice !== false) {
+      const leaseStoreId = await deriveVssStoreId(seedHex);
+      const leaseClient = new VssClient({ baseUrl: this.config.vssUrl, storeId: leaseStoreId, logger: this.logger });
+      const ownerId = bytesToHex(getSecureRandomBytes(16));
+      const lease = new VssDeviceLease(leaseClient, ownerId, { logger: this.logger });
+      await lease.acquire(); // throws CrossDeviceLockError if another device holds a live lease
+      // Assign only AFTER acquire returns (didn't throw): a BLOCKED start must not later release/
+      // delete the OTHER device's lease during teardown. A degraded (VSS-down) acquire still returns,
+      // so we keep the object to attempt release + let the heartbeat claim the lease once VSS is back.
+      this.vssLease = lease;
+    }
+
     this.keysManager = PhantomKeysManager.constructor_new(
       seed,
       BigInt(Math.floor(Date.now() / 1000)),
@@ -530,6 +590,22 @@ export class LibreListenerWallet {
       () => this.storageCache!.flush(),
       () => this.chainMonitor,
       this.logger,
+      // Advance the Layer-A high-water in step with durable persistence (never ahead of it),
+      // covering channels opened mid-session too. See recordDurableHighwater.
+      (txidLe, index, updateId) => {
+        this.recordDurableHighwater(txidLe, index, updateId);
+        // A durable monitor update just completed → LDK un-pauses the channel and may have queued
+        // the next commitment-dance messages. Flush them NOW rather than waiting up to the 10s peer
+        // tick: without this, each monitor-gated dance step adds ~10s, so an NWC keysend takes 15-30s
+        // to settle — which throttles streaming-sats throughput to ~2/min. Safe to call here: this
+        // runs in the durable flush's promise continuation, NOT inside an LDK SocketDescriptor
+        // callback (the re-entrancy trap), so PeerManager access can't re-enter.
+        try {
+          this.peerManager?.process_events();
+        } catch (e) {
+          this.logger?.error(`[DurablePersist] process_events pump failed: ${e instanceof Error ? e.message : e}`);
+        }
+      },
     );
 
     this.chainMonitor = ChainMonitor.constructor_new(
@@ -566,7 +642,6 @@ export class LibreListenerWallet {
     // point this wallet durably reached — reconnecting stale channel state makes the peer force-close
     // it (2026-07-06 mainnet incident). Halting sends the user to restore-from-backup instead. Runs
     // BEFORE PeerManager/redial setup, so a regressed node never dials or reestablishes.
-    this.loadedMonitors = channelMonitors;
     const storedHighwater = parseHighwater(await this.storage.getItem(MONITOR_HIGHWATER_KEY));
     const summaries = channelMonitors.map((m) => ({
       channelId: bytesToHex(m.channel_id().get_a()),
@@ -748,14 +823,20 @@ export class LibreListenerWallet {
     );
 
     // 12. Initial sync with Esplora
-    await this.syncClient.sync(this.channelManager, this.chainMonitor);
+    await this.runChainSync();
+
+    // Recover any force-close sweep that didn't finish broadcasting before a prior shutdown, and
+    // attempt it now; the sync tick below keeps retrying until the node accepts it.
+    await this.loadPendingSweeps();
+    void this.broadcastPendingSweeps();
 
     // 13. Setup background loops
     this.syncIntervalId = setInterval(() => {
       if (this.channelManager && this.chainMonitor) {
-        this.syncClient!.sync(this.channelManager, this.chainMonitor).catch(err => {
+        this.runChainSync().catch(err => {
           this.logger?.error(`Background sync error: ${err.message}`);
         });
+        void this.broadcastPendingSweeps();
       }
     }, 30000);
 
@@ -882,7 +963,6 @@ export class LibreListenerWallet {
             );
           this.notifyStateChanged();
         }
-        this.advanceMonitorHighwater();
       }
       if (this.chainMonitor) {
         this.chainMonitor.as_EventsProvider().process_pending_events(eventHandler);
@@ -890,6 +970,29 @@ export class LibreListenerWallet {
     }, 1000);
 
     this.isRunning = true;
+
+    // Keep the cross-device lease fresh while we run (best-effort; a VSS blip never kills the session).
+    this.vssLease?.startHeartbeat();
+
+    // VSS durable-replica mirror — opt-in via config.vssUrl (unset = disabled, no behavior change).
+    // Best-effort off-device backup of the encrypted state envelope after each state change; it
+    // NEVER gates the node. Design A: a blind write of the same slim, seed-encrypted envelope the
+    // Drive backup already produces, so the server only sees ciphertext (key-isolation guardrail).
+    if (this.config.vssUrl) {
+      try {
+        const seedForStore = await this.storage.getItem("ldk_seed");
+        if (seedForStore) {
+          const storeId = await deriveVssStoreId(seedForStore);
+          const vssClient = new VssClient({ baseUrl: this.config.vssUrl, storeId, logger: this.logger });
+          this.vssMirror = new VssMirror(vssClient, () => this.exportState(), { logger: this.logger });
+          this.vssMirror.flushNow(); // seed VSS with current state without waiting for a change
+          this.logger?.info(`[VSS] Durable-replica mirror enabled (store ${storeId.slice(0, 8)}…)`);
+        }
+      } catch (e) {
+        // Never let VSS setup break startup.
+        this.logger?.warn(`[VSS] Mirror setup failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
 
     // Kick off Rapid Gossip Sync in the background so the network graph populates
     // (enabling multi-hop routing) without blocking node startup, then refresh
@@ -915,32 +1018,80 @@ export class LibreListenerWallet {
     // outcomes. Thin LDK `instanceof` demux here (minification-safe, per the event-dispatch
     // gotcha) → plain PaymentLogger calls; the testable logic lives in payment-log.ts.
     await this.paymentLog.load();
-    this.addEventListener((event: Event) => {
-      try {
-        if (event instanceof Event_PaymentSent) {
-          const feeMsat = event.fee_paid_msat instanceof Option_u64Z_Some ? Number(event.fee_paid_msat.some) : 0;
-          this.paymentLog.recordSent(
-            bytesToHex(event.payment_hash),
-            feeMsat / 1000,
-            bytesToHex(event.payment_preimage)
-          );
-        } else if (event instanceof Event_PaymentFailed) {
-          if (event.payment_hash instanceof Option_ThirtyTwoBytesZ_Some) {
-            this.paymentLog.recordFailed(bytesToHex(event.payment_hash.some));
+    // Register the demux listener only once for this wallet instance — re-registering on every
+    // start() would stack duplicates (N restarts → N redundant recordSent/recordReceived writes
+    // per event). The closure only touches this.paymentLog (which persists across stop/start).
+    if (!this.paymentLogListener) {
+      this.paymentLogListener = (event: Event) => {
+        try {
+          if (event instanceof Event_PaymentSent) {
+            const feeMsat = event.fee_paid_msat instanceof Option_u64Z_Some ? Number(event.fee_paid_msat.some) : 0;
+            this.paymentLog.recordSent(
+              bytesToHex(event.payment_hash),
+              feeMsat / 1000,
+              bytesToHex(event.payment_preimage)
+            );
+          } else if (event instanceof Event_PaymentFailed) {
+            if (event.payment_hash instanceof Option_ThirtyTwoBytesZ_Some) {
+              this.paymentLog.recordFailed(bytesToHex(event.payment_hash.some));
+            }
+          } else if (event instanceof Event_PaymentClaimed) {
+            this.paymentLog.recordReceived(bytesToHex(event.payment_hash), Number(event.amount_msat) / 1000);
           }
-        } else if (event instanceof Event_PaymentClaimed) {
-          this.paymentLog.recordReceived(bytesToHex(event.payment_hash), Number(event.amount_msat) / 1000);
+        } catch (e) {
+          this.logger?.error(`[PaymentLog] event handling failed: ${e instanceof Error ? e.message : e}`);
         }
-      } catch (e) {
-        this.logger?.error(`[PaymentLog] event handling failed: ${e instanceof Error ? e.message : e}`);
-      }
-    });
+      };
+      this.addEventListener(this.paymentLogListener);
+    }
 
     // Initialize and start Nostr Wallet Connect listeners
     await this.nwc.init();
     await this.nwc.start();
     } catch (e) {
-      // A failed start must free the lock, or a retry/fresh instance in this context self-deadlocks.
+      // A failed start that already flipped isRunning / armed the background loops must tear
+      // them ALL down before freeing the lock. Otherwise the loops keep persisting channel
+      // state and dialing peers on a "stopped" node while the run lock is released — letting a
+      // second context acquire the lock and start a SECOND node over the same IndexedDB (the
+      // dual-node race the single-node lock exists to prevent → stale-state force-close). We do
+      // NOT persist here (unlike stop()): a half-started node's state must not be written out.
+      this.vssMirror?.stop();
+      this.vssMirror = undefined;
+      // Release the lease only if WE acquired it (this.vssLease is set only after a non-blocked
+      // acquire) — a CrossDeviceLockError leaves it undefined so we never delete the holder's lease.
+      if (this.vssLease) { await this.vssLease.release().catch(() => {}); this.vssLease = undefined; }
+      try {
+        await this.nwc.stop();
+      } catch (stopErr) {
+        this.logger?.error(`[start] NWC teardown after failed start: ${stopErr instanceof Error ? stopErr.message : stopErr}`);
+      }
+      for (const id of [this.syncIntervalId, this.peerTickIntervalId, this.eventTickIntervalId, this.gossipIntervalId]) {
+        if (id) clearInterval(id);
+      }
+      this.syncIntervalId = undefined;
+      this.peerTickIntervalId = undefined;
+      this.eventTickIntervalId = undefined;
+      this.gossipIntervalId = undefined;
+      for (const timer of this.reconnectTimers.values()) clearTimeout(timer);
+      this.reconnectTimers.clear();
+      this.reconnectAttempts.clear();
+      this.desiredPeers.clear();
+      for (const descriptor of this.connectedPeers.values()) {
+        try { descriptor.disconnect_socket(); } catch { /* best-effort during failed-start teardown */ }
+      }
+      this.connectedPeers.clear();
+      this.channelManager = undefined;
+      this.chainMonitor = undefined;
+      this.keysManager = undefined;
+      this.networkGraph = undefined;
+      this.scorer = undefined;
+      this.lockableScore = undefined;
+      this.monitorUpdatingPersister = undefined;
+      this.peerManager = undefined;
+      this.ldkLogger = undefined;
+      this.isRunning = false;
+
+      // Now free the lock so a retry / fresh instance in this context can start cleanly.
       this.releaseRunLock?.();
       this.releaseRunLock = undefined;
       throw e;
@@ -952,6 +1103,27 @@ export class LibreListenerWallet {
    * NetworkGraph so the router can find multi-hop routes. Incremental: tracks the last
    * sync timestamp under the `rgs_timestamp` storage key. Safe to call repeatedly.
    */
+  /**
+   * Run an Esplora chain sync, coalescing concurrent calls into one in-flight run (mirrors
+   * syncGossip). LDK's Confirm interface must see `best_block_updated`/`transactions_confirmed`
+   * in chain order; two overlapping `EsploraSyncClient.sync()` runs — the 30s interval firing
+   * while a slow, rate-limited sync is still walking blocks — otherwise interleave and can
+   * REGRESS the best block (a slow run finishing after a fast one advanced past it) and
+   * mis-order confirmations, flip-flopping a pending channel's confirmation count.
+   */
+  private runChainSync(): Promise<void> {
+    if (this.chainSyncPromise) return this.chainSyncPromise;
+    if (!this.channelManager || !this.chainMonitor || !this.syncClient) return Promise.resolve();
+    const cm = this.channelManager;
+    const chm = this.chainMonitor;
+    this.chainSyncPromise = this.syncClient
+      .sync(cm, chm)
+      .finally(() => {
+        this.chainSyncPromise = undefined;
+      });
+    return this.chainSyncPromise;
+  }
+
   async syncGossip(): Promise<void> {
     // De-duplicate concurrent calls (the background refresh + a manual call) so we never
     // mutate the NetworkGraph from two places at once — LDK panics with a BorrowMutError.
@@ -1013,33 +1185,37 @@ export class LibreListenerWallet {
         this.logger?.error(`onStateChanged listener error: ${e instanceof Error ? e.message : e}`);
       }
     }
+    // Mirror the new state to VSS (debounced, best-effort; no-op unless config.vssUrl is set).
+    this.vssMirror?.schedule();
   }
 
-  /** Advance the persisted per-channel high-water from the live (shared-by-reference) monitors.
-   *  Monotonic + best-effort. Covers every channel present at start PLUS channels opened
-   *  mid-session (picked up when the live monitor set grows). */
-  private advanceMonitorHighwater(): void {
-    if (!this.chainMonitor || !this.monitorUpdatingPersister) return;
-    // Pick up channels opened mid-session: when the live monitor set grows beyond our tracked
-    // snapshot, ADD the new channels' monitors so their high-water is tracked too. Existing
-    // entries keep their shared-by-reference (in-memory) monitor — do not replace them.
-    if (this.chainMonitor.list_monitors().length > this.loadedMonitors.length) {
-      const res = this.monitorUpdatingPersister.read_all_channel_monitors_with_updates();
-      if (res.is_ok()) {
-        const known = new Set(this.loadedMonitors.map((m) => bytesToHex(m.channel_id().get_a())));
-        const fresh = (res as Result_CVec_C2Tuple_ThirtyTwoBytesChannelMonitorZZIOErrorZ_OK).res;
-        for (const tuple of fresh) {
-          const mon = tuple.get_b();
-          if (!known.has(bytesToHex(mon.channel_id().get_a()))) this.loadedMonitors.push(mon);
+  /**
+   * Advance the persisted per-channel high-water AFTER a monitor update durably persisted
+   * (driven by createDurablePersist's onDurablePersisted hook). Keying by the funding outpoint
+   * → channelId via list_monitors(), it covers every channel — including ones opened mid-session
+   * — and, crucially, only ever moves the mark to a durably-committed update id, so the mark can
+   * never sit AHEAD of on-disk state (which would false-trigger the regression halt on the next
+   * load). Monotonic + best-effort. Replaces the old tick-driven advance off live (possibly
+   * not-yet-durable) in-memory monitors.
+   */
+  private recordDurableHighwater(txidLe: Uint8Array, index: number, updateId: bigint): void {
+    if (!this.chainMonitor) return;
+    const txidHex = bytesToHex(txidLe);
+    let channelId: string | undefined;
+    try {
+      for (const tuple of this.chainMonitor.list_monitors()) {
+        const outpoint = tuple.get_a();
+        if (outpoint.get_index() === index && bytesToHex(outpoint.get_txid()) === txidHex) {
+          channelId = bytesToHex(tuple.get_b().get_a());
+          break;
         }
       }
+    } catch (e) {
+      this.logger?.error(`[Highwater] list_monitors lookup failed: ${e instanceof Error ? e.message : e}`);
+      return;
     }
-    if (this.loadedMonitors.length === 0) return;
-    const summaries = this.loadedMonitors.map((m) => ({
-      channelId: bytesToHex(m.channel_id().get_a()),
-      latestUpdateId: m.get_latest_update_id(),
-    }));
-    const merged = mergeHighwater(this.monitorHighwater, summaries);
+    if (!channelId) return; // channel closed/removed between persist and ack — nothing to track
+    const merged = mergeHighwater(this.monitorHighwater, [{ channelId, latestUpdateId: updateId }]);
     if (highwaterEquals(merged, this.monitorHighwater)) return;
     this.monitorHighwater = merged;
     this.storage
@@ -1194,6 +1370,19 @@ export class LibreListenerWallet {
     const releaseRunLock = this.releaseRunLock;
     this.releaseRunLock = undefined;
 
+    // FLUSH the VSS mirror before stopping — upload this device's FINAL state (the channel manager
+    // is still alive here) so the next device to pick up the wallet re-hydrates the latest state, not
+    // a throttled-stale one. This is what makes a cross-device handoff safe. Then stop the mirror.
+    if (this.vssMirror) {
+      await this.vssMirror.flush().catch((e) =>
+        this.logger?.error(`[VSS] Final mirror flush on stop failed: ${e instanceof Error ? e.message : e}`)
+      );
+      this.vssMirror.stop();
+      this.vssMirror = undefined;
+    }
+    // Release the cross-device lease so another device can take over immediately (best-effort).
+    if (this.vssLease) { await this.vssLease.release().catch(() => {}); this.vssLease = undefined; }
+
     try {
     // Stop Nostr Wallet Connect listeners
     await this.nwc.stop();
@@ -1255,7 +1444,7 @@ export class LibreListenerWallet {
     if (!this.isRunning || !this.channelManager || !this.chainMonitor) {
       throw new Error("Wallet is not running");
     }
-    await this.syncClient!.sync(this.channelManager, this.chainMonitor);
+    await this.runChainSync();
   }
 
   status(): "Stopped" | "Running" {
@@ -1271,6 +1460,15 @@ export class LibreListenerWallet {
     // (it isn't backed up; it re-syncs from RGS on restore), so exporting stays cheap.
     if (this.isRunning) {
       await this.persistChannelManagerState();
+      // Drain any monitor writes still in-flight (Layer C keeps them InProgress until the
+      // IndexedDB commit lands) BEFORE we read the monitor keys below — otherwise the backup can
+      // capture a manager at update N+1 alongside a monitor still at N (a torn snapshot that
+      // fails to restore / force-closes). storage.getItem reads the committed store, not the cache.
+      if (this.storageCache) {
+        await this.storageCache.flush().catch((e) =>
+          this.logger?.error(`[Export] monitor flush before export failed: ${e instanceof Error ? e.message : e}`)
+        );
+      }
     }
     const seedHex = await this.storage.getItem("ldk_seed");
     if (!seedHex) {
@@ -1343,6 +1541,43 @@ export class LibreListenerWallet {
     const seedEntry = payload.entries["ldk_seed"];
     if (seedEntry !== undefined) {
       await this.storage.setItem("ldk_seed", seedEntry);
+    }
+  }
+
+  /**
+   * Re-hydrate channel state from the VSS durable replica when THIS origin has the seed but NO local
+   * channel_manager (lost/reaped storage, or a seed-only restore). Reuses importState (decrypts with
+   * the seed, enforces network match, writes crash-safely, seed last). NEVER overwrites EXISTING
+   * local channel state — copying newer VSS state over a device that already holds stale channel
+   * state does NOT cleanly reconstruct the channel in LDK (the monitors don't replace over the old
+   * ones → force-close on reestablish; see the cross-device-handoff soak). NEVER throws into start().
+   * Returns true iff state was restored. Runs before the manager load, while stopped.
+   *
+   * SAFETY: importState clears the monitor high-water mark. We PRESERVE any retained mark across the
+   * import so a VSS replica behind this device's proven progress still trips the Layer-A regression
+   * halt on the manager load rather than silently reconnecting with stale state.
+   */
+  private async maybeRestoreStateFromVss(seedHex: string): Promise<boolean> {
+    if (!this.config.vssUrl) return false;
+    try {
+      // Only re-hydrate into EMPTY local storage. (Newer-VSS-over-stale-local is not safe to copy —
+      // that's the cross-device active-handoff limitation; the safe pattern is one node + NWC clients.)
+      if ((await this.storage.getItem("channel_manager")) !== null) return false;
+      const storeId = await deriveVssStoreId(seedHex);
+      const client = new VssClient({ baseUrl: this.config.vssUrl, storeId, logger: this.logger });
+      const obj = await client.getObject(VSS_STATE_BACKUP_KEY);
+      if (!obj || obj.value.length === 0) return false; // nothing durable to restore
+      const envelope = new TextDecoder().decode(obj.value);
+      const retainedHighwater = await this.storage.getItem(MONITOR_HIGHWATER_KEY);
+      await this.importState(envelope, seedHex); // network-checked + crash-safe; isRunning is false here
+      if (retainedHighwater !== null) {
+        await this.storage.setItem(MONITOR_HIGHWATER_KEY, retainedHighwater);
+      }
+      this.logger?.info("[VSS] Re-hydrated channel state from durable replica (local had none).");
+      return true;
+    } catch (e) {
+      this.logger?.warn(`[VSS] Re-hydrate skipped (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+      return false;
     }
   }
 
@@ -1503,11 +1738,60 @@ export class LibreListenerWallet {
       this.logger?.error(`[Sweep] Failed to build sweep tx: ${e?.message ?? e}`);
       return false;
     }
-    this.syncClient
-      .broadcastTransaction(txBytes)
-      .then(() => this.logger?.info(`[Sweep] Broadcast a sweep of ${descriptors.length} force-close output(s) to your address.`))
-      .catch((e: any) => this.logger?.error(`[Sweep] Broadcast failed: ${e?.message ?? e}`));
+    // Queue + persist the signed sweep, then attempt broadcast. Unlike the old fire-and-forget,
+    // a transient broadcast failure (esplora 429 / offline) or a restart no longer strands the
+    // funds: the tx is retried on every sync tick until the node accepts it. The event is safely
+    // consumed (return true) because the recovery guarantee now lives in the persisted queue.
+    const key = bytesToHex(txBytes);
+    this.pendingSweeps.set(key, txBytes);
+    void this.persistPendingSweeps();
+    void this.broadcastPendingSweeps();
     return true;
+  }
+
+  /** Persist the set of pending sweep txs (tx-hex array) so they survive a restart. */
+  private async persistPendingSweeps(): Promise<void> {
+    try {
+      await this.storage.setItem(SWEEP_PENDING_KEY, JSON.stringify(Array.from(this.pendingSweeps.keys())));
+    } catch (e) {
+      this.logger?.error(`[Sweep] Failed to persist pending sweeps: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  /** Load any persisted pending sweeps into the in-memory queue (called at start). */
+  private async loadPendingSweeps(): Promise<void> {
+    try {
+      const raw = await this.storage.getItem(SWEEP_PENDING_KEY);
+      if (!raw) return;
+      const hexes = JSON.parse(raw) as unknown;
+      if (!Array.isArray(hexes)) return;
+      for (const h of hexes) {
+        if (typeof h === "string" && h.length > 0 && h.length % 2 === 0 && /^[0-9a-f]+$/i.test(h)) {
+          this.pendingSweeps.set(h, hexToBytes(h));
+        }
+      }
+    } catch (e) {
+      this.logger?.error(`[Sweep] Failed to load pending sweeps: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  /**
+   * (Re)broadcast every queued force-close sweep; drop each one the node accepts. Idempotent and
+   * safe to call repeatedly — invoked from the sync tick, so a sweep that couldn't broadcast (rate
+   * limit, offline, mid-restart) keeps retrying until it lands instead of being silently dropped.
+   */
+  private async broadcastPendingSweeps(): Promise<void> {
+    if (this.pendingSweeps.size === 0 || !this.syncClient) return;
+    for (const [key, txBytes] of Array.from(this.pendingSweeps)) {
+      try {
+        await this.syncClient.broadcastTransaction(txBytes);
+        this.pendingSweeps.delete(key);
+        await this.persistPendingSweeps();
+        this.logger?.info("[Sweep] Broadcast a force-close sweep to your address.");
+      } catch (e) {
+        this.logger?.warn(`[Sweep] Broadcast failed (will retry next sync): ${e instanceof Error ? e.message : e}`);
+      }
+    }
   }
 
   // --- Peer Connection Adapter ---
@@ -2067,6 +2351,11 @@ export type { WalletConfig, PaymentRecord } from "@libre/shared";
 export { PaymentLogger, boostNoteFromCustomRecords, TX_KEY_PREFIX } from "./payment-log";
 export { LspsClient } from "./lsps-client";
 export { Lsps1RestClient, clampExpiryBlocks, isOrderComplete, isOrderFailed, orderInvoice } from "./lsps1-rest-client";
+export { VssClient, VssError, isVssConflict, isVssNotFound } from "./vss-client";
+export type { VssClientConfig, VssKeyValue, ListKeyVersionsResult } from "./vss-client";
+export { VssMirror, deriveVssStoreId, VSS_STATE_BACKUP_KEY } from "./vss-mirror";
+export { VssDeviceLease, VSS_DEVICE_LEASE_KEY } from "./vss-device-lease";
+export { CrossDeviceLockError } from "./cross-device-lease-error";
 export { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
 export {
   seedHexToMnemonic,

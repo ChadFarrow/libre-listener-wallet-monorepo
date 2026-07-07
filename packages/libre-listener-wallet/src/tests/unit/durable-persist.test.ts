@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { scheduleDurableAck, pickUpdateId } from "../../durable-persist";
+import { scheduleDurableAck, pickUpdateId, isUnrecoverableStatus } from "../../durable-persist";
+import { ChannelMonitorUpdateStatus } from "lightningdevkit";
 
 describe("scheduleDurableAck", () => {
   it("calls ack only after flush resolves", async () => {
@@ -56,5 +57,15 @@ describe("pickUpdateId", () => {
 
   it("falls back to latest for a JS null update", () => {
     expect(pickUpdateId(null, 9n)).toBe(9n);
+  });
+});
+
+describe("isUnrecoverableStatus", () => {
+  it("is true only for UnrecoverableError (so the wrapper can propagate it, not mask it as InProgress)", () => {
+    expect(isUnrecoverableStatus(ChannelMonitorUpdateStatus.LDKChannelMonitorUpdateStatus_UnrecoverableError)).toBe(true);
+    expect(isUnrecoverableStatus(ChannelMonitorUpdateStatus.LDKChannelMonitorUpdateStatus_Completed)).toBe(false);
+    expect(isUnrecoverableStatus(ChannelMonitorUpdateStatus.LDKChannelMonitorUpdateStatus_InProgress)).toBe(false);
+    expect(isUnrecoverableStatus(null)).toBe(false);
+    expect(isUnrecoverableStatus(undefined)).toBe(false);
   });
 });

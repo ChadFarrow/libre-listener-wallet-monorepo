@@ -41,9 +41,14 @@ export function paymentRecordsToNwcTransactions(
   records: PaymentRecord[],
   params: ListTransactionsParams = {}
 ): NwcTransaction[] {
-  const { from, until, limit, offset, type } = params;
+  const { from, until, limit, offset, type, unpaid } = params;
 
   const filtered = records
+    // NIP-47 has no representation for a FAILED payment — emitting one (no settled_at)
+    // makes a client like Alby Go render it as a perpetually-pending tx. Drop failed always.
+    // `pending` records are "unpaid": excluded by default, included only when unpaid:true.
+    .filter((r) => r.status !== "failed")
+    .filter((r) => (unpaid === true ? true : r.status === "settled"))
     .filter((r) => (type ? directionToType(r.direction) === type : true))
     .filter((r) => (from != null ? toSeconds(r.timestamp) >= from : true))
     .filter((r) => (until != null ? toSeconds(r.timestamp) <= until : true))

@@ -3,6 +3,7 @@ import {
   makeInvoiceParamsSchema,
   payKeysendParamsSchema,
   payInvoiceParamsSchema,
+  listTransactionsParamsSchema,
   nwcRequestSchema,
   budgetWindowElapsed,
 } from "../nwc-schema";
@@ -24,6 +25,23 @@ describe("makeInvoiceParamsSchema", () => {
 
   it("rejects a missing amount", () => {
     expect(() => makeInvoiceParamsSchema.parse({ description: "x" })).toThrow();
+  });
+
+  it("rejects non-positive, non-integer, and lossy amounts", () => {
+    expect(() => makeInvoiceParamsSchema.parse({ amount: 0 })).toThrow();
+    expect(() => makeInvoiceParamsSchema.parse({ amount: -100 })).toThrow();
+    expect(() => makeInvoiceParamsSchema.parse({ amount: 1.5 })).toThrow();
+    expect(() => makeInvoiceParamsSchema.parse({ amount: "-5000" })).toThrow();
+    expect(() => makeInvoiceParamsSchema.parse({ amount: "junk" })).toThrow();
+    expect(() => makeInvoiceParamsSchema.parse({ amount: "" })).toThrow();
+    // "1e9"/"1,000" must NOT silently parseInt to 1 / 1 — reject them.
+    expect(() => makeInvoiceParamsSchema.parse({ amount: "1e9" })).toThrow();
+    expect(() => makeInvoiceParamsSchema.parse({ amount: "1,000" })).toThrow();
+  });
+
+  it("rejects a negative expiry but allows 0", () => {
+    expect(makeInvoiceParamsSchema.parse({ amount: 100, expiry: 0 }).expiry).toBe(0);
+    expect(() => makeInvoiceParamsSchema.parse({ amount: 100, expiry: -1 })).toThrow();
   });
 });
 
@@ -69,6 +87,21 @@ describe("payKeysendParamsSchema", () => {
     ).toBe(250);
   });
 
+  it("rejects a negative/zero/NaN amount (spend-cap checks must never see a nonsense amount)", () => {
+    expect(() =>
+      payKeysendParamsSchema.parse({ amount: -5000, pubkey: validPubkey }),
+    ).toThrow();
+    expect(() =>
+      payKeysendParamsSchema.parse({ amount: "-5000", pubkey: validPubkey }),
+    ).toThrow();
+    expect(() =>
+      payKeysendParamsSchema.parse({ amount: 0, pubkey: validPubkey }),
+    ).toThrow();
+    expect(() =>
+      payKeysendParamsSchema.parse({ amount: "junk", pubkey: validPubkey }),
+    ).toThrow();
+  });
+
   it("accepts optional tlv_records", () => {
     const parsed = payKeysendParamsSchema.parse({
       amount: 100,
@@ -76,6 +109,21 @@ describe("payKeysendParamsSchema", () => {
       tlv_records: [{ type: 7629169, value: "deadbeef" }],
     });
     expect(parsed.tlv_records).toHaveLength(1);
+  });
+});
+
+describe("listTransactionsParamsSchema", () => {
+  it("accepts all-optional numeric bounds (number or digit string)", () => {
+    const parsed = listTransactionsParamsSchema.parse({ from: "1700000000", until: 1800000000, limit: "10", offset: 0 });
+    expect(parsed).toEqual({ from: 1700000000, until: 1800000000, limit: 10, offset: 0 });
+    expect(listTransactionsParamsSchema.parse(undefined)).toBeUndefined();
+    expect(listTransactionsParamsSchema.parse({})).toEqual({});
+  });
+
+  it("rejects garbage bounds instead of silently blanking history", () => {
+    expect(() => listTransactionsParamsSchema.parse({ from: "yesterday" })).toThrow();
+    expect(() => listTransactionsParamsSchema.parse({ until: "NaN" })).toThrow();
+    expect(() => listTransactionsParamsSchema.parse({ limit: -1 })).toThrow();
   });
 });
 

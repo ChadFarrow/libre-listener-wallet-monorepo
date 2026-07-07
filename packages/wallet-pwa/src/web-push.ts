@@ -54,10 +54,13 @@ export async function enablePush(
     applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
   });
 
+  // Prove control of walletPubkey, bound to this exact relay + endpoint, so the gateway won't
+  // register someone else's endpoint under this wallet's (public) pubkey.
+  const auth = ctx.controller.buildGatewayAuth("register", relayUrl.trim(), subscription.endpoint);
   const regRes = await fetch(`${base}/api/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ walletPubkey, relayUrl: relayUrl.trim(), subscription }),
+    body: JSON.stringify({ walletPubkey, relayUrl: relayUrl.trim(), subscription, auth }),
   });
   if (!regRes.ok) throw new Error("The gateway rejected the subscription.");
 }
@@ -75,10 +78,16 @@ export async function disablePush(
   const walletPubkey = ctx.controller.walletPubkeyForPush();
   if (walletPubkey) {
     const base = gatewayUrl.trim().replace(/\/$/, "");
+    let auth: unknown;
+    try {
+      auth = ctx.controller.buildGatewayAuth("unregister", relayUrl.trim());
+    } catch {
+      auth = undefined; // node stopped — best-effort; the gateway will reject an unsigned request
+    }
     await fetch(`${base}/api/unregister`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ walletPubkey, relayUrl: relayUrl.trim() }),
+      body: JSON.stringify({ walletPubkey, relayUrl: relayUrl.trim(), auth }),
     }).catch(() => {});
   }
 }

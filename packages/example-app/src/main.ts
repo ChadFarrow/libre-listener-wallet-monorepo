@@ -6,6 +6,7 @@ import {
   seedHexToMnemonic,
 } from "@libre/listener-wallet";
 import { resolveSeedInput } from "./core/seed-input";
+import { parsePositiveIntSats } from "./core/amount-input";
 import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl, channelConfLabel, lsps1OrderStatus, zeroConfTrustedPubkeys, isChannelStateRegressionError, isNodeAlreadyRunningError, acquireWebNodeLock, nodeLockName } from "@libre/shared";
 import {
   formatOpeningFee,
@@ -847,7 +848,12 @@ requestJitBtn.addEventListener("click", async () => {
     requestJitBtn.disabled = true;
     jitInvoiceContainer.classList.add("hidden");
 
-    const amountSats = parseInt(jitAmountInput.value, 10);
+    const amountRes = parsePositiveIntSats(jitAmountInput.value);
+    if (!amountRes.ok) {
+      appendLog(`[ERROR] ${amountRes.error}`, "error");
+      return;
+    }
+    const amountSats = amountRes.value;
     const description = jitDescInput.value.trim();
     const lspConnStr = lspConnStrInput.value.trim();
     const [lspPubkey] = lspConnStr.split("@");
@@ -894,7 +900,12 @@ createInvoiceBtn.addEventListener("click", async () => {
   if (!wallet || !isNodeRunning) return;
   try {
     createInvoiceBtn.disabled = true;
-    const amount = parseInt(receiveAmountInput.value, 10);
+    const amountRes = parsePositiveIntSats(receiveAmountInput.value);
+    if (!amountRes.ok) {
+      appendLog(`[ERROR] ${amountRes.error}`, "error");
+      return;
+    }
+    const amount = amountRes.value;
     const desc = receiveDescInput.value.trim() || "Libre Listener Wallet";
     appendLog(`[Receive] Creating BOLT11 invoice for ${amount} sats...`, "system");
     const invoice = await wallet.createInvoice(amount, desc);
@@ -1079,6 +1090,13 @@ exportStateBtn.addEventListener("click", async () => {
 });
 
 importStateBtn.addEventListener("click", async () => {
+  // Never restore while the node is live: writing channel_manager/monitors while the
+  // running node concurrently persists to the same IndexedDB mixes two states →
+  // documented force-close hazard. Mirror the Drive-restore guard.
+  if (isNodeRunning) {
+    appendLog("[ERROR] Stop the node before restoring.", "error");
+    return;
+  }
   const file = importStateFile.files?.[0];
   if (!file) {
     appendLog("[ERROR] Choose a backup file first.", "error");
@@ -1187,6 +1205,10 @@ createWalletBtn.addEventListener("click", async () => {
     // channel. Auto-reconnect only kicks in once channel state exists (see load path).
     autoConnectMode = false;
     createWalletFields.classList.add("hidden");
+    // The new-seed reveal (newWalletBtn set type="text") must not linger — re-mask
+    // the field and re-sync the Show/Hide toggle so the seed isn't left on screen.
+    seedInput.type = "password";
+    toggleSeedBtn.innerText = "Show";
     nodeIdVal.innerText = "-";
     createWalletStatus.textContent = "Wallet created — starting node…";
     appendLog("[SYSTEM] Wallet created. Starting node…", "system");

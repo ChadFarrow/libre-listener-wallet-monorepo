@@ -12,6 +12,7 @@ import {
 } from "@libre/shared";
 import type { ChannelInfo, PaymentRecord } from "@libre/listener-wallet";
 import { formatAmount, statusColor, statusLabel, relativeTime } from "../core/tx-format";
+import { escapeHtml } from "../core/escape-html";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -374,7 +375,7 @@ async function loadGrants() {
   for (const g of grants) {
     const tr = document.createElement("tr");
     const cap = g.spendingLimitSats > 0 ? `${g.spentTodaySats}/${g.spendingLimitSats} sat` : "unlimited";
-    tr.innerHTML = `<td>${g.origin}</td><td>${cap}</td>`;
+    tr.innerHTML = `<td>${escapeHtml(g.origin)}</td><td>${cap}</td>`;
     const td = document.createElement("td");
     const btn = document.createElement("button");
     btn.textContent = "Revoke";
@@ -496,11 +497,6 @@ async function loadTransactions() {
       );
     })
     .join("");
-}
-
-// Escape untrusted strings (a boostagram note / counterparty pubkey) before innerHTML.
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
 // loadChannels reads currentNetwork (for the explorer link), which loadConfig sets — chain them.

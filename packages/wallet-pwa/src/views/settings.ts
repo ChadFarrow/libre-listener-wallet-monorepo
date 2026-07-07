@@ -227,6 +227,8 @@ export function initSettings(ctx: AppContext): void {
 
   // ---- connect peer ----
   $("connect-peer").addEventListener("click", async () => {
+    const btn = $<HTMLButtonElement>("connect-peer");
+    if (btn.disabled) return;
     let peer;
     try {
       peer = parsePeerString(val("peer-conn"));
@@ -234,11 +236,15 @@ export function initSettings(ctx: AppContext): void {
       setMsg("peer-msg", (e as Error).message, "err");
       return;
     }
+    // Disable during the dial so a double-tap can't fire duplicate connectPeer calls; re-enable in finally.
+    btn.disabled = true;
     try {
       await controller.connectPeer(peer.pubkey, peer.host, peer.port);
       setMsg("peer-msg", "Peer connected", "ok");
     } catch (e) {
       setMsg("peer-msg", (e as Error).message, "err");
+    } finally {
+      btn.disabled = false;
     }
   });
 
@@ -333,25 +339,54 @@ export function initSettings(ctx: AppContext): void {
   });
 
   // ---- reveal recovery phrase + hex seed (blurred) ----
-  async function loadPhrase() {
+  // The secrets are derived on demand and written into the DOM ONLY when the user
+  // clicks Unhide — never at init or on state-changed. A CSS blur is not real
+  // protection: leaving the seed in a live textarea all session is an exposure, so
+  // we clear the fields on Hide and whenever the user navigates away.
+  async function revealPhrase(): Promise<boolean> {
     const phraseBox = $<HTMLTextAreaElement>("phrase-words");
     const hexBox = $<HTMLTextAreaElement>("seed-hex");
     try {
       const [{ mnemonic }, { seedHex }] = await Promise.all([controller.getRecoveryPhrase(), controller.getSeed()]);
       phraseBox.value = mnemonic;
       hexBox.value = seedHex;
+      return true;
     } catch (e) {
       phraseBox.value = "";
       hexBox.value = "";
       setMsg("phrase-msg", (e as Error)?.message || "No recovery phrase yet — create or restore a wallet first.");
+      return false;
     }
   }
+  function clearPhraseFields(): void {
+    $<HTMLTextAreaElement>("phrase-words").value = "";
+    $<HTMLTextAreaElement>("seed-hex").value = "";
+    $<HTMLTextAreaElement>("phrase-words").classList.add("phrase-blur");
+    $<HTMLTextAreaElement>("seed-hex").classList.add("phrase-blur");
+    $("toggle-phrase-blur").textContent = "Unhide";
+  }
   $("toggle-phrase-blur").addEventListener("click", () => {
-    const blurred = $<HTMLTextAreaElement>("phrase-words").classList.toggle("phrase-blur");
-    $<HTMLTextAreaElement>("seed-hex").classList.toggle("phrase-blur", blurred);
-    $("toggle-phrase-blur").textContent = blurred ? "Unhide" : "Hide";
-    if (!blurred) setMsg("phrase-msg", "Write these down in order and keep them offline.", "ok");
+    void (async () => {
+      const isBlurred = $<HTMLTextAreaElement>("phrase-words").classList.contains("phrase-blur");
+      if (isBlurred) {
+        // Reveal: derive + populate now, then un-blur only if we actually have a seed.
+        if (!(await revealPhrase())) return;
+        $<HTMLTextAreaElement>("phrase-words").classList.remove("phrase-blur");
+        $<HTMLTextAreaElement>("seed-hex").classList.remove("phrase-blur");
+        $("toggle-phrase-blur").textContent = "Hide";
+        setMsg("phrase-msg", "Write these down in order and keep them offline.", "ok");
+      } else {
+        // Hide: re-blur AND wipe the secrets out of the DOM.
+        clearPhraseFields();
+      }
+    })();
   });
+  // Wipe secrets from the DOM when the user leaves the Settings tab.
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>(".tab"))) {
+    el.addEventListener("click", () => {
+      if (el.dataset.tab !== "settings") clearPhraseFields();
+    });
+  }
   async function copyField(id: string, label: string) {
     const value = $<HTMLTextAreaElement>(id).value.trim();
     if (!value) {
@@ -466,7 +501,7 @@ export function initSettings(ctx: AppContext): void {
   void loadConfig().then(() => void loadChannels());
   void loadNodeInfo();
   void loadSweep();
-  void loadPhrase();
+  // Recovery phrase + seed are NOT loaded here — only on an explicit Unhide click.
   void refreshBackupState();
   void refreshPushState();
   refreshDriveStatus();
@@ -476,7 +511,6 @@ export function initSettings(ctx: AppContext): void {
     if (event === "state-changed") {
       void refreshBackupState();
       void loadChannels();
-      void loadPhrase();
       void loadNodeInfo();
     }
   });

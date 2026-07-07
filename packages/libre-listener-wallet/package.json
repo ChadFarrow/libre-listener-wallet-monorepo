@@ -22,12 +22,14 @@
   },
   "devDependencies": {
     "@libre/lsps2-server": "workspace:*",
+    "@types/ws": "^8.18.1",
     "bolt11": "^1.4.1",
     "fake-indexeddb": "^6.0.0",
     "jsdom": "^24.0.0",
     "msw": "^2.3.0",
     "tsup": "^8.0.2",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "ws": "^8.21.0"
   }
 }

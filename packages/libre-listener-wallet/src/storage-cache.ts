@@ -7,10 +7,15 @@ import {
 } from "lightningdevkit";
 import { SecureStorageProvider, Logger } from "./index";
 
+// Byte→hex lookup table (256 entries). The old `Array.from(bytes).map(...).join("")` allocated
+// tens of millions of transient strings when encoding the ~20MB network graph on stop()/start()
+// (seconds of GC jank on mobile). A table lookup + single join is ~10-50× faster, same output.
+const BYTE_TO_HEX: string[] = Array.from({ length: 256 }, (_, b) => b.toString(16).padStart(2, "0"));
+
 export function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const out = new Array<string>(bytes.length);
+  for (let i = 0; i < bytes.length; i++) out[i] = BYTE_TO_HEX[bytes[i]];
+  return out.join("");
 }
 
 export function hexToBytes(hex: string): Uint8Array {
@@ -19,6 +24,22 @@ export function hexToBytes(hex: string): Uint8Array {
     bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
   }
   return bytes;
+}
+
+/**
+ * Parse the persisted `ldk_seed` into its 32 bytes, throwing loudly on a malformed value.
+ * The seed is always written as `bytesToHex(32 bytes)` (64 lowercase hex chars), so anything
+ * else is corruption. `hexToBytes` would silently coerce non-hex to 0-bytes / truncate a short
+ * string — deriving a DIFFERENT node identity from the same-length garbage and orphaning a
+ * funded wallet. Failing here instead surfaces the corruption before any key is derived.
+ */
+export function parseSeedHex(seedHex: string): Uint8Array {
+  if (!/^[0-9a-fA-F]{64}$/.test(seedHex)) {
+    throw new Error(
+      `Stored ldk_seed is malformed (expected 64 hex chars, got length ${seedHex.length}); refusing to derive keys from a corrupt seed`
+    );
+  }
+  return hexToBytes(seedHex);
 }
 
 export function getStorageKey(primary: string, secondary: string, key: string): string {
@@ -117,6 +138,21 @@ export class StorageCache implements KVStoreInterface {
       }
     }
     this.isLoaded = true;
+  }
+
+  /**
+   * Force a re-read of the key index + values from storage, discarding the in-memory snapshot.
+   * `load()` is idempotent (no-ops once loaded), so it CANNOT pick up keys written out-of-band —
+   * e.g. a VSS re-hydrate (importState) that writes channel_manager + monitor keys straight to
+   * storage during start(). Without this, the cache keeps its stale pre-write (empty) view and the
+   * monitors never load → the restored channel_manager fails to decode → force-close. Call this
+   * after any direct-to-storage write the cache must then serve.
+   */
+  async reload(): Promise<void> {
+    this.isLoaded = false;
+    this.cache.clear();
+    this.keys.clear();
+    await this.load();
   }
 
   private async persistIndex(): Promise<void> {

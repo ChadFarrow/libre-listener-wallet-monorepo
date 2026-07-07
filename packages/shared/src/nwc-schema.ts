@@ -3,11 +3,37 @@ import { z } from "zod";
 export const getInfoParamsSchema = z.object({}).optional();
 export const getBalanceParamsSchema = z.object({}).optional();
 
+// Coerce a number-or-string field to an integer, validating strictly. A string is
+// accepted ONLY if it is a plain base-10 integer (`/^\d+$/`), so lossy/ambiguous
+// forms a client might send — `"1e9"` (parseInt → 1), `"1,000"` (→ 1), `"-5"`,
+// `" 12"`, `""` — are rejected at the boundary instead of silently truncating.
+// `mustBePositive` distinguishes an amount (must be > 0) from a bound like expiry
+// (>= 0). A failed coercion adds a Zod issue so `.parse` throws → the NWC layer
+// answers INVALID_PARAMS rather than handing a NaN/negative to a spend-cap check.
+function intField(mustBePositive: boolean) {
+  return z.union([z.number(), z.string()]).transform((v, ctx) => {
+    const n = typeof v === "number" ? v : /^\d+$/.test(v.trim()) ? parseInt(v.trim(), 10) : NaN;
+    if (!Number.isInteger(n) || (mustBePositive ? n <= 0 : n < 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: mustBePositive
+          ? "must be a positive integer"
+          : "must be a non-negative integer",
+      });
+      return z.NEVER;
+    }
+    return n;
+  });
+}
+
+const positiveIntField = intField(true);
+const nonNegativeIntField = intField(false);
+
 export const makeInvoiceParamsSchema = z.object({
-  amount: z.union([z.number(), z.string().transform((v) => parseInt(v, 10))]),
+  amount: positiveIntField,
   description: z.string().optional(),
   description_hash: z.string().optional(),
-  expiry: z.union([z.number(), z.string().transform((v) => parseInt(v, 10))]).optional(),
+  expiry: nonNegativeIntField.optional(),
 });
 
 export const payInvoiceParamsSchema = z.object({
@@ -15,7 +41,7 @@ export const payInvoiceParamsSchema = z.object({
 });
 
 export const payKeysendParamsSchema = z.object({
-  amount: z.union([z.number(), z.string().transform((v) => parseInt(v, 10))]),
+  amount: positiveIntField,
   // Lightning node pubkey: 33-byte compressed key = 66 hex chars (02/03 prefix),
   // NOT a 32-byte Nostr key. (This regex was wrongly 64 chars and rejected all keysends.)
   pubkey: z.string().regex(/^0[23][0-9a-fA-F]{64}$/, "Invalid public key hex"),
@@ -27,14 +53,15 @@ export const payKeysendParamsSchema = z.object({
 });
 
 // NIP-47 list_transactions params — all optional. Numeric fields accept number-or-string
-// (some clients send strings, matching make_invoice/pay_keysend above). Times are unix seconds.
-const numberOrString = z.union([z.number(), z.string().transform((v) => parseInt(v, 10))]);
+// (some clients send strings, matching make_invoice/pay_keysend above) but must coerce to a
+// non-negative integer; garbage (`"yesterday"`, `NaN`) is rejected as INVALID_PARAMS rather
+// than silently blanking the whole history (a NaN bound makes every `>=`/`<=` comparison false).
 export const listTransactionsParamsSchema = z
   .object({
-    from: numberOrString.optional(),
-    until: numberOrString.optional(),
-    limit: numberOrString.optional(),
-    offset: numberOrString.optional(),
+    from: nonNegativeIntField.optional(),
+    until: nonNegativeIntField.optional(),
+    limit: nonNegativeIntField.optional(),
+    offset: nonNegativeIntField.optional(),
     unpaid: z.boolean().optional(),
     type: z.enum(["incoming", "outgoing"]).optional(),
   })

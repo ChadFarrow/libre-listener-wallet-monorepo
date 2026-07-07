@@ -2,6 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      Content-Security-Policy: 'wasm-unsafe-eval' for the LDK WASM; connect-src is intentionally the
+      broad 'self' https: wss: form (it still blocks ftp:/data: exfil and non-TLS plaintext) because
+      the app legitimately dials many https/wss hosts at runtime (esplora, the ws-bridge, Nostr
+      relays, the push gateway, RGS, Google Drive) and a wrong host allowlist silently breaks
+      payments. script-src/frame-src allow Google Identity Services (drive backup loads its remote
+      script). Vite injects inline <style> (style-src 'unsafe-inline'); QRs are data:/blob: images.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Libre Listener Wallet</title>
     <link rel="manifest" href="manifest.webmanifest" />
@@ -104,7 +116,7 @@
             <p class="hint">Pair a Nostr app so it can pay through this wallet. The pairing carries its own spending limit.</p>
             <input id="nwc-name" class="input" placeholder="app name" />
             <div class="row">
-              <input id="nwc-limit" class="input" type="number" min="0" placeholder="daily limit (sats, blank = none)" />
+              <input id="nwc-limit" class="input" type="number" min="0" placeholder="daily limit in sats (0 = unlimited)" />
               <select id="nwc-renewal" class="input">
                 <option value="never">no renewal</option>
                 <option value="daily" selected>daily</option>

@@ -24,6 +24,17 @@ export interface WalletConfig {
   // 0-conf open (see trustedZeroConfPeers) locks in at 0 regardless. LDK's own default is 6;
   // we default to 3 (e.g. Olympus's own required depth). Lower bound 1. Default 3.
   minChannelConfirmations?: number;
+  // Base URL of an LDK Versioned Storage Service (`lightningdevkit/vss-server`) used as a
+  // versioned, durable, off-device mirror of channel-critical state. Unset (default) = VSS
+  // disabled; the wallet runs purely on local IndexedDB as before. When set, the SDK mirrors
+  // channel-critical keys there (seed-encrypted) so a lost/stale local replica can be re-hydrated
+  // — or rejected by the server's per-key version check — instead of force-closing. See vss-client.ts.
+  vssUrl?: string;
+  // Enforce the cross-device single-instance guard (a VSS-backed startup lease) when vssUrl is set.
+  // Default true. The same wallet running on two devices at once diverges channel state → force-close;
+  // this refuses to start a second device while another holds a live lease. See device-lease.ts.
+  // (No effect without vssUrl — there's no shared store to coordinate through.)
+  enforceSingleDevice?: boolean;
 }
 
 export interface NWCRequest {
@@ -158,8 +169,14 @@ export function lsps1OrderStatus(
   if (order.order_state === "COMPLETED") return "completed";
   if (order.order_state === "FAILED") return "failed";
   const payState = order.payment?.bolt11?.state;
-  // EXPECT_PAYMENT = still unpaid; any other state (HOLD/PAID/…) means the LSP saw the payment.
-  if (payState && payState !== "EXPECT_PAYMENT") return "paid";
+  // Only PAID/HOLD mean the LSP actually holds the payment. bLIP-51 also defines
+  // terminal *unpaid* states (CANCELLED/EXPIRED/REFUNDED) — the old `!== EXPECT_PAYMENT`
+  // catch-all mislabeled those as "paid", so an expired/cancelled invoice showed as paid
+  // and the poller waited forever for a COMPLETED that will never come. Map them to failed;
+  // EXPECT_PAYMENT and any unrecognized state stay awaiting_payment (order_state, which is
+  // authoritative, will terminalize them).
+  if (payState === "PAID" || payState === "HOLD") return "paid";
+  if (payState === "CANCELLED" || payState === "EXPIRED" || payState === "REFUNDED") return "failed";
   return "awaiting_payment";
 }
 
@@ -298,4 +315,5 @@ export * from "./payment-record";
 export * from "./nwc-transactions";
 export * from "./channel-regression";
 export * from "./single-node-lock";
+export * from "./device-lease";
 

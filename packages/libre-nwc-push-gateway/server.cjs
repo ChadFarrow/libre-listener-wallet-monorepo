@@ -8,6 +8,7 @@ const gateway = new LibreNWCPushGateway({
   port: Number(process.env.PORT) || 3001,
   dbPath: process.env.DATABASE_PATH || "push-gateway.db",
   relayUrl: process.env.DEFAULT_RELAY_URL || "wss://relay.damus.io",
+  ...(process.env.MAX_SUBSCRIPTIONS ? { maxSubscriptions: Number(process.env.MAX_SUBSCRIPTIONS) } : {}),
 });
 
 gateway

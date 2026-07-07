@@ -2,6 +2,7 @@
 // or a 100% destination override). Owns the streaming interval state.
 import { appendLog } from "./core/logger";
 import { calculateSplits } from "@libre/shared";
+import { parsePositiveIntSats } from "./core/amount-input";
 import type { AppContext } from "./core/app-context";
 
 const CREATOR_PUBKEY = "02bdafbf7a60765a9ab4673350c1b5954449e290f498d1ff3a77c58eb7cebfbf24";
@@ -107,7 +108,12 @@ export function initV4V(c: AppContext) {
     if (!wallet || !ctx.isRunning()) return;
     try {
       sendBoostagramBtn.disabled = true;
-      const amountSats = parseInt(boostAmountInput.value, 10);
+      const amountRes = parsePositiveIntSats(boostAmountInput.value);
+      if (!amountRes.ok) {
+        appendLog(`[ERROR] ${amountRes.error}`, "error");
+        return;
+      }
+      const amountSats = amountRes.value;
       const message = boostMessageInput.value.trim();
       const senderName = boostSenderName.value.trim();
 

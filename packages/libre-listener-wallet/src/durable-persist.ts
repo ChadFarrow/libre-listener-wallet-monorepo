@@ -29,6 +29,13 @@ export function pickUpdateId(
     : latestUpdateId;
 }
 
+// True if the inner persister reported an unrecoverable error. LDK enum: Completed=0,
+// InProgress=1, UnrecoverableError=2. Kept as a pure numeric compare so the wrapper can
+// propagate that status instead of masking it as InProgress (see below).
+export function isUnrecoverableStatus(status: unknown): boolean {
+  return status === ChannelMonitorUpdateStatus.LDKChannelMonitorUpdateStatus_UnrecoverableError;
+}
+
 // Schedule the durable acknowledgement: only ack (mark the monitor update complete to LDK) once the
 // write is durably committed; on a failed flush, do NOT ack — LDK stays paused on that channel,
 // which is the safe outcome. A synchronous throw inside `ack` is routed to onError too (never left
@@ -57,6 +64,10 @@ export function createDurablePersist(
   flush: () => Promise<void>,
   getChainMonitor: () => ChainMonitor | undefined,
   logger?: Logger,
+  // Invoked with the funding outpoint + update id AFTER a durable flush lands, so the caller
+  // can advance a persisted high-water mark exactly in step with durably-persisted state (never
+  // ahead of it). Best-effort; a throw is swallowed so it can't break the ack path.
+  onDurablePersisted?: (txidLe: Uint8Array, index: number, updateId: bigint) => void,
 ): Persist {
   const ackDurable = (txidLe: Uint8Array, index: number, updateId: bigint): void => {
     const cm = getChainMonitor();
@@ -71,6 +82,13 @@ export function createDurablePersist(
     if (!res.is_ok()) {
       logger?.error(`[DurablePersist] channel_monitor_updated failed for update ${updateId}`);
     }
+    if (onDurablePersisted) {
+      try {
+        onDurablePersisted(txidLe, index, updateId);
+      } catch (e) {
+        logger?.error(`[DurablePersist] onDurablePersisted hook threw: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
   };
   const onFlushError = (e: unknown): void => {
     logger?.error(
@@ -80,7 +98,15 @@ export function createDurablePersist(
 
   return Persist.new_impl({
     persist_new_channel(txo: OutPoint, monitor: ChannelMonitor): ChannelMonitorUpdateStatus {
-      inner.persist_new_channel(txo, monitor);
+      const innerStatus = inner.persist_new_channel(txo, monitor);
+      // If the inner persister itself failed unrecoverably (e.g. a serialization/namespace fault
+      // BEFORE any KVStore write, which never sets the StorageCache degraded flag), do NOT schedule
+      // an ack — masking it as InProgress + acking would let LDK advance past state that was never
+      // written. Propagate the real status so LDK treats the channel as unrecoverable (safe).
+      if (isUnrecoverableStatus(innerStatus)) {
+        logger?.error("[DurablePersist] inner persist_new_channel returned UnrecoverableError; not acking");
+        return innerStatus;
+      }
       const txidLe = txo.get_txid();
       const index = txo.get_index();
       const updateId = monitor.get_latest_update_id();
@@ -92,7 +118,11 @@ export function createDurablePersist(
       update: ChannelMonitorUpdate | null,
       monitor: ChannelMonitor,
     ): ChannelMonitorUpdateStatus {
-      inner.update_persisted_channel(txo, update as any, monitor);
+      const innerStatus = inner.update_persisted_channel(txo, update as any, monitor);
+      if (isUnrecoverableStatus(innerStatus)) {
+        logger?.error("[DurablePersist] inner update_persisted_channel returned UnrecoverableError; not acking");
+        return innerStatus;
+      }
       const txidLe = txo.get_txid();
       const index = txo.get_index();
       const latest = monitor.get_latest_update_id();

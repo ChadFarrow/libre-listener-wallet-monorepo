@@ -24,4 +24,16 @@ describe("lsps1OrderStatus", () => {
       lsps1OrderStatus(order({ order_state: "FAILED", payment: { bolt11: { state: "PAID" } } }))
     ).toBe("failed");
   });
+
+  it("treats terminal-unpaid bolt11 states (CANCELLED/EXPIRED/REFUNDED) as failed, not paid", () => {
+    for (const state of ["CANCELLED", "EXPIRED", "REFUNDED"]) {
+      expect(lsps1OrderStatus(order({ payment: { bolt11: { state } } }))).toBe("failed");
+    }
+  });
+
+  it("keeps polling (awaiting_payment) on an unrecognized bolt11 state rather than assuming paid", () => {
+    expect(lsps1OrderStatus(order({ payment: { bolt11: { state: "SOMETHING_NEW" } } }))).toBe(
+      "awaiting_payment"
+    );
+  });
 });

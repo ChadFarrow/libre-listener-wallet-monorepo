@@ -138,7 +138,20 @@ export function calculateSplits(options: {
     return [];
   }
 
+  // Guard the split math against malformed (feed-derived) inputs. Without these,
+  // a zero total → `Math.floor(amount * share / 0)` = NaN on every recipient, and a
+  // negative share → the last recipient's `amount - allocated` OVER-pays (e.g. shares
+  // [-1, 2] pays destination B twice the boost). Reject rather than silently mis-allocate money.
+  if (!Number.isFinite(amountSats) || amountSats < 0) {
+    throw new Error("calculateSplits: amountSats must be a finite, non-negative number");
+  }
+  if (destinations.some((d) => !Number.isFinite(d.share) || d.share < 0)) {
+    throw new Error("calculateSplits: every destination share must be a finite, non-negative number");
+  }
   const totalShares = destinations.reduce((sum, d) => sum + d.share, 0);
+  if (totalShares <= 0) {
+    throw new Error("calculateSplits: total shares must be greater than zero");
+  }
   const boostUuid = generateUUID();
   const valueMsatTotal = amountSats * 1000;
 

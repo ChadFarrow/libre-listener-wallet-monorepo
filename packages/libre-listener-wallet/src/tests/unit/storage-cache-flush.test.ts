@@ -47,6 +47,31 @@ describe("StorageCache.flush", () => {
     await expect(cache.flush()).resolves.toBeUndefined();
   });
 
+  it("reload() picks up keys written to storage out-of-band; load() (idempotent) does not", async () => {
+    // Simulate the VSS re-hydrate: importState writes channel_manager + monitor keys + a new
+    // ldk_keys_index straight to storage, bypassing the already-loaded cache.
+    const mem: Record<string, string> = { ldk_keys_index: JSON.stringify([]) };
+    const storage = {
+      getItem: async (k: string) => (k in mem ? mem[k] : null),
+      setItem: async (k: string, v: string) => { mem[k] = v; },
+      removeItem: async (k: string) => { delete mem[k]; },
+    };
+    const cache = new StorageCache(storage as any);
+    await cache.load(); // initial load: index is empty
+
+    // importState-style out-of-band write of a monitor key ("monitors/abc_0") + updated index.
+    mem["monitors/abc_0"] = "01020304"; // hex value the cache decodes to bytes
+    mem["ldk_keys_index"] = JSON.stringify(["monitors/abc_0"]);
+
+    await cache.load(); // no-op (already loaded) — must NOT see the new key
+    expect(cache.read("monitors", "", "abc_0").is_ok()).toBeFalsy();
+
+    await cache.reload(); // forces a re-read — now serves it
+    const r = cache.read("monitors", "", "abc_0");
+    expect(r.is_ok()).toBeTruthy();
+    expect(Array.from((r as any).res as Uint8Array)).toEqual([1, 2, 3, 4]);
+  });
+
   it("waits for pending writes, then resolves", async () => {
     const { storage, deferreds } = deferredStorage();
     const cache = new StorageCache(storage);

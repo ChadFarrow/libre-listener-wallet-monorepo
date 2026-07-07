@@ -83,13 +83,17 @@ export function initWebPush(ctx: AppContext) {
       const relayUrl = nwcRelayUrlInput.value.trim();
 
       appendLog("[Push] Sending subscription details to gateway...", "info");
+      // Sign a proof-of-control over this exact (action, relay, endpoint) so the gateway can't be
+      // tricked into registering someone else's endpoint under this wallet's (public) pubkey.
+      const auth = wallet.nwc.buildGatewayAuth("register", relayUrl, subscription.endpoint);
       const regRes = await fetch(`${gatewayUrl}/api/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           walletPubkey,
           relayUrl,
-          subscription
+          subscription,
+          auth
         })
       });
 
@@ -122,10 +126,11 @@ export function initWebPush(ctx: AppContext) {
           const walletPubkey = wallet.nwc.getWalletPubkey();
           const relayUrl = nwcRelayUrlInput.value.trim();
 
+          const auth = wallet.nwc.buildGatewayAuth("unregister", relayUrl);
           await fetch(`${gatewayUrl}/api/unregister`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ walletPubkey, relayUrl })
+            body: JSON.stringify({ walletPubkey, relayUrl, auth })
           });
         }
       }

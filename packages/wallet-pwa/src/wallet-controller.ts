@@ -67,12 +67,39 @@ export class WalletController {
     }
   }
 
+  /** Sign a gateway push-auth (proof of control of the wallet's Nostr pubkey). Throws if not running. */
+  buildGatewayAuth(action: "register" | "unregister", relayUrl: string, endpoint?: string) {
+    this.requireRunning();
+    return this.wallet!.nwc.buildGatewayAuth(action, relayUrl, endpoint);
+  }
+
   private async activeNetwork(): Promise<string> {
     return (await this.meta.getItem(ACTIVE_NETWORK_KEY)) || "mainnet";
   }
 
   private storageForNetwork(network: string): SecureStorageProvider {
     return new IndexedDBStorageProvider(dbNameForNetwork(network));
+  }
+
+  // Persist the RESOLVED runtime config (esplora/bridge/RGS after default fallback) plus the meta
+  // active-network pointer. The UI only writes ldk_config on an explicit "Save connection settings"
+  // /restore, so a wallet created & run on pure defaults never persisted these — leaving the
+  // offline-push service worker (which has no DOM and reads only what's on disk) unable to resolve
+  // an esplora/bridge, so it opened the wrong empty DB and silently aborted the wake. Best-effort:
+  // a persist failure must never fail a start that already succeeded.
+  private async persistResolvedConfig(network: string): Promise<void> {
+    try {
+      const storage = this.storageForNetwork(network);
+      const cfg = parseConfig(await storage.getItem(CONFIG_KEY));
+      cfg.network = network as AppConfig["network"];
+      cfg.esploraUrl = cfg.esploraUrl || defaultEsploraUrl(network);
+      cfg.bridgeUrl = cfg.bridgeUrl || defaultBridgeUrl(network);
+      cfg.rapidGossipSyncUrl = cfg.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(network);
+      await storage.setItem(CONFIG_KEY, serializeConfig(cfg));
+      await this.meta.setItem(ACTIVE_NETWORK_KEY, network);
+    } catch (e) {
+      console.warn("[Config] could not persist resolved config for the service worker:", (e as Error)?.message || e);
+    }
   }
 
   async getConfig(): Promise<AppConfig> {
@@ -219,6 +246,9 @@ export class WalletController {
       throw e;
     }
     await this.applySweepAddress();
+    // Persist the resolved config + network pointer so an offline push wake can boot this node
+    // (covers wallets created/started on pure defaults, incl. createWallet → startNode).
+    await this.persistResolvedConfig(network);
     // Warm the routing graph best-effort (mainnet only serves RGS snapshots).
     void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
     this.emit("state-changed");
@@ -366,6 +396,7 @@ export class WalletController {
       this.wallet = wallet;
       await wallet.start();
       await this.applySweepAddress();
+      await this.persistResolvedConfig(targetNetwork);
       void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
       this.emit("state-changed");
       return this.currentNode();
@@ -433,8 +464,14 @@ export class WalletController {
     }
   ): Promise<{ uri: string }> {
     this.requireRunning();
+    // Never coerce a bad limit to 0 (= unlimited). Reject non-finite/negative;
+    // undefined defaults to 0 explicitly (callers pass a validated value).
+    const limit = opts?.spendingLimitSats ?? 0;
+    if (!Number.isFinite(limit) || limit < 0) {
+      throw new Error("Spending limit must be a non-negative number of sats (0 for unlimited).");
+    }
     const uri = await this.wallet!.nwc.createConnection(name || "Nostr Client App", {
-      spendingLimitSats: Number(opts?.spendingLimitSats) || 0,
+      spendingLimitSats: limit,
       relayUrl: opts?.relayUrl,
       budgetRenewal: opts?.budgetRenewal,
       maxAmountSats: opts?.maxAmountSats,

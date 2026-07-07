@@ -7,7 +7,7 @@ import {
   nodeLockName,
 } from "@libre/shared";
 import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
-import { resolveSwConfig } from "./core/sw-config";
+import { resolveActiveNetwork, resolvePushConfig } from "./core/sw-config";
 
 declare const self: any;
 
@@ -44,10 +44,20 @@ self.addEventListener("fetch", (event: any) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // cross-origin (esplora/bridge/Drive/nostr) → network as normal
 
-  // Same-origin navigations → serve the cached app shell so the PWA opens offline.
+  // Same-origin navigations → NETWORK-FIRST, cache fallback. A wallet must never be pinned on a
+  // stale shell: online we always fetch (and refresh) the current index.html; offline we fall back
+  // to the cached shell so the PWA still opens.
   if (req.mode === "navigate") {
     event.respondWith(
-      caches.match("./index.html").then((cached: Response | undefined) => cached || fetch(req))
+      fetch(req)
+        .then((res: Response) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            void caches.open(SHELL_CACHE).then((cache: Cache) => cache.put("./index.html", copy));
+          }
+          return res;
+        })
+        .catch(async () => (await caches.match("./index.html")) || (await caches.match("./")) || Response.error())
     );
     return;
   }
@@ -96,17 +106,24 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
   console.log("[SW] Offline state. Booting LDK Node in background Service Worker...");
 
   // 2. Fetch configurations from storage — read the active network from the meta DB
-  // so we open the correct network-scoped DB (e.g. libre-wallet-mainnet) rather than
-  // the legacy default (libre-wallet).
+  // so we open the correct network-scoped DB (e.g. libre-wallet-mainnet). Default to
+  // mainnet (matching the controller) so a default-config install doesn't open the
+  // wrong empty DB.
   const metaStore = new IndexedDBStorageProvider(META_DB_NAME);
-  const activeNetwork = (await metaStore.getItem(ACTIVE_NETWORK_KEY)) || "regtest";
+  const activeNetwork = resolveActiveNetwork(await metaStore.getItem(ACTIVE_NETWORK_KEY));
   const storage = new IndexedDBStorageProvider(dbNameForNetwork(activeNetwork));
 
-  // Read config the main app persisted (the SW has no DOM). No localhost defaults —
-  // a deployed SW must use the real remote esplora + bridge from config.
-  const config = resolveSwConfig(await storage.getItem("ldk_config"));
+  // Read config the main app persisted (the SW has no DOM), layered over the network's
+  // public defaults — so a wallet created on defaults (which only resolves esplora/bridge
+  // in-memory) still boots here instead of silently aborting.
+  const config = resolvePushConfig(await storage.getItem("ldk_config"), activeNetwork);
   if (!config.esploraUrl) {
-    console.error("[SW] No esploraUrl in ldk_config — cannot boot node on push; aborting.");
+    console.error("[SW] Cannot resolve an esplora endpoint for the offline node — showing a tap-to-open notification.");
+    await self.registration.showNotification("Libre Listener Wallet", {
+      body: "Pending offline NWC payment request. Tap to open and authorize.",
+      tag: "nwc-payment-pending",
+      data: { url: self.registration.scope },
+    });
     return;
   }
 

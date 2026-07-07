@@ -63,6 +63,24 @@ describe("single-node lock (acquireRunLock)", () => {
     expect(release).toHaveBeenCalledTimes(1); // lock freed so a retry/fresh instance can acquire
   });
 
+  it("tears down running state (timers + isRunning) and frees the lock if start() fails after the node is live", async () => {
+    const release = vi.fn();
+    const acquireRunLock = vi.fn().mockResolvedValue(release);
+    const wallet = new LibreListenerWallet({ config: { network: "regtest", esploraUrl }, storage: makeStorage(new Map()), socketProvider: noSocket, wasmBinary, acquireRunLock });
+    // Fail NWC init — this runs AFTER isRunning flips true and the 30s/peer/event loops are armed.
+    vi.spyOn(wallet.nwc, "init").mockRejectedValue(new Error("boom: corrupt nwc_connections"));
+
+    await expect(wallet.start()).rejects.toThrow(/boom/);
+
+    // The failed start must not leave the node "Running" with live loops while the lock is freed.
+    expect(wallet.status()).not.toBe("Running");
+    expect(release).toHaveBeenCalledTimes(1);
+    // Prove the background loops were actually cleared (they'd otherwise keep persisting state).
+    expect((wallet as any).syncIntervalId).toBeUndefined();
+    expect((wallet as any).peerTickIntervalId).toBeUndefined();
+    expect((wallet as any).eventTickIntervalId).toBeUndefined();
+  });
+
   it("NodeAlreadyRunningError carries the boundary-stable code + message token", () => {
     const e = new NodeAlreadyRunningError();
     expect(e.code).toBe("NODE_ALREADY_RUNNING");

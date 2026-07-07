@@ -2,6 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      Content-Security-Policy: 'wasm-unsafe-eval' for the LDK WASM; connect-src is the broad
+      'self' https: wss: form (still blocks ftp:/data: exfil + non-TLS) because the app dials many
+      https/wss hosts at runtime (esplora, ws-bridge, Nostr relays, push gateway, RGS, Google Drive)
+      and a wrong host allowlist silently breaks payments. script-src/frame-src allow Google Identity
+      Services (drive backup's remote script); style-src/font-src allow Google Fonts (loaded in this
+      <head>); media-src allows the external demo audio track in the V4V player.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' https:; worker-src 'self' blob:; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Libre Listener Client Playground</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -76,7 +88,7 @@
             </div>
             <div class="form-group">
               <label>LDK Seed</label>
-              <input type="password" id="seed-input" value="" placeholder="Your 64-hex seed appears here on New Wallet · paste seed (or 24-word phrase) to restore" />
+              <input type="password" id="seed-input" value="" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Your 64-hex seed appears here on New Wallet · paste seed (or 24-word phrase) to restore" />
               <div class="button-row" style="margin-top: 8px;">
                 <button id="toggle-seed-btn" class="btn btn-secondary btn-sm">Show</button>
                 <button id="copy-seed-btn" class="btn btn-secondary btn-sm">Copy</button>

@@ -11,8 +11,10 @@ const allowlist = new Set(
 );
 const allowPrivate = process.env.BRIDGE_ALLOW_PRIVATE === "1";
 const maxConnsPerIp = Number(process.env.MAX_CONNS_PER_IP ?? 8);
+const maxTotalConns = Number(process.env.MAX_TOTAL_CONNS ?? 512);
+const maxPayload = Number(process.env.MAX_PAYLOAD_BYTES ?? 2 * 1024 * 1024);
 
-const bridge = startBridge({ port, allowlist, fallbackTarget, allowPrivate, maxConnsPerIp });
+const bridge = startBridge({ port, allowlist, fallbackTarget, allowPrivate, maxConnsPerIp, maxTotalConns, maxPayload });
 void bridge.ready.then((p) =>
   console.log(`[ws-bridge] listening :${p} allowlist={${[...allowlist].join(",")}} fallback=${fallbackTarget ?? "(none)"}`)
 );

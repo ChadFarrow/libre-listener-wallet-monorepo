@@ -49,7 +49,9 @@ export function confirmModal(opts: ConfirmOptions): Promise<boolean> {
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") close(false);
-      else if (e.key === "Enter") close(true);
+      // For a destructive modal, a stray Enter must NOT confirm (it would delete a wallet / revoke
+      // access). Enter only confirms a non-danger prompt; danger prompts require an explicit click.
+      else if (e.key === "Enter" && !opts.danger) close(true);
     };
 
     cancel.addEventListener("click", () => close(false));
@@ -63,6 +65,8 @@ export function confirmModal(opts: ConfirmOptions): Promise<boolean> {
     box.append(h, p, row);
     overlay.append(box);
     document.body.append(overlay);
-    ok.focus();
+    // Focus Cancel on a destructive prompt so the safe action is the default (Space/Enter on the
+    // focused button won't confirm a delete); non-danger prompts focus the confirm button.
+    (opts.danger ? cancel : ok).focus();
   });
 }

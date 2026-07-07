@@ -9,14 +9,19 @@ export interface BridgeConfig {
   fallbackTarget?: string; // used when the client sends no ?target (back-compat with old single-target)
   allowPrivate?: boolean; // test-only: permit loopback targets
   maxConnsPerIp?: number; // default 8
+  maxTotalConns?: number; // global concurrent-connection cap (default 512)
+  maxPayload?: number; // per-message byte cap (default 2 MB — Lightning msgs are small)
   log?: (m: string) => void;
 }
 
 export function startBridge(cfg: BridgeConfig): { ready: Promise<number>; close: () => Promise<void> } {
   const log = cfg.log ?? ((m: string) => console.log(`[ws-bridge] ${m}`));
   const maxPerIp = cfg.maxConnsPerIp ?? 8;
+  const maxTotalConns = cfg.maxTotalConns ?? 512;
+  const maxPayload = cfg.maxPayload ?? 2 * 1024 * 1024;
   const perIp = new Map<string, number>();
-  const wss = new WebSocketServer({ port: cfg.port });
+  let totalConns = 0;
+  const wss = new WebSocketServer({ port: cfg.port, maxPayload });
 
   let rejectReady: (err: Error) => void;
   const ready = new Promise<number>((resolve, reject) => {
@@ -35,6 +40,15 @@ export function startBridge(cfg: BridgeConfig): { ready: Promise<number>; close:
     // the shared edge-proxy IP, so we must key on the real client IP instead.
     // The allowlist (isTargetAllowed) is the actual security control.
     const ip = clientIp(req.headers["x-forwarded-for"], req.socket.remoteAddress);
+
+    // Hard global bound on concurrent sessions (the per-IP cap is X-Forwarded-For
+    // spoofable, so it can't bound total load on its own).
+    if (totalConns >= maxTotalConns) {
+      log(`reject ${ip}: server at capacity (${totalConns})`);
+      ws.close(1013, "server at capacity");
+      return;
+    }
+
     const url = new URL(req.url ?? "/", "http://localhost");
     const rawTarget = url.searchParams.get("target") ?? cfg.fallbackTarget ?? "";
 
@@ -51,7 +65,9 @@ export function startBridge(cfg: BridgeConfig): { ready: Promise<number>; close:
       return;
     }
     perIp.set(ip, cur + 1);
+    totalConns++;
     const release = () => {
+      totalConns--;
       const n = (perIp.get(ip) ?? 1) - 1;
       if (n <= 0) perIp.delete(ip);
       else perIp.set(ip, n);

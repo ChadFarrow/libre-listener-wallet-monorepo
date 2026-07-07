@@ -297,4 +297,5 @@ export * from "./nwc-options";
 export * from "./payment-record";
 export * from "./nwc-transactions";
 export * from "./channel-regression";
+export * from "./single-node-lock";
 

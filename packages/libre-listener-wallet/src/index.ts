@@ -119,6 +119,8 @@ import {
   type Highwater,
 } from "./state-highwater";
 export { ChannelStateRegressionError } from "./state-highwater";
+import { NodeAlreadyRunningError } from "./node-lock-error";
+export { NodeAlreadyRunningError } from "./node-lock-error";
 
 export { IndexedDBStorageProvider };
 
@@ -335,6 +337,9 @@ export class LibreListenerWallet {
   private wasmBinary?: Uint8Array;
   private wasmUrl?: string;
 
+  private acquireRunLock?: () => Promise<(() => void) | null>;
+  private releaseRunLock?: () => void;
+
   private storageCache?: StorageCache;
   private syncClient?: EsploraSyncClient;
   private keysManager?: PhantomKeysManager;
@@ -387,6 +392,9 @@ export class LibreListenerWallet {
     logger?: Logger;
     wasmBinary?: Uint8Array;
     wasmUrl?: string;
+    // Injected per-origin single-node lock acquirer. Returns a release fn, or null if another context
+    // holds the lock (→ start() throws NodeAlreadyRunningError). Omitted on platforms without Web Locks.
+    acquireRunLock?: () => Promise<(() => void) | null>;
   }) {
     this.config = options.config;
     this.storage = options.storage;
@@ -394,6 +402,7 @@ export class LibreListenerWallet {
     this.logger = options.logger;
     this.wasmBinary = options.wasmBinary;
     this.wasmUrl = options.wasmUrl;
+    this.acquireRunLock = options.acquireRunLock;
     this.nwc = new NwcManager(this, { logger: this.logger, storage: this.storage, network: this.config.network });
     this.paymentLog = new PaymentLogger({ storage: this.storage, logger: this.logger });
   }
@@ -403,6 +412,14 @@ export class LibreListenerWallet {
       this.logger?.warn("Wallet is already running");
       return;
     }
+    // Single-node lock: one LDK node per origin. Acquire BEFORE any storage access so two contexts
+    // never open the same DB. Held for the node's lifetime; released on stop()/failure.
+    if (this.acquireRunLock && !this.releaseRunLock) {
+      const release = await this.acquireRunLock();
+      if (!release) throw new NodeAlreadyRunningError();
+      this.releaseRunLock = release;
+    }
+    try {
     this.logger?.info(`Starting LDK Node on network: ${this.config.network}`);
 
     // 1. Initialize WASM
@@ -922,6 +939,12 @@ export class LibreListenerWallet {
     // Initialize and start Nostr Wallet Connect listeners
     await this.nwc.init();
     await this.nwc.start();
+    } catch (e) {
+      // A failed start must free the lock, or a retry/fresh instance in this context self-deadlocks.
+      this.releaseRunLock?.();
+      this.releaseRunLock = undefined;
+      throw e;
+    }
   }
 
   /**
@@ -1168,6 +1191,10 @@ export class LibreListenerWallet {
     }
     this.logger?.info("Stopping LDK Node...");
 
+    const releaseRunLock = this.releaseRunLock;
+    this.releaseRunLock = undefined;
+
+    try {
     // Stop Nostr Wallet Connect listeners
     await this.nwc.stop();
 
@@ -1219,6 +1246,9 @@ export class LibreListenerWallet {
     this.ldkLogger = undefined;
 
     this.isRunning = false;
+    } finally {
+      releaseRunLock?.();
+    }
   }
 
   async sync(): Promise<void> {

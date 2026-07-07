@@ -106,7 +106,7 @@ import { IndexedDBStorageProvider } from "./indexed-db-storage";
 import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayload } from "./state-backup";
 import { BACKUP_DIRECT_KEYS } from "./backup-keys";
 import { VssClient } from "./vss-client";
-import { VssMirror, deriveVssStoreId } from "./vss-mirror";
+import { VssMirror, deriveVssStoreId, VSS_STATE_BACKUP_KEY } from "./vss-mirror";
 import { reconnectDelayMs, shouldRedialNow } from "./peer-reconnect";
 import { normalizeBackupSecret } from "./seed-phrase";
 import { PaymentLogger, boostNoteFromCustomRecords } from "./payment-log";
@@ -451,6 +451,7 @@ export class LibreListenerWallet {
 
     // 3. Setup key derivation & PhantomKeysManager
     let seedHex = await this.storage.getItem("ldk_seed");
+    const seedExistedInStorage = seedHex !== null;
     let seed: Uint8Array;
     if (!seedHex) {
       seed = getSecureRandomBytes(32);
@@ -459,6 +460,24 @@ export class LibreListenerWallet {
     } else {
       seed = hexToBytes(seedHex);
     }
+
+    // 3b. VSS durable-replica re-hydration (opt-in via config.vssUrl). If this origin has the seed
+    // but NO channel_manager — local storage was lost/reaped, or the user did a seed-only restore —
+    // pull the encrypted state envelope from VSS and restore it BEFORE loading the manager. This
+    // turns the classic "seed without channel state → fresh empty node → force-close" trap into an
+    // auto-recovery. Guarded to only run when the seed already existed (never a brand-new wallet)
+    // and channel_manager is absent (NEVER overwrites existing local channel state). Best-effort:
+    // any failure (network, wrong-network envelope, decrypt) falls through to the normal path, where
+    // the readiness/regression guards still apply.
+    if (this.config.vssUrl && seedExistedInStorage) {
+      const restored = await this.maybeRestoreStateFromVss(seedHex);
+      if (restored) {
+        await this.storageCache.load(); // re-read the key index after writing restored monitor keys
+        const v = await this.storage.getItem("state_version");
+        this.stateVersion = v ? parseInt(v, 10) || 0 : 0;
+      }
+    }
+
     this.keysManager = PhantomKeysManager.constructor_new(
       seed,
       BigInt(Math.floor(Date.now() / 1000)),
@@ -1374,6 +1393,33 @@ export class LibreListenerWallet {
     const seedEntry = payload.entries["ldk_seed"];
     if (seedEntry !== undefined) {
       await this.storage.setItem("ldk_seed", seedEntry);
+    }
+  }
+
+  /**
+   * Re-hydrate channel state from the VSS durable replica when THIS origin has the seed but no
+   * local channel_manager (lost/reaped storage, or a seed-only restore). Reuses importState, so it
+   * decrypts with the seed, enforces a network match, writes crash-safely (seed last), and clears
+   * stale high-water. NEVER overwrites existing local channel state (returns false if one is present)
+   * and NEVER throws into start() — a failure just falls through to the normal bootstrap path.
+   * Returns true iff state was actually restored. Called before the manager load, while stopped.
+   */
+  private async maybeRestoreStateFromVss(seedHex: string): Promise<boolean> {
+    if (!this.config.vssUrl) return false;
+    try {
+      // Belt-and-braces: never clobber existing local channel state.
+      if ((await this.storage.getItem("channel_manager")) !== null) return false;
+      const storeId = await deriveVssStoreId(seedHex);
+      const client = new VssClient({ baseUrl: this.config.vssUrl, storeId, logger: this.logger });
+      const obj = await client.getObject(VSS_STATE_BACKUP_KEY);
+      if (!obj || obj.value.length === 0) return false; // nothing durable to restore
+      const envelope = new TextDecoder().decode(obj.value);
+      await this.importState(envelope, seedHex); // network-checked + crash-safe; isRunning is false here
+      this.logger?.info("[VSS] Re-hydrated channel state from durable replica (local had none)");
+      return true;
+    } catch (e) {
+      this.logger?.warn(`[VSS] Re-hydrate skipped (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+      return false;
     }
   }
 

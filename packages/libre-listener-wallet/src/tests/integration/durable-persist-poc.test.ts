@@ -193,6 +193,23 @@ async function fundZeroConfChannel(wallet: LibreListenerWallet): Promise<string>
   return nodeId;
 }
 
+// The payer (libre-lnd) payment status for a given payment hash, or undefined if not found.
+// Used as the pause-proof PREMISE: while the wallet's durable monitor-persist is HELD, the wallet
+// never sends its revoke_and_ack, so the payer's HTLC stays IN_FLIGHT (verified empirically: the
+// HTLC doesn't even reach LND's channel `pending_htlcs`/`num_updates` because it's never
+// irrevocably committed — IN_FLIGHT on the payer is the reliable "arrived and stuck" signal).
+function payerPaymentStatus(paymentHash: string): string | undefined {
+  try {
+    const payments = JSON.parse(runCmd(`${LNCLI} listpayments --include_incomplete`)).payments || [];
+    return payments.find((p: any) => p.payment_hash === paymentHash)?.status;
+  } catch {
+    return undefined;
+  }
+}
+function decodePaymentHash(invoice: string): string {
+  return JSON.parse(runCmd(`${LNCLI} decodepayreq ${invoice}`)).payment_hash;
+}
+
 describe("Layer C durable-persist gate (integration)", () => {
   beforeAll(async () => {
     mswServer.listen({ onUnhandledRequest: "bypass" });
@@ -209,7 +226,7 @@ describe("Layer C durable-persist gate (integration)", () => {
   afterEach(() => mswServer.resetHandlers());
   afterAll(() => mswServer.close());
 
-  it("opens a channel and settles a keysend with the durable persister (reconcile works)", async () => {
+  it("opens a channel and receives an inbound payment with the durable persister (reconcile works)", async () => {
     const db = new Map<string, string>();
     const wallet = newWallet(makeStorage(db));
 
@@ -219,18 +236,20 @@ describe("Layer C durable-persist gate (integration)", () => {
     };
     wallet.addEventListener(claimListener);
 
-    await fundZeroConfChannel(wallet);
+    try {
+      await fundZeroConfChannel(wallet);
 
-    const lsp = { name: "libre-lnd", pubkey: lspPubkey, connection_string: `${lspPubkey}@127.0.0.1:9735`, api_url: lspApiUrl, protocols: ["lsps2" as const] };
-    const invoice = await wallet.requestLSPS2Invoice({ amountSats: 20000, description: "Layer C reconcile", lsp });
-    const payPromise = runCmdAsync(`${LNCLI} payinvoice --force --pay_req ${invoice}`).catch(() => {});
-    for (let i = 0; i < 30 && !paymentClaimed; i++) await new Promise((r) => setTimeout(r, 500));
-    expect(paymentClaimed).toBe(true);
-    runCmd(`${BCLI} generatetoaddress 1 ${MINE_ADDR}`);
-    await payPromise;
-
-    wallet.removeEventListener(claimListener);
-    await wallet.stop();
+      const lsp = { name: "libre-lnd", pubkey: lspPubkey, connection_string: `${lspPubkey}@127.0.0.1:9735`, api_url: lspApiUrl, protocols: ["lsps2" as const] };
+      const invoice = await wallet.requestLSPS2Invoice({ amountSats: 20000, description: "Layer C reconcile", lsp });
+      const payPromise = runCmdAsync(`${LNCLI} payinvoice --force --pay_req ${invoice}`).catch(() => {});
+      for (let i = 0; i < 30 && !paymentClaimed; i++) await new Promise((r) => setTimeout(r, 500));
+      expect(paymentClaimed).toBe(true);
+      runCmd(`${BCLI} generatetoaddress 1 ${MINE_ADDR}`);
+      await payPromise;
+    } finally {
+      wallet.removeEventListener(claimListener);
+      if (wallet.status() === "Running") await wallet.stop();
+    }
   }, 120_000);
 
   it("does NOT advance channel state while the durable flush is blocked (InProgress honoured)", async () => {
@@ -254,50 +273,73 @@ describe("Layer C durable-persist gate (integration)", () => {
     };
     wallet.addEventListener(listener);
 
-    await fundZeroConfChannel(wallet);
+    try {
+      await fundZeroConfChannel(wallet);
 
-    const lsp = { name: "libre-lnd", pubkey: lspPubkey, connection_string: `${lspPubkey}@127.0.0.1:9735`, api_url: lspApiUrl, protocols: ["lsps2" as const] };
-    const PAY_SATS = 4321; // distinct from the reconcile test's amount to avoid crosstalk
-    const invoice = await wallet.requestLSPS2Invoice({ amountSats: PAY_SATS, description: "Layer C pause-proof", lsp });
+      const lsp = { name: "libre-lnd", pubkey: lspPubkey, connection_string: `${lspPubkey}@127.0.0.1:9735`, api_url: lspApiUrl, protocols: ["lsps2" as const] };
+      const PAY_SATS = 4321; // distinct from the reconcile test's amount to avoid crosstalk
+      const invoice = await wallet.requestLSPS2Invoice({ amountSats: PAY_SATS, description: "Layer C pause-proof", lsp });
+      const paymentHash = decodePaymentHash(invoice);
 
-    // --- Engage the durability gate: every subsequent commit to this wallet's storage hangs, so
-    // the durable ack (channel_monitor_updated) that would unblock LDK is withheld indefinitely
-    // until release() is called. ---
-    holdable.hold();
+      // --- Engage the durability gate: every subsequent commit to this wallet's storage hangs, so
+      // the durable ack (channel_monitor_updated) that would unblock LDK is withheld indefinitely
+      // until release() is called. ---
+      holdable.hold();
 
-    const payPromise = runCmdAsync(`${LNCLI} payinvoice --force --pay_req ${invoice}`).catch(() => {});
+      const payPromise = runCmdAsync(`${LNCLI} payinvoice --force --pay_req ${invoice}`).catch(() => {});
 
-    // --- Bounded wait WHILE BLOCKED: LDK must NOT advance far enough to tell us this payment is
-    // claimable. If it does, InProgress is being ignored by the binding and Layer C provides no
-    // protection. ---
-    for (let i = 0; i < 20 && !paymentClaimable; i++) {
-      await new Promise((r) => setTimeout(r, 500));
+      // --- PREMISE CHECK (self-contained): confirm the payment actually LEFT the payer and is stuck
+      // IN_FLIGHT while storage is held. Without this, "not claimable within 10s" could be a compound
+      // false-pass (binding ignores InProgress AND the payment is merely slow/never-sent). An
+      // IN_FLIGHT-and-not-settling payment proves the HTLC reached the wallet and is stuck at the held
+      // monitor-persist — so the not-claimable assertion below is a genuine PAUSE, not latency.
+      let sawInFlight = false;
+      for (let i = 0; i < 16 && !sawInFlight; i++) { // up to ~8s, inside the 10s hold window
+        await new Promise((r) => setTimeout(r, 500));
+        if (payerPaymentStatus(paymentHash) === "IN_FLIGHT") sawInFlight = true;
+      }
+      console.log(`[pause-proof] payer payment IN_FLIGHT while storage held: ${sawInFlight} (status=${payerPaymentStatus(paymentHash)})`);
+      expect(
+        sawInFlight,
+        "Pause-proof PREMISE NOT MET: the payment never reached IN_FLIGHT on the payer while storage " +
+        "was held — the HTLC didn't reach the parked monitor-persist, so 'not claimable' would be " +
+        "meaningless. Cannot prove the pause; investigate the harness."
+      ).toBe(true);
+
+      // --- Bounded wait WHILE BLOCKED: with the HTLC confirmed parked, LDK must NOT advance far
+      // enough to tell us this payment is claimable. If it does, InProgress is being ignored by the
+      // binding and Layer C provides no protection. ---
+      for (let i = 0; i < 20 && !paymentClaimable; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      expect(
+        paymentClaimable,
+        "Layer C GATE FAILURE: Event_PaymentClaimable fired (LDK advanced channel state) WHILE the " +
+        "durable flush was blocked (channel_monitor_updated was withheld) AND the HTLC was confirmed " +
+        "parked. This means the WASM binding does NOT honour ChannelMonitorUpdateStatus::InProgress. " +
+        "Layer C provides no protection on this binding; revert the index.ts wiring and escalate."
+      ).toBe(false);
+
+      // --- Release the gate: the withheld ack can now land, and LDK should proceed. ---
+      holdable.release();
+
+      for (let i = 0; i < 60 && !paymentClaimedFinal; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      expect(
+        paymentClaimedFinal,
+        "The payment never reached Event_PaymentClaimed even after the durable flush was released — " +
+        "either the reconcile path is broken or the payment failed for an unrelated reason."
+      ).toBe(true);
+
+      // Cross-check from the payer's side too: LND's own payinvoice call should have completed.
+      runCmd(`${BCLI} generatetoaddress 1 ${MINE_ADDR}`);
+      await payPromise;
+    } finally {
+      // Ensure a held gate can never block teardown, even on an early assertion failure.
+      holdable.release();
+      wallet.removeEventListener(listener);
+      if (wallet.status() === "Running") await wallet.stop();
     }
-    expect(
-      paymentClaimable,
-      "Layer C GATE FAILURE: Event_PaymentClaimable fired (LDK advanced channel state) WHILE the " +
-      "durable flush was blocked (channel_monitor_updated was withheld). This means the WASM " +
-      "binding does NOT honour ChannelMonitorUpdateStatus::InProgress. Layer C provides no " +
-      "protection on this binding; revert the index.ts wiring and escalate."
-    ).toBe(false);
-
-    // --- Release the gate: the withheld ack can now land, and LDK should proceed. ---
-    holdable.release();
-
-    for (let i = 0; i < 60 && !paymentClaimedFinal; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    expect(
-      paymentClaimedFinal,
-      "The payment never reached Event_PaymentClaimed even after the durable flush was released — " +
-      "either the reconcile path is broken or the payment failed for an unrelated reason."
-    ).toBe(true);
-
-    // Cross-check from the payer's side too: LND's own payinvoice call should have completed.
-    runCmd(`${BCLI} generatetoaddress 1 ${MINE_ADDR}`);
-    await payPromise;
-
-    wallet.removeEventListener(listener);
-    await wallet.stop();
   }, 120_000);
 });

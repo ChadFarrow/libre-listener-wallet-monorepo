@@ -6,7 +6,7 @@ import {
   type SecureStorageProvider,
   type ChannelInfo,
 } from "@libre/listener-wallet";
-import { zeroConfTrustedPubkeys } from "@libre/shared";
+import { zeroConfTrustedPubkeys, acquireWebNodeLock, nodeLockName } from "@libre/shared";
 import type { BudgetRenewal, NwcMethod } from "@libre/shared";
 import {
   dbNameForNetwork,
@@ -152,6 +152,8 @@ export class WalletController {
       } as unknown as ConstructorParameters<typeof LibreListenerWallet>[0]["config"],
       storage,
       socketProvider,
+      // Per-origin single-node lock: only one tab/window may run this network's node at a time.
+      acquireRunLock: () => acquireWebNodeLock(nodeLockName(dbNameForNetwork(cfg.network))),
       // Base-aware so the build works at a domain root (Cloudflare) or a project subpath.
       wasmUrl: `${import.meta.env.BASE_URL}liblightningjs.wasm`,
       logger: {

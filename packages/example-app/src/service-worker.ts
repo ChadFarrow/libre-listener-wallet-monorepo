@@ -1,5 +1,5 @@
 import { LibreListenerWallet, IndexedDBStorageProvider } from "@libre/listener-wallet";
-import { bridgeTargetUrl } from "@libre/shared";
+import { bridgeTargetUrl, isNodeAlreadyRunningError, acquireWebNodeLock, nodeLockName } from "@libre/shared";
 import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 import { resolveSwConfig } from "./core/sw-config";
 
@@ -109,7 +109,10 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
       info: (msg, ...args) => console.log("[SW LDK INFO]", msg, ...args),
       warn: (msg, ...args) => console.warn("[SW LDK WARN]", msg, ...args),
       error: (msg, ...args) => console.error("[SW LDK ERROR]", msg, ...args),
-    }
+    },
+    // Per-origin single-node lock: if the page's tab holds the node, the SW must not build a second
+    // node over the same storage — it should quietly skip offline processing instead.
+    acquireRunLock: () => acquireWebNodeLock(nodeLockName(dbNameForNetwork(activeNetwork))),
   });
 
   let processed = false;
@@ -136,6 +139,10 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
 
   } catch (err: any) {
     console.error("[SW] Error during offline payment processing:", err.message || err);
+    if (isNodeAlreadyRunningError(err)) {
+      console.log("[SW] App is open (holds the node lock) — skipping offline processing.");
+      return; // page owns the node; do NOT show a fallback notification
+    }
   } finally {
     console.log("[SW] Stopping background wallet node...");
     try {

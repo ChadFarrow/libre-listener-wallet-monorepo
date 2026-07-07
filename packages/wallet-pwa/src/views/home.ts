@@ -11,6 +11,7 @@ import {
   buildAllowedMethods,
   expiryFromDays,
   isChannelStateRegressionError,
+  isNodeAlreadyRunningError,
 } from "@libre/shared";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -96,6 +97,10 @@ export function initHome(ctx: AppContext): void {
           "err"
         );
         return; // skip the trailing refresh() so the panel isn't re-hidden
+      }
+      if (isNodeAlreadyRunningError(e)) {
+        setMsg("msg", "This wallet is already running in another tab or window — close it and try again.", "err");
+        return;
       }
       setMsg("msg", (e as Error).message, "err");
     }

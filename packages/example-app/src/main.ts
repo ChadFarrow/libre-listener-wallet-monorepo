@@ -6,7 +6,7 @@ import {
   seedHexToMnemonic,
 } from "@libre/listener-wallet";
 import { resolveSeedInput } from "./core/seed-input";
-import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl, channelConfLabel, lsps1OrderStatus, zeroConfTrustedPubkeys, isChannelStateRegressionError } from "@libre/shared";
+import { LSPS1_REST_PROVIDERS, bridgeTargetUrl, mempoolTxUrl, channelConfLabel, lsps1OrderStatus, zeroConfTrustedPubkeys, isChannelStateRegressionError, isNodeAlreadyRunningError, acquireWebNodeLock, nodeLockName } from "@libre/shared";
 import {
   formatOpeningFee,
   validateAmountForProvider,
@@ -641,6 +641,8 @@ startNodeBtn.addEventListener("click", async () => {
       storage,
       socketProvider: new BrowserWebSocketStreamProvider(),
       wasmUrl: `${import.meta.env.BASE_URL}liblightningjs.wasm`,
+      // Per-origin single-node lock: only one tab/window may run this network's node at a time.
+      acquireRunLock: () => acquireWebNodeLock(nodeLockName(dbNameForNetwork(selectedNetwork))),
       logger: {
         info: (msg: string, ...args: any[]) => {
           console.log(msg, ...args);
@@ -731,7 +733,9 @@ startNodeBtn.addEventListener("click", async () => {
       }
     }
   } catch (err: any) {
-    if (isChannelStateRegressionError(err)) {
+    if (isNodeAlreadyRunningError(err)) {
+      appendLog("[ERROR] This wallet is already running in another tab/window.", "error");
+    } else if (isChannelStateRegressionError(err)) {
       const msg = "This wallet's channel state is behind what it durably reached — starting now would force-close your channels. Restore from your latest backup before starting.";
       appendLog(`[ERROR] ${msg}`, "error");
       restoreBanner.textContent = msg;

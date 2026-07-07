@@ -8,6 +8,7 @@ import {
   buildAllowedMethods,
   expiryFromDays,
   isChannelStateRegressionError,
+  isNodeAlreadyRunningError,
 } from "@libre/shared";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -92,6 +93,11 @@ $("start").addEventListener("click", async () => {
         "err"
       );
       return; // skip the trailing refresh()
+    }
+    if (isNodeAlreadyRunningError(e)) {
+      setMsg("msg", "This wallet is already running in another tab or window — close it and try again.", "err");
+      void refresh();
+      return;
     }
     setMsg("msg", e.message, "err");
   }

@@ -7,7 +7,7 @@ import {
   type ChannelInfo,
   type PaymentRecord,
 } from "@libre/listener-wallet";
-import { zeroConfTrustedPubkeys } from "@libre/shared";
+import { zeroConfTrustedPubkeys, acquireWebNodeLock, nodeLockName } from "@libre/shared";
 import type { BudgetRenewal, NwcMethod } from "@libre/shared";
 import {
   dbNameForNetwork,
@@ -146,6 +146,9 @@ export class WalletHost implements WalletRpc {
       storage,
       socketProvider,
       wasmUrl: chrome.runtime.getURL("liblightningjs.wasm"),
+      // Per-origin single-node lock: only one context (offscreen document) may run this network's
+      // node at a time — guards against a stray second offscreen document racing the same storage.
+      acquireRunLock: () => acquireWebNodeLock(nodeLockName(dbNameForNetwork(cfg.network))),
       logger: {
         info: (m, ...a) => console.log("[LDK]", m, ...a),
         warn: (m, ...a) => console.warn("[LDK]", m, ...a),

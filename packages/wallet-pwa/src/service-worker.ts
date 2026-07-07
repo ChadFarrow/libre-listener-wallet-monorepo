@@ -200,11 +200,11 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
     ]);
 
   } catch (err: any) {
-    console.error("[SW] Error during offline payment processing:", err.message || err);
     if (isNodeAlreadyRunningError(err)) {
       console.log("[SW] App is open (holds the node lock) — skipping offline processing.");
       return; // page owns the node; do NOT show a fallback notification
     }
+    console.error("[SW] Error during offline payment processing:", err.message || err);
     if (isChannelStateRegressionError(err)) {
       await self.registration.showNotification("Libre Listener Wallet", {
         body: "This wallet's channel state is behind what it durably reached — open the app and restore from backup before starting the node.",

@@ -138,11 +138,11 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
     ]);
 
   } catch (err: any) {
-    console.error("[SW] Error during offline payment processing:", err.message || err);
     if (isNodeAlreadyRunningError(err)) {
       console.log("[SW] App is open (holds the node lock) — skipping offline processing.");
       return; // page owns the node; do NOT show a fallback notification
     }
+    console.error("[SW] Error during offline payment processing:", err.message || err);
   } finally {
     console.log("[SW] Stopping background wallet node...");
     try {

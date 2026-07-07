@@ -296,6 +296,10 @@ export function initHome(ctx: AppContext): void {
       setMsg("restore-msg", "Wallet restored", "ok");
       void refresh();
     } catch (e) {
+      if (isNodeAlreadyRunningError(e)) {
+        setMsg("restore-msg", "This wallet is already running in another tab or window — close it and try again.", "err");
+        return;
+      }
       setMsg("restore-msg", (e as Error).message, "err");
     }
   });
@@ -322,6 +326,10 @@ export function initHome(ctx: AppContext): void {
       setMsg("restore-msg", "Wallet restored", "ok");
       void refresh();
     } catch (e) {
+      if (isNodeAlreadyRunningError(e)) {
+        setMsg("restore-msg", "This wallet is already running in another tab or window — close it and try again.", "err");
+        return;
+      }
       setMsg("restore-msg", (e as Error).message, "err");
     }
   });
@@ -337,6 +345,10 @@ export function initHome(ctx: AppContext): void {
       setMsg("restore-msg", "Wallet restored from Drive", "ok");
       void refresh();
     } catch (e) {
+      if (isNodeAlreadyRunningError(e)) {
+        setMsg("restore-msg", "This wallet is already running in another tab or window — close it and try again.", "err");
+        return;
+      }
       setMsg("restore-msg", (e as Error).message, "err");
     }
   });

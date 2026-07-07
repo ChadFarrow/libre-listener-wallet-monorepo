@@ -1191,6 +1191,10 @@ export class LibreListenerWallet {
     }
     this.logger?.info("Stopping LDK Node...");
 
+    const releaseRunLock = this.releaseRunLock;
+    this.releaseRunLock = undefined;
+
+    try {
     // Stop Nostr Wallet Connect listeners
     await this.nwc.stop();
 
@@ -1242,9 +1246,9 @@ export class LibreListenerWallet {
     this.ldkLogger = undefined;
 
     this.isRunning = false;
-
-    this.releaseRunLock?.();
-    this.releaseRunLock = undefined;
+    } finally {
+      releaseRunLock?.();
+    }
   }
 
   async sync(): Promise<void> {

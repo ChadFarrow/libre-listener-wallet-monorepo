@@ -32,6 +32,12 @@ describe("vss-protobuf KeyValue", () => {
     expect(hex(bytes)).toBe("10 ac 02");
   });
 
+  it("encodes the blind-write version -1 as protobuf's 10-byte two's-complement varint", () => {
+    // int64 -1 == unsigned 2^64-1 == nine 0xff bytes then 0x01 (what LDK's VssStore sends).
+    const bytes = encodeKeyValue({ key: "", version: -1, value: new Uint8Array(0) });
+    expect(hex(bytes)).toBe("10 ff ff ff ff ff ff ff ff ff 01");
+  });
+
   it("round-trips through decode, including a large version", () => {
     const kv = { key: "channel_manager", version: 9007199254740000, value: Uint8Array.from([1, 2, 3, 255, 0]) };
     const decoded = decodeKeyValue(encodeKeyValue(kv));

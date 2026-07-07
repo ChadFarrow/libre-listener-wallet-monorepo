@@ -41,9 +41,10 @@ const WIRE_LEN = 2;
 class Writer {
   private out: number[] = [];
 
+  // Unsigned varint for tags and length prefixes (always small, non-negative).
   private varint(nRaw: number): void {
     // Use division/modulo (not bitwise): JS bitwise ops coerce to int32, so `n & 0x7f` would
-    // corrupt any value above 2^31. This way versions up to 2^53 encode correctly.
+    // corrupt any value above 2^31. This way lengths up to 2^53 encode correctly.
     let n = nRaw;
     if (n < 0) throw new Error("vss-protobuf: negative varint not supported");
     while (n > 0x7f) {
@@ -53,6 +54,18 @@ class Writer {
     this.out.push(n);
   }
 
+  // int64 varint via BigInt so the FULL signed 64-bit range encodes correctly — including the
+  // blind-write sentinel version = -1 (encoded as the 10-byte two's-complement all-ones varint,
+  // exactly like protobuf/prost), which LDK's own VssStore sends to skip the server version check.
+  private varintI64(vRaw: bigint): void {
+    let u = vRaw < 0n ? vRaw + (1n << 64n) : vRaw; // two's-complement into unsigned 64-bit
+    while (u > 0x7fn) {
+      this.out.push(Number(u & 0x7fn) | 0x80);
+      u >>= 7n;
+    }
+    this.out.push(Number(u));
+  }
+
   private tag(field: number, wire: number): void {
     this.varint(field * 8 + wire);
   }
@@ -60,14 +73,14 @@ class Writer {
   int64(field: number, value: number): void {
     if (value === 0) return; // proto3 default — omit
     this.tag(field, WIRE_VARINT);
-    this.varint(value);
+    this.varintI64(BigInt(value));
   }
 
   // Like int64 but for `optional` fields: encodes even a 0 when explicitly provided.
   optionalInt64(field: number, value: number | undefined): void {
     if (value === undefined) return;
     this.tag(field, WIRE_VARINT);
-    this.varint(value);
+    this.varintI64(BigInt(value));
   }
 
   string(field: number, value: string | undefined): void {

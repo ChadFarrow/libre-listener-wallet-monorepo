@@ -105,6 +105,8 @@ import { NwcManager } from "./nwc-manager";
 import { IndexedDBStorageProvider } from "./indexed-db-storage";
 import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayload } from "./state-backup";
 import { BACKUP_DIRECT_KEYS } from "./backup-keys";
+import { VssClient } from "./vss-client";
+import { VssMirror, deriveVssStoreId } from "./vss-mirror";
 import { reconnectDelayMs, shouldRedialNow } from "./peer-reconnect";
 import { normalizeBackupSecret } from "./seed-phrase";
 import { PaymentLogger, boostNoteFromCustomRecords } from "./payment-log";
@@ -384,6 +386,9 @@ export class LibreListenerWallet {
   public nwc: NwcManager;
   // Forward-only payment history (source of truth for getPayments + NWC list_transactions).
   private paymentLog: PaymentLogger;
+  // Optional VSS durable-replica mirror (built in start() only when config.vssUrl is set). Best-effort
+  // off-device backup of the encrypted state envelope; never gates LDK. See vss-mirror.ts.
+  private vssMirror?: VssMirror;
 
   constructor(options: {
     config: WalletConfig;
@@ -891,6 +896,26 @@ export class LibreListenerWallet {
 
     this.isRunning = true;
 
+    // VSS durable-replica mirror — opt-in via config.vssUrl (unset = disabled, no behavior change).
+    // Best-effort off-device backup of the encrypted state envelope after each state change; it
+    // NEVER gates the node. Design A: a blind write of the same slim, seed-encrypted envelope the
+    // Drive backup already produces, so the server only sees ciphertext (key-isolation guardrail).
+    if (this.config.vssUrl) {
+      try {
+        const seedForStore = await this.storage.getItem("ldk_seed");
+        if (seedForStore) {
+          const storeId = await deriveVssStoreId(seedForStore);
+          const vssClient = new VssClient({ baseUrl: this.config.vssUrl, storeId, logger: this.logger });
+          this.vssMirror = new VssMirror(vssClient, () => this.exportState(), { logger: this.logger });
+          this.vssMirror.flushNow(); // seed VSS with current state without waiting for a change
+          this.logger?.info(`[VSS] Durable-replica mirror enabled (store ${storeId.slice(0, 8)}…)`);
+        }
+      } catch (e) {
+        // Never let VSS setup break startup.
+        this.logger?.warn(`[VSS] Mirror setup failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
     // Kick off Rapid Gossip Sync in the background so the network graph populates
     // (enabling multi-hop routing) without blocking node startup, then refresh
     // periodically. No-op unless rapidGossipSyncUrl is configured.
@@ -1013,6 +1038,8 @@ export class LibreListenerWallet {
         this.logger?.error(`onStateChanged listener error: ${e instanceof Error ? e.message : e}`);
       }
     }
+    // Mirror the new state to VSS (debounced, best-effort; no-op unless config.vssUrl is set).
+    this.vssMirror?.schedule();
   }
 
   /** Advance the persisted per-channel high-water from the live (shared-by-reference) monitors.
@@ -1193,6 +1220,10 @@ export class LibreListenerWallet {
 
     const releaseRunLock = this.releaseRunLock;
     this.releaseRunLock = undefined;
+
+    // Stop the VSS mirror (cancels any pending debounced upload).
+    this.vssMirror?.stop();
+    this.vssMirror = undefined;
 
     try {
     // Stop Nostr Wallet Connect listeners
@@ -2069,6 +2100,7 @@ export { LspsClient } from "./lsps-client";
 export { Lsps1RestClient, clampExpiryBlocks, isOrderComplete, isOrderFailed, orderInvoice } from "./lsps1-rest-client";
 export { VssClient, VssError, isVssConflict, isVssNotFound } from "./vss-client";
 export type { VssClientConfig, VssKeyValue, ListKeyVersionsResult } from "./vss-client";
+export { VssMirror, deriveVssStoreId, VSS_STATE_BACKUP_KEY } from "./vss-mirror";
 export { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
 export {
   seedHexToMnemonic,

@@ -1,0 +1,111 @@
+name: Update extension "latest" download
+
+# Keeps ONE stable download link current on every push to master, so a link you've shared with
+# people always serves the newest build without you cutting a version tag:
+#
+#   https://github.com/ChadFarrow/libre-listener-wallet-monorepo/releases/latest/download/libre-listener-wallet-extension.zip
+#   https://github.com/ChadFarrow/libre-listener-wallet-monorepo/releases/download/browser-extension-latest/libre-listener-wallet-extension.zip
+#
+# Both point at the same rolling release `browser-extension-latest`, whose zip asset is replaced
+# in place on every push (the asset filename never changes, so the URL never changes). The
+# versioned `browser-extension-vX.Y.Z` releases (release-extension.yml) still exist as milestone
+# cuts; this just keeps a moving "current build" alongside them.
+#
+# Same build + gates as release-extension.yml — an unverified zip is never published.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "packages/browser-extension/**"
+      - "packages/libre-listener-wallet/**"
+      - "packages/shared/**"
+      - ".github/workflows/release-extension-latest.yml"
+  workflow_dispatch:
+
+# Default the workflow token to read-only; the job elevates to write to update the release.
+permissions:
+  contents: read
+
+# A newer push supersedes an in-flight build of the same rolling asset.
+concurrency:
+  group: extension-latest
+  cancel-in-progress: true
+
+jobs:
+  rolling:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # update the rolling release / replace its asset
+    steps:
+      # Third-party actions pinned to a full commit SHA (supply-chain safety); the
+      # trailing comment records the human-readable version.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # need tags for the version stamp (git describe)
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Workspace deps FIRST (same order as ci.yml / release-extension.yml): the extension's
+      # typecheck/tests resolve @libre/listener-wallet types from its dist/.
+      - name: Build workspace deps
+        run: pnpm build # turbo: shared → SDK → …
+
+      # Never ship an unverified extension zip: gate on lint, storage contract, typecheck, tests.
+      - name: Lint
+        run: pnpm --filter @libre/browser-extension lint
+      - name: Storage-contract guard
+        run: pnpm check:storage
+      - name: Typecheck
+        run: pnpm --filter @libre/browser-extension typecheck
+      - name: Unit tests
+        run: pnpm --filter @libre/browser-extension test
+
+      - name: Build extension
+        run: pnpm --filter @libre/browser-extension build # → packages/browser-extension/dist
+
+      # Rolling version = <latest browser-extension-vX.Y.Z> + commits since it, e.g. 0.6.0.14.
+      # Chrome allows up to four dot-separated integers, so each push gets a distinct, ordered
+      # version — a reloaded unpacked install shows it advanced, and the version traces to a commit.
+      - name: Stamp rolling manifest version
+        run: |
+          BASE=$(git describe --tags --match 'browser-extension-v*' --abbrev=0 2>/dev/null \
+                 | sed 's/^browser-extension-v//')
+          if [ -z "$BASE" ]; then BASE=0.0.0; fi
+          COUNT=$(git rev-list "browser-extension-v$BASE"..HEAD --count 2>/dev/null || echo 0)
+          VERSION="$BASE.$COUNT"
+          MANIFEST=packages/browser-extension/dist/manifest.json
+          jq --arg v "$VERSION" '.version = $v' "$MANIFEST" > /tmp/manifest.json
+          mv /tmp/manifest.json "$MANIFEST"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Stamped rolling manifest version $VERSION"
+
+      - name: Package unpacked extension
+        run: |
+          mkdir -p out/libre-listener-wallet-extension
+          cp -r packages/browser-extension/dist/* out/libre-listener-wallet-extension/
+          (cd out && zip -r ../libre-listener-wallet-extension.zip libre-listener-wallet-extension)
+
+      # Upsert the single rolling release and replace its asset in place (--clobber keeps the
+      # download URL identical). Created as the "latest" (non-prerelease) release so the plain
+      # /releases/latest/download/ link resolves to it too.
+      - name: Update rolling "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=browser-extension-latest
+          NOTES="Rolling build of the Libre Listener Wallet extension — auto-updated on every push to master. This download link stays constant; it always serves the newest build (currently ${VERSION}, commit ${GITHUB_SHA}). For pinned milestone versions see the browser-extension-vX.Y.Z releases.
+
+          **Install:** download \`libre-listener-wallet-extension.zip\`, unzip it, open \`chrome://extensions\`, turn on **Developer mode**, click **Load unpacked**, and select the unzipped \`libre-listener-wallet-extension\` folder."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" libre-listener-wallet-extension.zip --clobber
+            gh release edit "$TAG" --title "Latest extension build (auto-updated)" --notes "$NOTES" --latest
+          else
+            gh release create "$TAG" libre-listener-wallet-extension.zip \
+              --title "Latest extension build (auto-updated)" --notes "$NOTES" --latest
+          fi

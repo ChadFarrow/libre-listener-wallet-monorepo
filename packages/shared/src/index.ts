@@ -24,6 +24,12 @@ export interface WalletConfig {
   // 0-conf open (see trustedZeroConfPeers) locks in at 0 regardless. LDK's own default is 6;
   // we default to 3 (e.g. Olympus's own required depth). Lower bound 1. Default 3.
   minChannelConfirmations?: number;
+  // Base URL of an LDK Versioned Storage Service (`lightningdevkit/vss-server`) used as a
+  // versioned, durable, off-device mirror of channel-critical state. Unset (default) = VSS
+  // disabled; the wallet runs purely on local IndexedDB as before. When set, the SDK mirrors
+  // channel-critical keys there (seed-encrypted) so a lost/stale local replica can be re-hydrated
+  // — or rejected by the server's per-key version check — instead of force-closing. See vss-client.ts.
+  vssUrl?: string;
 }
 
 export interface NWCRequest {

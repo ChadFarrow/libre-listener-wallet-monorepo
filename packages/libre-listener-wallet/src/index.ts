@@ -2067,6 +2067,8 @@ export type { WalletConfig, PaymentRecord } from "@libre/shared";
 export { PaymentLogger, boostNoteFromCustomRecords, TX_KEY_PREFIX } from "./payment-log";
 export { LspsClient } from "./lsps-client";
 export { Lsps1RestClient, clampExpiryBlocks, isOrderComplete, isOrderFailed, orderInvoice } from "./lsps1-rest-client";
+export { VssClient, VssError, isVssConflict, isVssNotFound } from "./vss-client";
+export type { VssClientConfig, VssKeyValue, ListKeyVersionsResult } from "./vss-client";
 export { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
 export {
   seedHexToMnemonic,

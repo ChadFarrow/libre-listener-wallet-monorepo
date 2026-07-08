@@ -54,7 +54,6 @@ export function initSettings(ctx: AppContext): void {
       const c = await controller.getConfig();
       currentNetwork = c.network || "mainnet";
       $<HTMLSelectElement>("network").value = currentNetwork;
-      $("reset-network").textContent = currentNetwork;
       $<HTMLInputElement>("esplora").value = c.esploraUrl || "";
       $<HTMLInputElement>("bridge").value = c.bridgeUrl || defaultBridgeUrl(currentNetwork) || "";
       $<HTMLInputElement>("rgs").value = c.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(currentNetwork) || "";
@@ -468,20 +467,29 @@ export function initSettings(ctx: AppContext): void {
   // ---- reset wallet ----
   // guardedClick: held disabled through the confirm modal + delete so a double-tap can't re-enter.
   guardedClick($<HTMLButtonElement>("reset-wallet"), async () => {
-    const network = $("reset-network").textContent || "this network";
     const ok = await confirmModal({
-      title: `Delete the ${network} wallet?`,
+      title: "Delete all wallet data?",
       body:
-        `This permanently erases the seed, channel state, and monitors for the ${network} wallet from ` +
-        `this browser. Any funds in a live channel will be lost unless you have a backup. This cannot be undone.`,
-      confirmLabel: "Delete wallet",
+        "This permanently erases EVERY wallet on this device — every network's seed, channel state, " +
+        "monitors, backups, and app preferences — then reloads for a clean slate. Any funds " +
+        "in a live channel will be lost unless you have a backup. This cannot be undone.",
+      confirmLabel: "Delete everything",
       danger: true,
     });
     if (!ok) return;
-    setMsg("reset-msg", "Deleting…");
+    setMsg("reset-msg", "Deleting everything…");
     try {
-      const r = await controller.resetWallet();
-      setMsg("reset-msg", `Wallet on ${r.network} deleted. Open the Wallet tab to create or restore.`, "ok");
+      await controller.resetWallet();
+      // Clear app-layer preferences too (auto-start/backup toggles, Drive hint, backed-up markers),
+      // then reload: a fresh page load drops the in-memory node and releases the per-origin node lock,
+      // guaranteeing a clean Create screen even if something was wedged.
+      try {
+        localStorage.clear();
+      } catch {
+        /* private mode / disabled storage — the DB wipe above is the important part */
+      }
+      setMsg("reset-msg", "Deleted. Reloading…", "ok");
+      location.reload();
     } catch (e) {
       setMsg("reset-msg", (e as Error).message, "err");
     }

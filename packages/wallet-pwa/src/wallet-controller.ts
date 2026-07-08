@@ -12,6 +12,7 @@ import {
   dbNameForNetwork,
   META_DB_NAME,
   ACTIVE_NETWORK_KEY,
+  SUPPORTED_NETWORKS,
 } from "./core/storage-namespace";
 import {
   parseConfig,
@@ -304,8 +305,10 @@ export class WalletController {
     }
   }
 
-  // Wipe the wallet for the active network. DESTRUCTIVE — any funds in a live channel are lost; the
-  // UI gates this behind an explicit confirmation. Leaves the network pointer + saved config intact.
+  // Wipe EVERYTHING — every network's wallet DB, the legacy un-namespaced DB, and the meta/active-
+  // network pointer — for a true clean slate (the UI also clears localStorage + reloads). DESTRUCTIVE:
+  // any funds in a live channel are lost; the UI gates this behind an explicit confirmation.
+  // Uses clear() per store rather than deleteDatabase, which can block on open connections.
   async resetWallet(): Promise<{ network: string }> {
     if (this.startingPromise) await this.startingPromise.catch(() => {});
     const network = await this.activeNetwork();
@@ -314,7 +317,16 @@ export class WalletController {
       await this.wallet.stop();
       this.wallet = undefined;
     }
-    await new IndexedDBStorageProvider(dbNameForNetwork(network)).clear();
+    const dbNames = [
+      ...SUPPORTED_NETWORKS.map(dbNameForNetwork),
+      "libre-wallet", // legacy un-namespaced DB (pre network-namespacing)
+      META_DB_NAME,
+    ];
+    for (const name of dbNames) {
+      await new IndexedDBStorageProvider(name)
+        .clear()
+        .catch((e) => console.warn(`[Reset] clearing ${name} failed:`, (e as Error)?.message || e));
+    }
     this.emit("state-changed");
     return { network };
   }

@@ -101,6 +101,11 @@ hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 }
 .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
 .stat .v { font-size: 16px; font-weight: 700; }
+/* Spendable / Receivable are the hero numbers — each spans the full width (stacked,
+   not side-by-side) so a large amount renders big on ONE line without wrapping, above
+   the smaller side-by-side Channels/Peers stats. */
+.stat.balance { grid-column: 1 / -1; padding: 12px 14px 14px; }
+.stat.balance .v { font-size: clamp(28px, 9vw, 36px); line-height: 1.1; white-space: nowrap; }
 
 .nodeid-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 .nodeid {

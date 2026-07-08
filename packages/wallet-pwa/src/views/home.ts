@@ -6,6 +6,7 @@ import { channelCountLabel } from "../core/stat-format";
 import { parseNwcLimit } from "../core/nwc-limit";
 import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
 import { computeChecklist, getSeedBackedUp, setSeedBackedUp } from "../core/onboarding";
+import { resolveSeedInput } from "../core/seed-input";
 import { guardedClick } from "../core/ui-helpers";
 import { driveRestore } from "../drive-integration";
 import {
@@ -436,6 +437,50 @@ export function initHome(ctx: AppContext): void {
     try {
       await driveRestore(controller, secret);
       setMsg("restore-msg", "Wallet restored from Drive", "ok");
+      void markBackedUp();
+      goToTab("home");
+      void refresh();
+    } catch (e) {
+      if (isNodeAlreadyRunningError(e)) {
+        setMsg("restore-msg", "This wallet is already running in another tab or window — close it and try again.", "err");
+        return;
+      }
+      setMsg("restore-msg", (e as Error).message, "err");
+    }
+  });
+
+  // Seed-only restore: no backup file, just the 24-word phrase or 64-hex seed. This brings back an
+  // EMPTY wallet (channels need a backup) — the same fresh-node path as createWallet, so it carries
+  // the force-close guard. guardedClick: a double-tap must not kick off two creates.
+  guardedClick($<HTMLButtonElement>("restore-seed-only"), async () => {
+    const raw = ($("restore-secret") as HTMLInputElement).value.trim();
+    if (!raw) {
+      setMsg("restore-msg", "Enter your recovery seed — a 24-word phrase or a 64-hex seed.", "err");
+      return;
+    }
+    const seedHex = resolveSeedInput(raw);
+    if (!seedHex) {
+      setMsg("restore-msg", "That isn't a valid recovery seed (24 words or 64 hex).", "err");
+      return;
+    }
+    // FORCE-CLOSE GUARD: a seed that already has a channel can't come back this way — importing it
+    // starts a fresh EMPTY node, and connecting the peer force-closes the real channel. A funded
+    // wallet must be restored from its backup file (which recovers the channels) instead.
+    const ok = await confirmModal({
+      title: "Only for a seed with no channel",
+      body:
+        "Restoring with just a seed starts a brand-new, EMPTY wallet. If this seed already has a " +
+        "channel, this will FORCE-CLOSE it once you connect. To bring back a funded wallet, cancel " +
+        "and restore from your backup file instead.",
+      confirmLabel: "This seed has no channel — restore",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!ok) return;
+    setMsg("restore-msg", "Restoring from seed…");
+    try {
+      await controller.createWallet({ seedHex });
+      setMsg("restore-msg", "Wallet restored from seed", "ok");
       void markBackedUp();
       goToTab("home");
       void refresh();

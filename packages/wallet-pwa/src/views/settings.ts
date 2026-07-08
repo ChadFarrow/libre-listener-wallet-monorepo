@@ -1,6 +1,7 @@
 import QRCode from "qrcode";
 import type { AppContext } from "../core/app-context";
-import { onControllerEvent } from "../core/events";
+import { emitControllerEvent, onControllerEvent } from "../core/events";
+import { setSeedBackedUp } from "../core/onboarding";
 import { confirmModal } from "../ui/confirm-modal";
 import { defaultBridgeUrl, defaultRapidGossipSyncUrl, parsePeerString } from "../core/wallet-config";
 import { downloadBackupName } from "../core/backup-name";
@@ -268,6 +269,19 @@ export function initSettings(ctx: AppContext): void {
   });
 
   // ---- backup: export + auto-download + Drive ----
+  // Any real backup action (view/copy the phrase, export a file, connect/sync Drive) satisfies the
+  // Home onboarding checklist's "Back up your recovery phrase" step. Emit so Home re-renders it.
+  async function markSeedBackedUp(): Promise<void> {
+    try {
+      const { network } = await controller.getState();
+      if (network) {
+        setSeedBackedUp(network);
+        emitControllerEvent("state-changed");
+      }
+    } catch {
+      // best-effort — the checklist just stays visible if we can't read the network.
+    }
+  }
   async function refreshBackupState() {
     const running = ctx.isRunning();
     ($("export") as HTMLButtonElement).disabled = !running;
@@ -292,6 +306,7 @@ export function initSettings(ctx: AppContext): void {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
       setMsg("backup-msg", `Downloaded ${name}. Store it safely.`, "ok");
+      void markSeedBackedUp();
     } catch (e) {
       setMsg("backup-msg", (e as Error).message, "err");
     }
@@ -324,6 +339,7 @@ export function initSettings(ctx: AppContext): void {
       await ensureDriveConnected();
       setMsg("backup-msg", "Drive connected", "ok");
       refreshDriveStatus();
+      void markSeedBackedUp();
     } catch (e) {
       setMsg("backup-msg", (e as Error).message, "err");
     }
@@ -333,6 +349,7 @@ export function initSettings(ctx: AppContext): void {
     try {
       const { network } = await driveBackupNow(controller);
       setMsg("backup-msg", `Backed up (${network}) to Google Drive`, "ok");
+      void markSeedBackedUp();
     } catch (e) {
       setMsg("backup-msg", (e as Error).message, "err");
     }
@@ -386,6 +403,7 @@ export function initSettings(ctx: AppContext): void {
         $<HTMLTextAreaElement>("seed-hex").classList.remove("phrase-blur");
         $("toggle-phrase-blur").textContent = "Hide";
         setMsg("phrase-msg", "Write these down in order and keep them offline.", "ok");
+        void markSeedBackedUp();
       } else {
         // Hide: re-blur AND wipe the secrets out of the DOM.
         clearPhraseFields();
@@ -407,6 +425,7 @@ export function initSettings(ctx: AppContext): void {
     try {
       await navigator.clipboard.writeText(value);
       setMsg("phrase-msg", `${label} copied to clipboard.`, "ok");
+      void markSeedBackedUp();
     } catch {
       setMsg("phrase-msg", "Copy failed.", "err");
     }

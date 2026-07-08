@@ -110,6 +110,13 @@ export function initHome(ctx: AppContext): void {
           usableChannels: s.usableChannels ?? 0,
         });
         renderChecklist(checklist);
+        // Surface a node-start failure right in the checklist (auto-start swallows it to a console
+        // log otherwise, so it looks like the node "just didn't start"). Cleared once running.
+        if (!running && s.startError) {
+          setMsg("checklist-msg", `The node didn't start: ${s.startError}`, "err");
+        } else {
+          setMsg("checklist-msg", "");
+        }
         // When setup is complete (checklist hidden) the Create tab shows an "all set" card instead —
         // but never while we're forcing the restore panel there.
         show($("create-complete"), !checklist.visible && !needsRestore);

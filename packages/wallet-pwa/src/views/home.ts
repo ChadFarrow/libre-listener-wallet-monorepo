@@ -8,6 +8,7 @@ import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
 import { computeChecklist, getSeedBackedUp, setSeedBackedUp } from "../core/onboarding";
 import { resolveSeedInput } from "../core/seed-input";
 import { guardedClick } from "../core/ui-helpers";
+import { formatOpeningFee } from "../core/lsps1-provider-ui";
 import { driveRestore } from "../drive-integration";
 import {
   parseBudgetRenewal,
@@ -16,6 +17,9 @@ import {
   expiryFromDays,
   isChannelStateRegressionError,
   isNodeAlreadyRunningError,
+  LSPS1_REST_PROVIDERS,
+  lsps1OrderStatus,
+  type Lsps1RestOrderResponse,
 } from "@libre/shared";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -150,7 +154,7 @@ export function initHome(ctx: AppContext): void {
         btn.addEventListener("click", () => {
           if (it.key === "backup") goTo("settings", "recovery-card");
           else if (it.key === "start") void startNode();
-          else if (it.key === "channel") goTo("settings", "lsps1-card");
+          else if (it.key === "channel") void orderQuickChannel();
         });
         body.appendChild(btn);
       }
@@ -504,6 +508,96 @@ export function initHome(ctx: AppContext): void {
       }
       setMsg("restore-msg", (e as Error).message, "err");
     }
+  });
+
+  // ---- one-tap "Get a channel" ----
+  // The checklist's Get-a-channel step places a FIXED order — 150k sats, ~3-month lease, from
+  // Megalith — and shows the pay QR right here, so the user never has to open Settings and pick a
+  // provider/amount/lease. Placing the order only fetches a quote + invoice; nothing is spent until
+  // they pay it. Megalith is the 150k-minimum, instant-0-conf mainnet LSP.
+  const QUICK_CHANNEL_SATS = 150000;
+  const QUICK_CHANNEL_LEASE_BLOCKS = 12960; // ~3 months (Megalith's max lease); clamped LSP-side
+  let quickChannelPollToken = 0;
+  let quickChannelBusy = false;
+
+  function pollQuickChannel(apiUrl: string, orderId: string): void {
+    const token = ++quickChannelPollToken;
+    const deadline = Date.now() + 15 * 60 * 1000;
+    const tick = async () => {
+      if (token !== quickChannelPollToken) return;
+      try {
+        const order = (await controller.getLSPS1Order(apiUrl, orderId)) as Lsps1RestOrderResponse;
+        if (token !== quickChannelPollToken) return;
+        const status = lsps1OrderStatus(order);
+        if (status === "completed") {
+          setMsg("quick-channel-msg", "🎉 Channel open! You can now receive payments.", "ok");
+          show($("quick-channel-qr"), false);
+          show($("quick-channel-invoice"), false);
+          show($("quick-channel-copy"), false);
+          void refresh();
+          return;
+        }
+        if (status === "failed") {
+          setMsg("quick-channel-msg", "Order failed — the LSP could not open the channel. No sats were kept.", "err");
+          return;
+        }
+        if (status === "paid") {
+          setMsg("quick-channel-msg", "✓ Payment received — opening your channel…", "ok");
+          show($("quick-channel-qr"), false);
+          void refresh();
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+      if (token === quickChannelPollToken && Date.now() < deadline) setTimeout(() => void tick(), 4000);
+    };
+    setTimeout(() => void tick(), 4000);
+  }
+
+  async function orderQuickChannel(): Promise<void> {
+    if (quickChannelBusy) return;
+    const provider = LSPS1_REST_PROVIDERS.megalith;
+    quickChannelBusy = true;
+    show($("quick-channel"), true);
+    show($("quick-channel-qr"), false);
+    show($("quick-channel-invoice"), false);
+    show($("quick-channel-copy"), false);
+    $("quick-channel-fee").textContent = "";
+    setMsg("quick-channel-msg", `Getting a quote from ${provider.name}…`);
+    // Bring the pay card into view — the checklist button that triggered this may be above the fold.
+    requestAnimationFrame(() => $("quick-channel").scrollIntoView({ behavior: "smooth", block: "center" }));
+    try {
+      const order = await controller.purchaseLSPS1Capacity({
+        amountSats: QUICK_CHANNEL_SATS,
+        apiUrl: provider.restBaseUrl,
+        providerName: provider.name,
+        channelExpiryBlocks: QUICK_CHANNEL_LEASE_BLOCKS,
+      });
+      $("quick-channel-fee").textContent =
+        `A ${QUICK_CHANNEL_SATS.toLocaleString()}-sat channel from ${provider.name} (~3 months). ` +
+        `${formatOpeningFee(order.feeTotalSat, QUICK_CHANNEL_SATS)} — scan or pay the invoice to open it.`;
+      const inv = $<HTMLTextAreaElement>("quick-channel-invoice");
+      inv.value = order.invoice;
+      show(inv, true);
+      show($("quick-channel-copy"), true);
+      try {
+        const qr = $<HTMLImageElement>("quick-channel-qr");
+        qr.src = await QRCode.toDataURL(order.invoice, { width: 220, margin: 1 });
+        show(qr, true);
+      } catch (qrErr) {
+        console.warn("[QuickChannel] could not render QR:", (qrErr as Error)?.message || qrErr);
+      }
+      setMsg("quick-channel-msg", "Order placed — pay the invoice to open your channel.", "ok");
+      pollQuickChannel(provider.restBaseUrl, order.orderId);
+    } catch (e) {
+      setMsg("quick-channel-msg", (e as Error).message, "err");
+    } finally {
+      quickChannelBusy = false;
+    }
+  }
+  $("quick-channel-copy").addEventListener("click", async () => {
+    await navigator.clipboard.writeText($<HTMLTextAreaElement>("quick-channel-invoice").value).catch(() => {});
+    setMsg("quick-channel-msg", "Invoice copied", "ok");
   });
 
   onControllerEvent(() => void refresh());

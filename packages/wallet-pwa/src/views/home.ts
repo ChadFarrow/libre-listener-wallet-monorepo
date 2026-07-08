@@ -71,6 +71,7 @@ export function initHome(ctx: AppContext): void {
       }
       if (needsRestore) {
         goToTab("create");
+        setSetupChoice("restore");
         show($("setup-view"), true);
         show($("wallet-view"), false);
         show($("create-panel"), false);
@@ -169,6 +170,7 @@ export function initHome(ctx: AppContext): void {
       if (isChannelStateRegressionError(e)) {
         needsRestore = true;
         goToTab("create");
+        setSetupChoice("restore");
         show($("setup-view"), true);
         show($("wallet-view"), false);
         show($("create-panel"), false);
@@ -333,9 +335,19 @@ export function initHome(ctx: AppContext): void {
     setMsg("msg", enabled ? "Auto-start on — the node starts when you open the app." : "Auto-start off.", "ok");
   });
 
+  // The two "Get started" buttons act as a toggle: the active choice's button is green (primary),
+  // the other reverts to ghost — so it's clear which panel is showing.
+  function setSetupChoice(which: "create" | "restore"): void {
+    $("new-btn").classList.toggle("primary", which === "create");
+    $("new-btn").classList.toggle("ghost", which !== "create");
+    $("restore-btn").classList.toggle("primary", which === "restore");
+    $("restore-btn").classList.toggle("ghost", which !== "restore");
+  }
+
   // ---- setup: create ----
   $("new-btn").addEventListener("click", () => {
     $("seed").textContent = randomSeedHex();
+    setSetupChoice("create");
     show($("create-panel"), true);
     show($("restore-panel"), false);
   });
@@ -366,6 +378,7 @@ export function initHome(ctx: AppContext): void {
     if (st) setSeedBackedUp(st.network);
   }
   $("restore-btn").addEventListener("click", () => {
+    setSetupChoice("restore");
     show($("restore-panel"), true);
     show($("create-panel"), false);
   });

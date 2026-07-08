@@ -367,7 +367,10 @@ export function initHome(ctx: AppContext): void {
     setMsg("create-msg", "");
     setMsg("msg", "Creating wallet & starting node…");
     try {
-      await controller.createWallet({ seedHex });
+      const res = await controller.createWallet({ seedHex });
+      // Creating requires ticking "I've saved my recovery seed", so that's a genuine backup
+      // confirmation — tick the checklist's backup step instead of forcing a second trip to Settings.
+      setSeedBackedUp(res.network);
       setMsg("msg", "Wallet created", "ok");
       void refresh();
     } catch (e) {

@@ -60,23 +60,26 @@
             <div id="create-panel" class="panel hidden">
               <p class="hint">Write this recovery seed down and keep it offline. It is the only way to recover this wallet.</p>
               <code id="seed" class="seed-box"></code>
-              <p class="hint">Bringing back a seed you saved before? Paste it here instead (64 hex characters):</p>
-              <input id="seed-input" class="input" placeholder="optional: paste an existing 64-hex seed" />
               <label class="check"><input type="checkbox" id="saved" /> I've saved my recovery seed</label>
               <button id="create-confirm" class="btn primary" disabled>Create wallet</button>
               <p class="msg" id="create-msg"></p>
             </div>
 
             <div id="restore-panel" class="panel hidden">
-              <p class="hint">Paste your encrypted backup JSON, or choose the file, then enter your seed to decrypt it.</p>
+              <p class="hint">Enter your recovery seed — a 24-word phrase or a 64-hex seed:</p>
+              <input id="restore-secret" class="input" placeholder="recovery seed (24 words or 64 hex)" />
+
+              <p class="hint">Have a backup file too? Add it to also recover your channels:</p>
               <textarea id="restore-env" class="input" rows="3" placeholder="encrypted backup JSON (optional if using a file or Drive)"></textarea>
               <input id="restore-file" type="file" accept="application/json" class="input" />
-              <input id="restore-secret" class="input" placeholder="recovery seed (24 words or 64 hex) — decrypts the backup" />
               <div class="row">
                 <button id="restore-confirm" class="btn primary">Restore from JSON</button>
                 <button id="restore-file-btn" class="btn ghost">Restore from file</button>
                 <button id="restore-drive" class="btn ghost">Restore from Drive</button>
               </div>
+
+              <p class="hint">No backup file — just your seed? This brings back an empty wallet (channels need a backup):</p>
+              <button id="restore-seed-only" class="btn ghost">Restore with seed only</button>
               <p class="msg" id="restore-msg"></p>
             </div>
           </div>

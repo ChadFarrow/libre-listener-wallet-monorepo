@@ -6,6 +6,7 @@ import { channelCountLabel } from "../core/stat-format";
 import { parseNwcLimit } from "../core/nwc-limit";
 import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
 import { computeChecklist, getSeedBackedUp, setSeedBackedUp } from "../core/onboarding";
+import { resolveSeedInput } from "../core/seed-input";
 import { guardedClick } from "../core/ui-helpers";
 import { driveRestore } from "../drive-integration";
 import {
@@ -70,6 +71,7 @@ export function initHome(ctx: AppContext): void {
       }
       if (needsRestore) {
         goToTab("create");
+        setSetupChoice("restore");
         show($("setup-view"), true);
         show($("wallet-view"), false);
         show($("create-panel"), false);
@@ -168,6 +170,7 @@ export function initHome(ctx: AppContext): void {
       if (isChannelStateRegressionError(e)) {
         needsRestore = true;
         goToTab("create");
+        setSetupChoice("restore");
         show($("setup-view"), true);
         show($("wallet-view"), false);
         show($("create-panel"), false);
@@ -332,9 +335,19 @@ export function initHome(ctx: AppContext): void {
     setMsg("msg", enabled ? "Auto-start on — the node starts when you open the app." : "Auto-start off.", "ok");
   });
 
+  // The two "Get started" buttons act as a toggle: the active choice's button is green (primary),
+  // the other reverts to ghost — so it's clear which panel is showing.
+  function setSetupChoice(which: "create" | "restore"): void {
+    $("new-btn").classList.toggle("primary", which === "create");
+    $("new-btn").classList.toggle("ghost", which !== "create");
+    $("restore-btn").classList.toggle("primary", which === "restore");
+    $("restore-btn").classList.toggle("ghost", which !== "restore");
+  }
+
   // ---- setup: create ----
   $("new-btn").addEventListener("click", () => {
     $("seed").textContent = randomSeedHex();
+    setSetupChoice("create");
     show($("create-panel"), true);
     show($("restore-panel"), false);
   });
@@ -344,28 +357,9 @@ export function initHome(ctx: AppContext): void {
   // guardedClick: disabled for the whole handler (incl. the confirm modal + createWallet) so a
   // double-tap can't kick off two creates.
   guardedClick($<HTMLButtonElement>("create-confirm"), async () => {
-    const own = ($("seed-input") as HTMLInputElement).value.trim();
-    const seedHex = own || ($("seed").textContent || "");
-    if (own && !/^[0-9a-fA-F]{64}$/.test(own)) {
-      setMsg("create-msg", "That seed isn't valid — it must be 64 hex characters (32 bytes).", "err");
-      return;
-    }
-    // FORCE-CLOSE GUARD: creating with a pasted seed starts a FRESH, EMPTY node. If that seed
-    // already has a channel, connecting the peer force-closes it — a funded wallet must come back
-    // via Restore from backup.
-    if (own) {
-      const ok = await confirmModal({
-        title: "Only for a seed that has no channel",
-        body:
-          "Creating with a seed starts a brand-new, EMPTY wallet. If this seed already has a channel " +
-          "or a backup, this will FORCE-CLOSE that channel once you connect. To bring back a funded " +
-          "wallet, cancel and use Restore from backup instead.",
-        confirmLabel: "This seed has no channel — create",
-        cancelLabel: "Cancel",
-        danger: true,
-      });
-      if (!ok) return;
-    }
+    // Create is always a brand-new, freshly generated seed. Bringing back an existing wallet is a
+    // Restore action (needs the backup envelope), so there's no pasted-seed path here anymore.
+    const seedHex = $("seed").textContent || "";
     setMsg("create-msg", "");
     setMsg("msg", "Creating wallet & starting node…");
     try {
@@ -384,6 +378,7 @@ export function initHome(ctx: AppContext): void {
     if (st) setSeedBackedUp(st.network);
   }
   $("restore-btn").addEventListener("click", () => {
+    setSetupChoice("restore");
     show($("restore-panel"), true);
     show($("create-panel"), false);
   });
@@ -455,6 +450,50 @@ export function initHome(ctx: AppContext): void {
     try {
       await driveRestore(controller, secret);
       setMsg("restore-msg", "Wallet restored from Drive", "ok");
+      void markBackedUp();
+      goToTab("home");
+      void refresh();
+    } catch (e) {
+      if (isNodeAlreadyRunningError(e)) {
+        setMsg("restore-msg", "This wallet is already running in another tab or window — close it and try again.", "err");
+        return;
+      }
+      setMsg("restore-msg", (e as Error).message, "err");
+    }
+  });
+
+  // Seed-only restore: no backup file, just the 24-word phrase or 64-hex seed. This brings back an
+  // EMPTY wallet (channels need a backup) — the same fresh-node path as createWallet, so it carries
+  // the force-close guard. guardedClick: a double-tap must not kick off two creates.
+  guardedClick($<HTMLButtonElement>("restore-seed-only"), async () => {
+    const raw = ($("restore-secret") as HTMLInputElement).value.trim();
+    if (!raw) {
+      setMsg("restore-msg", "Enter your recovery seed — a 24-word phrase or a 64-hex seed.", "err");
+      return;
+    }
+    const seedHex = resolveSeedInput(raw);
+    if (!seedHex) {
+      setMsg("restore-msg", "That isn't a valid recovery seed (24 words or 64 hex).", "err");
+      return;
+    }
+    // FORCE-CLOSE GUARD: a seed that already has a channel can't come back this way — importing it
+    // starts a fresh EMPTY node, and connecting the peer force-closes the real channel. A funded
+    // wallet must be restored from its backup file (which recovers the channels) instead.
+    const ok = await confirmModal({
+      title: "Only for a seed with no channel",
+      body:
+        "Restoring with just a seed starts a brand-new, EMPTY wallet. If this seed already has a " +
+        "channel, this will FORCE-CLOSE it once you connect. To bring back a funded wallet, cancel " +
+        "and restore from your backup file instead.",
+      confirmLabel: "This seed has no channel — restore",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!ok) return;
+    setMsg("restore-msg", "Restoring from seed…");
+    try {
+      await controller.createWallet({ seedHex });
+      setMsg("restore-msg", "Wallet restored from seed", "ok");
       void markBackedUp();
       goToTab("home");
       void refresh();

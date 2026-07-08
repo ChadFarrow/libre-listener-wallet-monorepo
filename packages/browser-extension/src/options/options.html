@@ -20,7 +20,10 @@
       table { width: 100%; border-collapse: collapse; margin-top: 8px; }
       td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid #8883; font-size: 13px; }
       .peer-row { display: flex; gap: 8px; } .peer-row > input { flex: 1; }
-      .phrase-blur { filter: blur(5px); user-select: none; } /* anti-shoulder-surf until Unhide */
+      /* Dot-mask the seed until Reveal: renders as password dots (not a blank-looking
+         blur), while .value stays the real text so Copy works without revealing.
+         -webkit-text-security is supported in the Chrome/Brave targets. */
+      .masked { -webkit-text-security: disc; letter-spacing: 2px; user-select: none; }
       details summary { cursor: pointer; font-weight: 600; margin-top: 4px; }
       section.card.danger { border-color: #c0392b66; }
       .card.danger h2 { color: #c0392b; border-left-color: #c0392b; }
@@ -54,13 +57,13 @@
         <b>Force-close recovery</b> below: if a channel ever closes, the funds land on-chain there.
       </p>
       <label class="hint" style="display:block;margin-top:4px">64-hex seed — for copy/paste (restore field, backups)</label>
-      <textarea id="seed-hex" class="phrase-blur" readonly rows="2"
+      <textarea id="seed-hex" class="masked" readonly rows="2"
         style="width:100%;box-sizing:border-box;font:13px/1.6 monospace;word-break:break-all"></textarea>
       <label class="hint" style="display:block;margin-top:8px">24-word phrase — the same key, for writing down on paper (word list catches typos; hex doesn't)</label>
-      <textarea id="phrase-words" class="phrase-blur" readonly rows="3"
+      <textarea id="phrase-words" class="masked" readonly rows="3"
         style="width:100%;box-sizing:border-box;font:13px/1.6 monospace"></textarea>
       <div class="peer-row" style="margin-top:8px">
-        <button id="toggle-phrase-blur" class="ghost">Unhide</button>
+        <button id="toggle-phrase-blur" class="ghost">Reveal</button>
         <button id="copy-seed-hex" class="ghost">Copy hex</button>
         <button id="copy-phrase" class="ghost">Copy phrase</button>
       </div>

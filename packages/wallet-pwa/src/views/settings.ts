@@ -351,17 +351,30 @@ export function initSettings(ctx: AppContext): void {
     }
   });
 
-  // ---- reveal recovery phrase + hex seed (blurred) ----
+  // ---- reveal recovery phrase + hex seed (dot-masked) ----
   // The secrets are derived on demand and written into the DOM ONLY when the user
-  // clicks Unhide — never at init or on state-changed. A CSS blur is not real
-  // protection: leaving the seed in a live textarea all session is an exposure, so
-  // we clear the fields on Hide and whenever the user navigates away.
+  // clicks Reveal — never at init or on state-changed. When hidden the boxes show a
+  // dot-masked PLACEHOLDER (not the real secret) so they read as "hidden content
+  // here" rather than looking blank; the real words/hex are wiped on Hide and
+  // whenever the user navigates away.
   // Grow a readonly textarea to fit its content so the full 24-word phrase is
   // visible without scrolling inside the box (it wraps to more lines on a narrow
   // mobile screen than the fixed `rows` allows).
+  const MASK_PHRASE = Array.from({ length: 24 }, () => "••••").join(" ");
+  const MASK_HEX = "•".repeat(64);
   function autoSize(el: HTMLTextAreaElement): void {
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
+  }
+  function maskPhraseFields(): void {
+    $<HTMLTextAreaElement>("phrase-words").value = MASK_PHRASE;
+    $<HTMLTextAreaElement>("seed-hex").value = MASK_HEX;
+    for (const id of ["phrase-words", "seed-hex"]) {
+      const el = $<HTMLTextAreaElement>(id);
+      el.style.height = ""; // collapse back to the CSS `rows` height
+      el.classList.add("masked");
+    }
+    $("toggle-phrase-blur").textContent = "Reveal";
   }
   async function revealPhrase(): Promise<boolean> {
     const phraseBox = $<HTMLTextAreaElement>("phrase-words");
@@ -374,42 +387,33 @@ export function initSettings(ctx: AppContext): void {
       autoSize(hexBox);
       return true;
     } catch (e) {
-      phraseBox.value = "";
-      hexBox.value = "";
+      maskPhraseFields(); // keep the masked placeholder instead of blanking the boxes
       setMsg("phrase-msg", (e as Error)?.message || "No recovery phrase yet — create or restore a wallet first.");
       return false;
     }
   }
-  function clearPhraseFields(): void {
-    for (const id of ["phrase-words", "seed-hex"]) {
-      const el = $<HTMLTextAreaElement>(id);
-      el.value = "";
-      el.style.height = ""; // collapse back to the CSS `rows` height
-      el.classList.add("phrase-blur");
-    }
-    $("toggle-phrase-blur").textContent = "Unhide";
-  }
+  maskPhraseFields(); // start masked (dots), never blank
   $("toggle-phrase-blur").addEventListener("click", () => {
     void (async () => {
-      const isBlurred = $<HTMLTextAreaElement>("phrase-words").classList.contains("phrase-blur");
-      if (isBlurred) {
-        // Reveal: derive + populate now, then un-blur only if we actually have a seed.
+      const isMasked = $<HTMLTextAreaElement>("phrase-words").classList.contains("masked");
+      if (isMasked) {
+        // Reveal: derive + populate now, then un-mask only if we actually have a seed.
         if (!(await revealPhrase())) return;
-        $<HTMLTextAreaElement>("phrase-words").classList.remove("phrase-blur");
-        $<HTMLTextAreaElement>("seed-hex").classList.remove("phrase-blur");
+        $<HTMLTextAreaElement>("phrase-words").classList.remove("masked");
+        $<HTMLTextAreaElement>("seed-hex").classList.remove("masked");
         $("toggle-phrase-blur").textContent = "Hide";
         setMsg("phrase-msg", "Write these down in order and keep them offline.", "ok");
         void markSeedBackedUp();
       } else {
-        // Hide: re-blur AND wipe the secrets out of the DOM.
-        clearPhraseFields();
+        // Hide: re-mask AND wipe the secrets out of the DOM.
+        maskPhraseFields();
       }
     })();
   });
   // Wipe secrets from the DOM when the user leaves the Settings tab.
   for (const el of Array.from(document.querySelectorAll<HTMLElement>(".tab"))) {
     el.addEventListener("click", () => {
-      if (el.dataset.tab !== "settings") clearPhraseFields();
+      if (el.dataset.tab !== "settings") maskPhraseFields();
     });
   }
   async function copyField(id: string, label: string) {

@@ -172,7 +172,10 @@ textarea.input { resize: vertical; word-break: break-all; }
 }
 .nwc-item .nm { color: var(--muted); word-break: break-word; }
 
-.phrase-blur { filter: blur(6px); user-select: none; }
+/* Recovery phrase/seed hidden state: show dot-masked placeholder text (not the real
+   secret, which is only written to the DOM on Reveal) so the box reads as "hidden
+   content here" instead of an empty/blank box. */
+textarea.masked { color: var(--muted); letter-spacing: 3px; user-select: none; }
 
 /* ---- onboarding checklist ---- */
 .checklist { border-color: var(--accent-dim); }

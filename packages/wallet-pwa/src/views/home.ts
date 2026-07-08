@@ -31,10 +31,14 @@ function randomSeedHex(): string {
     .join("");
 }
 
-// Switch tabs (via the global wired in main.ts) and scroll a target card into view. Used by the
-// onboarding checklist to deep-link the buried Settings actions (recovery phrase, get-a-channel).
-function goTo(tab: string, elId: string): void {
+// Switch to a tab (via the global wired in main.ts). No-op in unit tests where main.ts isn't loaded.
+function goToTab(tab: string): void {
   (window as unknown as { showTab?: (t: string) => void }).showTab?.(tab);
+}
+// Switch tabs and scroll a target card into view. Used by the onboarding checklist to reach the
+// Settings actions (recovery phrase, get-a-channel) that live on the Settings tab.
+function goTo(tab: string, elId: string): void {
+  goToTab(tab);
   requestAnimationFrame(() => document.getElementById(elId)?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
@@ -45,6 +49,9 @@ export function initHome(ctx: AppContext): void {
   // the restore panel (it only shows setup-view when there's no wallet, but a regression means a
   // wallet DOES exist) — so refresh() must re-assert the restore view while this is true.
   let needsRestore = false;
+  // On the very first refresh, land the user on the right tab: Create when there's no wallet yet,
+  // otherwise stay on Wallet. Only done once so it never fights the user's manual tab choice.
+  let initialTabSet = false;
 
   async function refresh() {
     try {
@@ -55,8 +62,14 @@ export function initHome(ctx: AppContext): void {
 
       const hasWallet = s.hasSeed || s.createdNew || s.hasChannelState;
       show($("wallet-view"), hasWallet);
+      show($("no-wallet-note"), !hasWallet);
       show($("setup-view"), !hasWallet);
+      if (!initialTabSet) {
+        initialTabSet = true;
+        if (!hasWallet) goToTab("create");
+      }
       if (needsRestore) {
+        goToTab("create");
         show($("setup-view"), true);
         show($("wallet-view"), false);
         show($("create-panel"), false);
@@ -82,7 +95,7 @@ export function initHome(ctx: AppContext): void {
         }
         if (running) void refreshNwcList();
 
-        // Guided setup checklist + the "you need a channel to receive" hint.
+        // Guided setup checklist (Create tab) + the "you need a channel to receive" hint (Wallet tab).
         const checklist = computeChecklist({
           hasWallet: true,
           backedUp: getSeedBackedUp(s.network),
@@ -91,7 +104,13 @@ export function initHome(ctx: AppContext): void {
           usableChannels: s.usableChannels ?? 0,
         });
         renderChecklist(checklist);
+        // When setup is complete (checklist hidden) the Create tab shows an "all set" card instead —
+        // but never while we're forcing the restore panel there.
+        show($("create-complete"), !checklist.visible && !needsRestore);
         show($("receive-hint"), running && (s.balance?.receivableSat ?? 0) === 0);
+      } else {
+        show($("onboarding-checklist"), false);
+        show($("create-complete"), false);
       }
     } catch (e) {
       setMsg("msg", (e as Error).message, "err");
@@ -148,10 +167,12 @@ export function initHome(ctx: AppContext): void {
     } catch (e) {
       if (isChannelStateRegressionError(e)) {
         needsRestore = true;
+        goToTab("create");
         show($("setup-view"), true);
         show($("wallet-view"), false);
         show($("create-panel"), false);
         show($("restore-panel"), true);
+        show($("create-complete"), false);
         setMsg(
           "restore-msg",
           "This wallet's channel state is behind what it durably reached — starting now would force-close your channels. Restore from your latest backup to continue.",
@@ -382,6 +403,7 @@ export function initHome(ctx: AppContext): void {
       await controller.restoreWallet(envelope, secret);
       setMsg("restore-msg", "Wallet restored", "ok");
       void markBackedUp();
+      goToTab("home");
       void refresh();
     } catch (e) {
       if (isNodeAlreadyRunningError(e)) {
@@ -413,6 +435,7 @@ export function initHome(ctx: AppContext): void {
       await controller.restoreWallet(envelope, secret);
       setMsg("restore-msg", "Wallet restored", "ok");
       void markBackedUp();
+      goToTab("home");
       void refresh();
     } catch (e) {
       if (isNodeAlreadyRunningError(e)) {
@@ -433,6 +456,7 @@ export function initHome(ctx: AppContext): void {
       await driveRestore(controller, secret);
       setMsg("restore-msg", "Wallet restored from Drive", "ok");
       void markBackedUp();
+      goToTab("home");
       void refresh();
     } catch (e) {
       if (isNodeAlreadyRunningError(e)) {

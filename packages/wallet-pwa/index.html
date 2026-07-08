@@ -34,14 +34,19 @@
     </header>
 
     <nav class="tabbar">
+      <button class="tab" data-tab="create">Create</button>
       <button class="tab active" data-tab="home">Wallet</button>
       <button class="tab" data-tab="settings">Settings</button>
     </nav>
 
     <main>
-      <!-- ============================ HOME ============================ -->
-      <section id="home-view" class="view active">
-        <p class="status-line" id="status-line">Loading…</p>
+      <!-- ============================ CREATE ============================ -->
+      <section id="create-view" class="view">
+        <!-- guided setup steps (create flow only) -->
+        <div id="onboarding-checklist" class="card checklist hidden">
+          <h2>Finish setting up</h2>
+          <ol id="checklist-items" class="checklist-items"></ol>
+        </div>
 
         <!-- setup (no wallet yet) -->
         <div id="setup-view" class="hidden">
@@ -77,13 +82,25 @@
           </div>
         </div>
 
+        <!-- wallet already set up -->
+        <div id="create-complete" class="card hidden">
+          <h2>Wallet ready ✓</h2>
+          <p class="hint">Your wallet is set up. Switch to the <b>Wallet</b> tab to receive payments and connect apps, or open <b>Settings</b> to back up and manage it.</p>
+        </div>
+      </section>
+
+      <!-- ============================ WALLET ============================ -->
+      <section id="home-view" class="view active">
+        <p class="status-line" id="status-line">Loading…</p>
+
+        <!-- no wallet yet: point at the Create tab -->
+        <div id="no-wallet-note" class="card hidden">
+          <h2>No wallet yet</h2>
+          <p class="hint">Go to the <b>Create</b> tab to make a new wallet or restore one from a backup.</p>
+        </div>
+
         <!-- wallet (exists) -->
         <div id="wallet-view" class="hidden">
-          <div id="onboarding-checklist" class="card checklist hidden">
-            <h2>Finish setting up</h2>
-            <ol id="checklist-items" class="checklist-items"></ol>
-          </div>
-
           <div class="card">
             <div class="stat-grid">
               <div class="stat"><span class="k">Spendable</span><span class="v" id="spendable">—</span></div>
@@ -224,10 +241,10 @@
         <div id="recovery-card" class="card">
           <h2>Recovery phrase &amp; seed</h2>
           <p class="hint">These restore <b>this wallet only</b>. An HD wallet (BlueWallet/Phoenix/LND) derives different keys and would show empty — use the sweep address to move funds elsewhere.</p>
-          <textarea id="phrase-words" class="input phrase-blur" rows="3" readonly></textarea>
-          <textarea id="seed-hex" class="input phrase-blur" rows="2" readonly></textarea>
+          <textarea id="phrase-words" class="input masked" rows="3" readonly></textarea>
+          <textarea id="seed-hex" class="input masked" rows="2" readonly></textarea>
           <div class="row">
-            <button id="toggle-phrase-blur" class="btn ghost small">Unhide</button>
+            <button id="toggle-phrase-blur" class="btn ghost small">Reveal</button>
             <button id="copy-phrase" class="btn ghost small">Copy phrase</button>
             <button id="copy-seed-hex" class="btn ghost small">Copy hex</button>
           </div>

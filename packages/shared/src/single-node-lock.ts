@@ -3,6 +3,8 @@
 // Lives in @libre/shared (browser util) so all frontends share it; the SDK stays navigator-free and
 // receives the acquirer by injection. Cross-origin/device is NOT covered (no shared lock exists).
 
+import { errorMatchesCode } from "./error-code";
+
 export type LockRelease = () => void;
 
 export const NODE_ALREADY_RUNNING_CODE = "NODE_ALREADY_RUNNING";
@@ -12,14 +14,7 @@ export function nodeLockName(dbName: string): string {
 }
 
 export function isNodeAlreadyRunningError(e: unknown): boolean {
-  if (e == null) return false;
-  if (typeof e === "string") return e.includes(NODE_ALREADY_RUNNING_CODE);
-  if (typeof e === "object") {
-    if ((e as { code?: unknown }).code === NODE_ALREADY_RUNNING_CODE) return true;
-    const msg = (e as { message?: unknown }).message;
-    return typeof msg === "string" && msg.includes(NODE_ALREADY_RUNNING_CODE);
-  }
-  return false;
+  return errorMatchesCode(e, NODE_ALREADY_RUNNING_CODE);
 }
 
 /** Acquire the per-origin node lock. Resolves to a release fn (lock held until called), or null if

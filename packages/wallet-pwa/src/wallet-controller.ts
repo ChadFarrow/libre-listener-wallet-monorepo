@@ -25,6 +25,7 @@ import {
   CONFIG_KEY,
   type AppConfig,
 } from "./core/wallet-config";
+import { resolveActiveNetwork } from "./core/sw-config";
 import { autoStartPlan, connectWithRetry } from "./core/auto-start";
 import { createWebSocketStreamProvider } from "./core/ws-provider";
 import { restoreBlockReason } from "./core/restore-guard";
@@ -74,31 +75,25 @@ export class WalletController {
   }
 
   private async activeNetwork(): Promise<string> {
-    return (await this.meta.getItem(ACTIVE_NETWORK_KEY)) || "mainnet";
+    // Same default rule the service worker uses (core/sw-config.ts) — one definition.
+    return resolveActiveNetwork(await this.meta.getItem(ACTIVE_NETWORK_KEY));
   }
 
   private storageForNetwork(network: string): SecureStorageProvider {
     return new IndexedDBStorageProvider(dbNameForNetwork(network));
   }
 
-  // Persist the RESOLVED runtime config (esplora/bridge/RGS after default fallback) plus the meta
-  // active-network pointer. The UI only writes ldk_config on an explicit "Save connection settings"
-  // /restore, so a wallet created & run on pure defaults never persisted these — leaving the
-  // offline-push service worker (which has no DOM and reads only what's on disk) unable to resolve
-  // an esplora/bridge, so it opened the wrong empty DB and silently aborted the wake. Best-effort:
-  // a persist failure must never fail a start that already succeeded.
-  private async persistResolvedConfig(network: string): Promise<void> {
+  // Persist the meta active-network pointer for the offline-push service worker (it has no DOM
+  // and reads only what's on disk). ONLY the pointer is persisted: the SW layers the network's
+  // public defaults over ldk_config itself at read time (core/sw-config.ts resolvePushConfig),
+  // and materializing resolved defaults INTO stored user config would pin the install to today's
+  // endpoints — a future change to the default esplora/bridge/RGS URL would never reach it.
+  // Best-effort: a persist failure must never fail a start that already succeeded.
+  private async persistActiveNetwork(network: string): Promise<void> {
     try {
-      const storage = this.storageForNetwork(network);
-      const cfg = parseConfig(await storage.getItem(CONFIG_KEY));
-      cfg.network = network as AppConfig["network"];
-      cfg.esploraUrl = cfg.esploraUrl || defaultEsploraUrl(network);
-      cfg.bridgeUrl = cfg.bridgeUrl || defaultBridgeUrl(network);
-      cfg.rapidGossipSyncUrl = cfg.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(network);
-      await storage.setItem(CONFIG_KEY, serializeConfig(cfg));
       await this.meta.setItem(ACTIVE_NETWORK_KEY, network);
     } catch (e) {
-      console.warn("[Config] could not persist resolved config for the service worker:", (e as Error)?.message || e);
+      console.warn("[Config] could not persist the active network for the service worker:", (e as Error)?.message || e);
     }
   }
 
@@ -248,7 +243,7 @@ export class WalletController {
     await this.applySweepAddress();
     // Persist the resolved config + network pointer so an offline push wake can boot this node
     // (covers wallets created/started on pure defaults, incl. createWallet → startNode).
-    await this.persistResolvedConfig(network);
+    await this.persistActiveNetwork(network);
     // Warm the routing graph best-effort (mainnet only serves RGS snapshots).
     void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
     this.emit("state-changed");
@@ -396,7 +391,7 @@ export class WalletController {
       this.wallet = wallet;
       await wallet.start();
       await this.applySweepAddress();
-      await this.persistResolvedConfig(targetNetwork);
+      await this.persistActiveNetwork(targetNetwork);
       void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
       this.emit("state-changed");
       return this.currentNode();

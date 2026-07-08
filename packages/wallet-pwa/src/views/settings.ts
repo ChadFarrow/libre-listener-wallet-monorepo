@@ -4,6 +4,7 @@ import { onControllerEvent } from "../core/events";
 import { confirmModal } from "../ui/confirm-modal";
 import { defaultBridgeUrl, defaultRapidGossipSyncUrl, parsePeerString } from "../core/wallet-config";
 import { downloadBackupName } from "../core/backup-name";
+import { guardedClick } from "../core/ui-helpers";
 import {
   LSPS1_REST_PROVIDERS,
   mempoolTxUrl,
@@ -226,9 +227,8 @@ export function initSettings(ctx: AppContext): void {
   });
 
   // ---- connect peer ----
-  $("connect-peer").addEventListener("click", async () => {
-    const btn = $<HTMLButtonElement>("connect-peer");
-    if (btn.disabled) return;
+  // guardedClick: a double-tap must not fire duplicate connectPeer dials.
+  guardedClick($<HTMLButtonElement>("connect-peer"), async () => {
     let peer;
     try {
       peer = parsePeerString(val("peer-conn"));
@@ -236,15 +236,11 @@ export function initSettings(ctx: AppContext): void {
       setMsg("peer-msg", (e as Error).message, "err");
       return;
     }
-    // Disable during the dial so a double-tap can't fire duplicate connectPeer calls; re-enable in finally.
-    btn.disabled = true;
     try {
       await controller.connectPeer(peer.pubkey, peer.host, peer.port);
       setMsg("peer-msg", "Peer connected", "ok");
     } catch (e) {
       setMsg("peer-msg", (e as Error).message, "err");
-    } finally {
-      btn.disabled = false;
     }
   });
 
@@ -436,7 +432,8 @@ export function initSettings(ctx: AppContext): void {
   });
 
   // ---- reset wallet ----
-  $("reset-wallet").addEventListener("click", async () => {
+  // guardedClick: held disabled through the confirm modal + delete so a double-tap can't re-enter.
+  guardedClick($<HTMLButtonElement>("reset-wallet"), async () => {
     const network = $("reset-network").textContent || "this network";
     const ok = await confirmModal({
       title: `Delete the ${network} wallet?`,
@@ -447,16 +444,12 @@ export function initSettings(ctx: AppContext): void {
       danger: true,
     });
     if (!ok) return;
-    const btn = $<HTMLButtonElement>("reset-wallet");
-    btn.disabled = true;
     setMsg("reset-msg", "Deleting…");
     try {
       const r = await controller.resetWallet();
       setMsg("reset-msg", `Wallet on ${r.network} deleted. Open the Wallet tab to create or restore.`, "ok");
     } catch (e) {
       setMsg("reset-msg", (e as Error).message, "err");
-    } finally {
-      btn.disabled = false;
     }
   });
 

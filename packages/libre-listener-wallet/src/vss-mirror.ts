@@ -8,17 +8,12 @@
 // The value we store is the existing slim, seed-encrypted backup envelope (exportState) — no new
 // crypto and no storage-contract change: the server only ever sees the same ciphertext the Drive
 // backup already produces (key-isolation guardrail holds).
-import type { VssClient } from "./vss-client";
+import type { VssClient, VssLogger } from "./vss-client";
+import { bytesToHex } from "./storage-cache";
 
 export const VSS_STATE_BACKUP_KEY = "state_backup";
 const VSS_BLIND_WRITE_VERSION = -1;
 const DEFAULT_DEBOUNCE_MS = 5000;
-
-export interface VssMirrorLogger {
-  info?: (m: string) => void;
-  warn?: (m: string) => void;
-  error?: (m: string) => void;
-}
 
 // Structural type so tests can inject a stub without a full VssClient.
 export type VssMirrorTarget = Pick<VssClient, "putObjects">;
@@ -28,7 +23,7 @@ export type VssMirrorTarget = Pick<VssClient, "putObjects">;
 export async function deriveVssStoreId(seedHex: string): Promise<string> {
   const data = new TextEncoder().encode(`libre-vss-store-v1:${seedHex}`);
   const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  return bytesToHex(new Uint8Array(digest));
 }
 
 export class VssMirror {
@@ -37,12 +32,12 @@ export class VssMirror {
   private pendingWhileInFlight = false;
   private stopped = false;
   private debounceMs: number;
-  private logger?: VssMirrorLogger;
+  private logger?: VssLogger;
 
   constructor(
     private client: VssMirrorTarget,
     private exportEnvelope: () => Promise<string>,
-    opts: { debounceMs?: number; logger?: VssMirrorLogger } = {},
+    opts: { debounceMs?: number; logger?: VssLogger } = {},
   ) {
     this.debounceMs = opts.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     this.logger = opts.logger;
@@ -60,12 +55,6 @@ export class VssMirror {
       this.timer = undefined;
       void this.run();
     }, this.debounceMs);
-  }
-
-  // Mirror immediately (used once at start so VSS holds the current state without waiting for the
-  // next change). Still best-effort + non-throwing.
-  flushNow(): void {
-    void this.flush();
   }
 
   /**

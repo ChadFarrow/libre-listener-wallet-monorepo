@@ -15,7 +15,8 @@ import {
   BudgetRenewal,
   budgetWindowElapsed,
   NWC_ALWAYS_ALLOWED_METHODS,
-  paymentRecordsToNwcTransactions
+  paymentRecordsToNwcTransactions,
+  buildGatewayAuthTemplate
 } from "@libre/shared";
 import {
   Bolt11Invoice,
@@ -107,19 +108,13 @@ export class NwcManager {
    * of a (public) walletPubkey from an impersonator without this — the private key never leaves
    * the sandbox; only the signature does. The event commits to the action, the relay, and (for a
    * register) the push endpoint, and carries a fresh created_at, so a captured event can't be
-   * replayed to a different action/relay/endpoint or reused after it expires. NIP-98-style, kind 27235.
+   * replayed to a different action/relay/endpoint or reused after it expires. NIP-98-style; the
+   * wire contract (kind, tags, content) is @libre/shared gateway-auth.ts, shared with the verifier.
    */
   buildGatewayAuth(action: "register" | "unregister", relayUrl: string, endpoint?: string): VerifiedEvent {
     if (!this.walletPrivKeyHex) throw new Error("NWC not initialized: cannot sign gateway auth");
-    const tags: string[][] = [["action", action], ["relay", relayUrl]];
-    if (endpoint) tags.push(["endpoint", endpoint]);
     return finalizeEvent(
-      {
-        kind: 27235,
-        created_at: Math.floor(Date.now() / 1000),
-        tags,
-        content: "libre-push-auth",
-      },
+      buildGatewayAuthTemplate(action, relayUrl, endpoint, Math.floor(Date.now() / 1000)),
       hexToBytes(this.walletPrivKeyHex),
     );
   }
@@ -221,6 +216,43 @@ export class NwcManager {
   private async refundBudget(pairing: NwcConnection, amtSats: number): Promise<void> {
     pairing.spentTodaySats = Math.max(0, pairing.spentTodaySats - amtSats);
     await this.saveConnections();
+  }
+
+  /**
+   * Debit the budget at INITIATION, not after the settlement await. A payment that outlives
+   * the 90s await is still in flight and usually settles (the client then learns of it via the
+   * payment_sent notification); charging only on the synchronous resolve let a client repeatedly
+   * spend past its cap using slow/hodl payments that always time out. The initiation/settlement
+   * failure paths refund via refundBudget.
+   */
+  private async debitBudget(pairing: NwcConnection, spentToday: number, amtSats: number, now: number): Promise<void> {
+    pairing.spentTodaySats = spentToday + amtSats;
+    pairing.lastSpentTimestamp = now;
+    await this.saveConnections();
+  }
+
+  /**
+   * The ONE settle-or-refund policy for pay_invoice AND pay_keysend (a fund-handling rule that
+   * must not drift between them): await settlement under the 90s cap; a definitive
+   * PaymentFailed → the money didn't move, refund the debit; a bare timeout → the payment is
+   * still in flight, KEEP the charge (anti-replay — see debitBudget). The timeout is
+   * discriminated by error IDENTITY (we made the object), never by message text.
+   */
+  private async awaitSettlementCharged(pairing: NwcConnection, amtSats: number, settled: Promise<string>): Promise<string> {
+    const timeoutError = new Error(SETTLEMENT_TIMEOUT_MSG);
+    try {
+      return await this.awaitWithTimeout(settled, SETTLEMENT_TIMEOUT_MS, timeoutError);
+    } catch (settleErr) {
+      if (settleErr !== timeoutError) {
+        await this.refundBudget(pairing, amtSats);
+      }
+      throw settleErr;
+    }
+  }
+
+  /** True when a pairing carries an expiry (epoch ms) that has passed. */
+  private static isConnectionExpired(c: NwcConnection, now: number): boolean {
+    return !!c.expiresAt && now >= c.expiresAt;
   }
 
   /** Drop invoice contexts whose invoice has expired (they can no longer be claimed). */
@@ -348,7 +380,7 @@ export class NwcManager {
   private async pruneExpiredConnections(): Promise<void> {
     const now = Date.now();
     const before = this.connections.length;
-    this.connections = this.connections.filter((c) => !(c.expiresAt && now >= c.expiresAt));
+    this.connections = this.connections.filter((c) => !NwcManager.isConnectionExpired(c, now));
     if (this.connections.length !== before) {
       this.logger?.info(`[NWC] Pruned ${before - this.connections.length} expired connection(s)`);
       await this.saveConnections();
@@ -595,7 +627,7 @@ export class NwcManager {
     const now = Date.now();
 
     // Reject an expired connection before doing any work.
-    if (pairing.expiresAt && now >= pairing.expiresAt) {
+    if (NwcManager.isConnectionExpired(pairing, now)) {
       await this.sendErrorResponse(event, "UNAUTHORIZED", "This connection has expired", relayUrl, rpcReq.id);
       return;
     }
@@ -756,15 +788,10 @@ export class NwcManager {
           type: "bolt11",
         });
 
-        // Debit the budget at INITIATION, not after the settlement await. A payment that
-        // outlives the 90s await is still in flight and usually settles (the client then
-        // learns of it via the payment_sent notification); charging only on the synchronous
-        // resolve let a client repeatedly spend past its cap using slow/hodl invoices that
-        // always time out. We refund on a definitive failure (below); a bare timeout keeps
-        // the charge — matching the extension's settlement-pending semantics.
-        pairing.spentTodaySats = spentToday + amtSats;
-        pairing.lastSpentTimestamp = now;
-        await this.saveConnections();
+        // Charge at initiation; refund on definitive failure only (see debitBudget /
+        // awaitSettlementCharged — the shared policy, matching the extension's
+        // settlement-pending semantics).
+        await this.debitBudget(pairing, spentToday, amtSats, now);
 
         const sendRes = this.wallet.getChannelManager()!.send_payment(
           paymentHash,
@@ -781,17 +808,7 @@ export class NwcManager {
           throw new Error(`LDK send_payment failed: ${(sendRes as any).err?.toString() || "Route not found"}`);
         }
 
-        let preimageHex: string;
-        try {
-          preimageHex = await this.awaitWithTimeout(promise, SETTLEMENT_TIMEOUT_MS, new Error(SETTLEMENT_TIMEOUT_MSG));
-        } catch (settleErr: any) {
-          // Definitive PaymentFailed → the money didn't move, refund. A 90s timeout
-          // (SETTLEMENT_TIMEOUT_MSG) → still in flight, KEEP the charge (anti-replay).
-          if (settleErr?.message !== SETTLEMENT_TIMEOUT_MSG) {
-            await this.refundBudget(pairing, amtSats);
-          }
-          throw settleErr;
-        }
+        const preimageHex = await this.awaitSettlementCharged(pairing, amtSats, promise);
 
         await this.sendResultResponse(event, "pay_invoice", { preimage: preimageHex }, relayUrl, rpcReq.id);
 
@@ -828,13 +845,9 @@ export class NwcManager {
         });
         this.paymentContexts.set(keysendHashHex, { clientPubkey: event.pubkey, relayUrl, amountMsat: Number(amountMsat) });
 
-        // Debit the budget at INITIATION (see the pay_invoice rationale above): a keysend
-        // that outlives the settlement await is in flight and typically settles, so charging
-        // only on resolve let a client spend past its cap via always-timing-out sends. Refund
-        // on any definitive initiation/settlement failure; a bare timeout keeps the charge.
-        pairing.spentTodaySats = spentToday + amtSats;
-        pairing.lastSpentTimestamp = now;
-        await this.saveConnections();
+        // Charge at initiation; refund on definitive failure only (see debitBudget /
+        // awaitSettlementCharged — the shared policy).
+        await this.debitBudget(pairing, spentToday, amtSats, now);
 
         // The wallet owns the keysend construction (TLVs, onion, route, send).
         let sendRes: { ok: boolean; error?: string };
@@ -859,15 +872,7 @@ export class NwcManager {
           throw new Error(`Keysend failed to initiate: ${sendRes.error}`);
         }
 
-        let preimageHex: string;
-        try {
-          preimageHex = await this.awaitWithTimeout(settled, SETTLEMENT_TIMEOUT_MS, new Error(SETTLEMENT_TIMEOUT_MSG));
-        } catch (settleErr: any) {
-          if (settleErr?.message !== SETTLEMENT_TIMEOUT_MSG) {
-            await this.refundBudget(pairing, amtSats);
-          }
-          throw settleErr;
-        }
+        const preimageHex = await this.awaitSettlementCharged(pairing, amtSats, settled);
 
         await this.sendResultResponse(event, "pay_keysend", { preimage: preimageHex }, relayUrl, rpcReq.id);
 

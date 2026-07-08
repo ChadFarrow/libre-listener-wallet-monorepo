@@ -14,8 +14,8 @@ import {
   decodeListKeyVersionsRequest,
   encodeListKeyVersionsResponse,
   encodeErrorResponse,
-  VSS_ERROR_CODE,
-} from "../../vss-protobuf";
+} from "./vss-protobuf-server";
+import { VSS_ERROR_CODE } from "../../vss-protobuf";
 
 interface StoredValue { version: number; value: Uint8Array }
 

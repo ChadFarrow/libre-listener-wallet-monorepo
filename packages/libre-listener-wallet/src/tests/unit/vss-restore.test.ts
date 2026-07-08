@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { LibreListenerWallet, SecureStorageProvider, WebSocketStreamProvider } from "../../index";
 import { serializeAndEncryptV1 } from "../../state-backup";
 import { encodeKeyValue, type VssKeyValue } from "../../vss-protobuf";
+import { VssClient } from "../../vss-client";
 
 // The read-path re-hydration (maybeRestoreStateFromVss) is exercised directly on a stopped wallet,
 // with globalThis.fetch stubbed to serve a real GetObjectResponse. No LDK start / WASM needed —
@@ -22,6 +23,10 @@ function memStorage(initial: Record<string, string> = {}): { storage: SecureStor
 }
 
 const noopSocket: WebSocketStreamProvider = { connect: async () => { throw new Error("unused"); } };
+
+function makeClient() {
+  return new VssClient({ baseUrl: "https://vss.test/vss", storeId: "test-store" });
+}
 
 function makeWallet(mem: Record<string, string>, storage: SecureStorageProvider, network = "regtest") {
   return new LibreListenerWallet({
@@ -84,7 +89,7 @@ describe("maybeRestoreStateFromVss", () => {
     const calls = stubFetch(new Response(respBytes, { status: 200 }));
 
     const wallet = makeWallet(mem, storage);
-    const restored = await wallet["maybeRestoreStateFromVss"](SEED);
+    const restored = await wallet["maybeRestoreStateFromVss"](makeClient(), SEED);
 
     expect(restored).toBe(true);
     expect(mem.channel_manager).toBe("deadbeef");
@@ -103,7 +108,7 @@ describe("maybeRestoreStateFromVss", () => {
     stubFetch(new Response(respBytes, { status: 200 }));
 
     const wallet = makeWallet(mem, storage);
-    const restored = await wallet["maybeRestoreStateFromVss"](SEED);
+    const restored = await wallet["maybeRestoreStateFromVss"](makeClient(), SEED);
 
     expect(restored).toBe(true);
     // The tripwire is preserved (NOT blanked by importState) — the guard survives an auto-rehydrate.
@@ -117,7 +122,7 @@ describe("maybeRestoreStateFromVss", () => {
     const calls = stubFetch(new Response(new Uint8Array(0), { status: 200 }));
 
     const wallet = makeWallet(mem, storage);
-    const restored = await wallet["maybeRestoreStateFromVss"](SEED);
+    const restored = await wallet["maybeRestoreStateFromVss"](makeClient(), SEED);
 
     expect(restored).toBe(false);
     expect(mem.channel_manager).toBe("cafe"); // untouched
@@ -129,7 +134,7 @@ describe("maybeRestoreStateFromVss", () => {
     stubFetch(new Response(new Uint8Array(0), { status: 404 }));
 
     const wallet = makeWallet(mem, storage);
-    expect(await wallet["maybeRestoreStateFromVss"](SEED)).toBe(false);
+    expect(await wallet["maybeRestoreStateFromVss"](makeClient(), SEED)).toBe(false);
     expect(mem.channel_manager).toBeUndefined();
   });
 
@@ -140,7 +145,7 @@ describe("maybeRestoreStateFromVss", () => {
     stubFetch(new Response(respBytes, { status: 200 }));
 
     const wallet = makeWallet(mem, storage);
-    const restored = await wallet["maybeRestoreStateFromVss"](SEED);
+    const restored = await wallet["maybeRestoreStateFromVss"](makeClient(), SEED);
 
     expect(restored).toBe(false);
     expect(mem.channel_manager).toBeUndefined();
@@ -151,7 +156,7 @@ describe("maybeRestoreStateFromVss", () => {
     globalThis.fetch = (async () => { throw new Error("network down"); }) as unknown as typeof fetch;
 
     const wallet = makeWallet(mem, storage);
-    expect(await wallet["maybeRestoreStateFromVss"](SEED)).toBe(false);
+    expect(await wallet["maybeRestoreStateFromVss"](makeClient(), SEED)).toBe(false);
     expect(mem.channel_manager).toBeUndefined();
   });
 });

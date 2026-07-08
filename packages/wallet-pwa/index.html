@@ -48,6 +48,16 @@
           <ol id="checklist-items" class="checklist-items"></ol>
         </div>
 
+        <!-- one-tap "Get a channel": a fixed 150k / ~3-month Megalith order + pay QR -->
+        <div id="quick-channel" class="card hidden">
+          <h2>Pay to open your channel</h2>
+          <p class="hint" id="quick-channel-fee"></p>
+          <img id="quick-channel-qr" class="qr hidden" alt="channel invoice QR" />
+          <textarea id="quick-channel-invoice" class="input hidden" rows="3" readonly></textarea>
+          <button id="quick-channel-copy" class="btn ghost small hidden">Copy invoice</button>
+          <p class="msg" id="quick-channel-msg"></p>
+        </div>
+
         <!-- setup (no wallet yet) -->
         <div id="setup-view" class="hidden">
           <div class="card">

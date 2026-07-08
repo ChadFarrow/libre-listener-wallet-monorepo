@@ -8,13 +8,16 @@ import {
 } from "@libre/shared";
 import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 import { resolveActiveNetwork, resolvePushConfig } from "./core/sw-config";
+import { cleanRedirect } from "./core/sw-redirect";
 
 declare const self: any;
 
 // ---- Installable-PWA offline app shell ----
 // Bump this to invalidate the cached shell on release. The cache holds ONLY the static app shell;
 // it must never cache or intercept wallet network traffic (esplora / bridge / Drive / nostr).
-const SHELL_CACHE = "libre-shell-v1";
+// v2: drops any shell cached by the pre-cleanRedirect SW (a redirected index.html could have been
+// stored, breaking iOS navigations — see core/sw-redirect.ts).
+const SHELL_CACHE = "libre-shell-v2";
 // Stable-named shell entries (relative to the SW scope, matching Vite's base:"./"). Hashed
 // main.js/style.css and the large WASM are cached lazily on first fetch instead of precached.
 const SHELL_PRECACHE = ["./", "./index.html", "./manifest.webmanifest"];
@@ -50,12 +53,16 @@ self.addEventListener("fetch", (event: any) => {
   if (req.mode === "navigate") {
     event.respondWith(
       fetch(req)
-        .then((res: Response) => {
-          if (res && res.ok) {
-            const copy = res.clone();
+        .then(async (res: Response) => {
+          // iOS Safari rejects a navigation served with a redirected response
+          // ("Response served by service worker has redirections") — Cloudflare Pages
+          // sometimes 3xx-redirects the launch URL. Strip the flag before returning/caching.
+          const clean = await cleanRedirect(res);
+          if (clean.ok) {
+            const copy = clean.clone();
             void caches.open(SHELL_CACHE).then((cache: Cache) => cache.put("./index.html", copy));
           }
-          return res;
+          return clean;
         })
         .catch(async () => (await caches.match("./index.html")) || (await caches.match("./")) || Response.error())
     );

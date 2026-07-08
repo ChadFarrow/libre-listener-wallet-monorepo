@@ -19,6 +19,8 @@ body {
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%; /* don't let iOS inflate text on rotation */
+  -webkit-tap-highlight-color: transparent; /* no grey flash on tap */
   padding-bottom: env(safe-area-inset-bottom);
 }
 
@@ -117,12 +119,17 @@ hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 11px 12px;
-  font-size: 14px;
+  font-size: 16px; /* >=16px so iOS Safari doesn't zoom in on focus */
   margin-bottom: 10px;
   font-family: inherit;
 }
 .input:focus { outline: none; border-color: var(--accent-dim); }
+/* break-all suits continuous strings (hex seed, bolt11, encrypted envelope) */
 textarea.input { resize: vertical; word-break: break-all; }
+/* ...but the recovery phrase must keep whole words intact — a word split
+   across two lines ("perfe/ct") is confusing to transcribe. Wrap at spaces
+   only; BIP39 words are short enough to never need breaking. */
+#phrase-words { word-break: normal; overflow-wrap: normal; line-height: 1.7; }
 
 .btn {
   border: 1px solid var(--border);

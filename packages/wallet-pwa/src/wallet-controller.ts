@@ -129,6 +129,7 @@ export class WalletController {
     channels?: number;
     usableChannels?: number;
     peers?: number;
+    startError?: string;
   }> {
     const network = await this.activeNetwork();
     const storage = this.storageForNetwork(network);
@@ -150,7 +151,20 @@ export class WalletController {
       usableChannels = chans.filter((c) => c.isUsable).length;
       peers = this.wallet.getConnectedPeers().length;
     }
-    return { network, running, hasSeed, hasChannelState, createdNew, nodeId, balance, channels, usableChannels, peers };
+    return {
+      network,
+      running,
+      hasSeed,
+      hasChannelState,
+      createdNew,
+      nodeId,
+      balance,
+      channels,
+      usableChannels,
+      peers,
+      // Only meaningful while stopped — a running node has no outstanding start error.
+      startError: running ? undefined : this.lastStartError,
+    };
   }
 
   // Build (but do not start) the wallet instance for the active network.
@@ -201,13 +215,25 @@ export class WalletController {
   // Serialize concurrent start calls (auto-start racing a manual Start click must not build two
   // wallets over the same storage).
   private startingPromise?: Promise<{ nodeId: string; network: string }>;
+  // Last node-start failure, captured at the source so the UI can show WHY the node isn't running —
+  // otherwise an auto-start failure is a silent console log and looks like "it just didn't start".
+  private lastStartError?: string;
 
   async startNode(): Promise<{ nodeId: string; network: string }> {
     if (this.startingPromise) return this.startingPromise;
     if (this.isRunning()) return this.currentNode();
-    this.startingPromise = this.doStartNode().finally(() => {
-      this.startingPromise = undefined;
-    });
+    this.startingPromise = this.doStartNode()
+      .then((node) => {
+        this.lastStartError = undefined; // cleared on any successful start
+        return node;
+      })
+      .catch((e) => {
+        this.lastStartError = (e as Error)?.message || String(e);
+        throw e;
+      })
+      .finally(() => {
+        this.startingPromise = undefined;
+      });
     return this.startingPromise;
   }
 
@@ -333,6 +359,7 @@ export class WalletController {
 
   async stopNode(): Promise<void> {
     if (this.startingPromise) await this.startingPromise.catch(() => {});
+    this.lastStartError = undefined; // intentional stop — not a start failure
     if (this.wallet) {
       await this.wallet.nwc.stop().catch((e) => console.warn("[NWC] stop failed:", e?.message || e));
       await this.wallet.stop();

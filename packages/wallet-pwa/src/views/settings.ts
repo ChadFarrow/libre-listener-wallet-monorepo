@@ -343,6 +343,13 @@ export function initSettings(ctx: AppContext): void {
   // clicks Unhide — never at init or on state-changed. A CSS blur is not real
   // protection: leaving the seed in a live textarea all session is an exposure, so
   // we clear the fields on Hide and whenever the user navigates away.
+  // Grow a readonly textarea to fit its content so the full 24-word phrase is
+  // visible without scrolling inside the box (it wraps to more lines on a narrow
+  // mobile screen than the fixed `rows` allows).
+  function autoSize(el: HTMLTextAreaElement): void {
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }
   async function revealPhrase(): Promise<boolean> {
     const phraseBox = $<HTMLTextAreaElement>("phrase-words");
     const hexBox = $<HTMLTextAreaElement>("seed-hex");
@@ -350,6 +357,8 @@ export function initSettings(ctx: AppContext): void {
       const [{ mnemonic }, { seedHex }] = await Promise.all([controller.getRecoveryPhrase(), controller.getSeed()]);
       phraseBox.value = mnemonic;
       hexBox.value = seedHex;
+      autoSize(phraseBox);
+      autoSize(hexBox);
       return true;
     } catch (e) {
       phraseBox.value = "";
@@ -359,10 +368,12 @@ export function initSettings(ctx: AppContext): void {
     }
   }
   function clearPhraseFields(): void {
-    $<HTMLTextAreaElement>("phrase-words").value = "";
-    $<HTMLTextAreaElement>("seed-hex").value = "";
-    $<HTMLTextAreaElement>("phrase-words").classList.add("phrase-blur");
-    $<HTMLTextAreaElement>("seed-hex").classList.add("phrase-blur");
+    for (const id of ["phrase-words", "seed-hex"]) {
+      const el = $<HTMLTextAreaElement>(id);
+      el.value = "";
+      el.style.height = ""; // collapse back to the CSS `rows` height
+      el.classList.add("phrase-blur");
+    }
     $("toggle-phrase-blur").textContent = "Unhide";
   }
   $("toggle-phrase-blur").addEventListener("click", () => {

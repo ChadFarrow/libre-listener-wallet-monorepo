@@ -500,7 +500,7 @@ async function loadTransactions() {
 }
 
 // loadChannels reads currentNetwork (for the explorer link), which loadConfig sets — chain them.
-// Recovery phrase + hex seed: show both forms of the key, blurred until Unhide (anti
+// Recovery phrase + hex seed: show both forms of the key, dot-masked until Reveal (anti
 // shoulder-surf). Reads the stored seed via the offscreen host — works node running or not.
 async function loadPhrase() {
   const phraseBox = $<HTMLTextAreaElement>("phrase-words");
@@ -518,12 +518,12 @@ async function loadPhrase() {
     setMsg("phrase-msg", e?.message || "No recovery phrase yet — create or restore a wallet first.");
   }
 }
-// One toggle un-blurs both the phrase and the hex seed.
+// One toggle un-masks both the phrase and the hex seed (dot-mask <-> plain text).
 $("toggle-phrase-blur").addEventListener("click", () => {
-  const blurred = $<HTMLTextAreaElement>("phrase-words").classList.toggle("phrase-blur");
-  $<HTMLTextAreaElement>("seed-hex").classList.toggle("phrase-blur", blurred);
-  $("toggle-phrase-blur").textContent = blurred ? "Unhide" : "Hide";
-  if (!blurred) setMsg("phrase-msg", "Write these down in order and keep them offline.", "ok");
+  const masked = $<HTMLTextAreaElement>("phrase-words").classList.toggle("masked");
+  $<HTMLTextAreaElement>("seed-hex").classList.toggle("masked", masked);
+  $("toggle-phrase-blur").textContent = masked ? "Reveal" : "Hide";
+  if (!masked) setMsg("phrase-msg", "Write these down in order and keep them offline.", "ok");
 });
 async function copyField(id: string, label: string) {
   const value = $<HTMLTextAreaElement>(id).value.trim();

@@ -364,17 +364,29 @@ export function initHome(ctx: AppContext): void {
     // Create is always a brand-new, freshly generated seed. Bringing back an existing wallet is a
     // Restore action (needs the backup envelope), so there's no pasted-seed path here anymore.
     const seedHex = $("seed").textContent || "";
-    setMsg("create-msg", "");
+    setMsg("create-msg", "Creating wallet & starting node…");
     setMsg("msg", "Creating wallet & starting node…");
+    // The user ticked "I've saved my recovery seed" (required to create), so mark the backup step
+    // done NOW — up front, independent of whether the node manages to start. createWallet writes the
+    // seed before it starts the node, so if start fails (e.g. a flaky mainnet esplora) the wallet
+    // still exists and the seed is still what they saved; the mark must not be lost to that failure.
+    const pre = await controller.getState().catch(() => null);
+    if (pre) setSeedBackedUp(pre.network);
     try {
       const res = await controller.createWallet({ seedHex });
-      // Creating requires ticking "I've saved my recovery seed", so that's a genuine backup
-      // confirmation — tick the checklist's backup step instead of forcing a second trip to Settings.
       setSeedBackedUp(res.network);
+      setMsg("create-msg", "");
       setMsg("msg", "Wallet created", "ok");
       void refresh();
     } catch (e) {
-      setMsg("msg", (e as Error).message, "err");
+      // The seed is saved even though the node didn't start. refresh() will hide the create panel
+      // (a wallet now exists), so the create-tab message would vanish — take the user to the Wallet
+      // tab where the node controls + message box are visible, and surface the reason there so they
+      // can tap Start to retry.
+      setMsg("msg", `Wallet saved, but the node didn't start: ${(e as Error).message}. Tap Start to try again.`, "err");
+      setMsg("create-msg", "");
+      goToTab("home");
+      void refresh();
     }
   });
 

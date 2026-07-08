@@ -23,6 +23,23 @@ describe("isPrivateHost", () => {
       expect(isPrivateHost(h)).toBe(false);
     }
   });
+  it("flags IPv4-mapped IPv6 (dotted and hex), unspecified, ULA, and link-local IPv6", () => {
+    for (const h of [
+      "::ffff:127.0.0.1",
+      "[::ffff:7f00:1]",
+      "::ffff:c0a8:101", // 192.168.1.1
+      "::",
+      "fc00::1",
+      "fd12:3456::1",
+      "fe80::1",
+    ]) {
+      expect(isPrivateHost(h)).toBe(true);
+    }
+  });
+  it("passes a public IPv4-mapped IPv6", () => {
+    expect(isPrivateHost("::ffff:8.8.8.8")).toBe(false);
+    expect(isPrivateHost("::ffff:808:808")).toBe(false);
+  });
 });
 
 describe("isTargetAllowed", () => {

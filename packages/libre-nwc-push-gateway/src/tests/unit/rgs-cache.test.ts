@@ -51,4 +51,18 @@ describe("RGS passthrough cache", () => {
     // Still 1 — the second request hit the in-memory cache, not upstream.
     expect(upstreamCalls).toBe(1);
   });
+
+  it("coalesces CONCURRENT misses for one timestamp into a single upstream fetch", async () => {
+    // The cache stores the in-flight promise, so an app-start burst (N clients asking for the
+    // same snapshot at once) must not buffer N upstream copies.
+    const before = upstreamCalls;
+    const burst = await Promise.all(
+      Array.from({ length: 5 }, () => fetch(`http://127.0.0.1:${PORT}/rgs/snapshot/77`))
+    );
+    for (const r of burst) {
+      expect(r.status).toBe(200);
+      expect(Array.from(new Uint8Array(await r.arrayBuffer()))).toEqual(Array.from(SNAPSHOT_BYTES));
+    }
+    expect(upstreamCalls).toBe(before + 1);
+  });
 });

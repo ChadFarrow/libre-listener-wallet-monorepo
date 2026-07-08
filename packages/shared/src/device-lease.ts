@@ -7,6 +7,8 @@
 // and a crashed holder's lease auto-expires so another device can take over. Pure decision here; the
 // VSS I/O lives in the SDK's vss-device-lease.ts.
 
+import { errorMatchesCode } from "./error-code";
+
 export const SINGLE_DEVICE_VIOLATION_CODE = "SINGLE_DEVICE_VIOLATION";
 
 /** Default lease length + renewal cadence. A holder renews well within the lease; if it crashes, the
@@ -43,12 +45,5 @@ export function evaluateDeviceLease(
 /** Boundary-stable check (mirrors isNodeAlreadyRunningError): true for the cross-device lock error,
  *  matching on the `code` field or the code token in `.message` (survives error-flattening). */
 export function isCrossDeviceLockError(e: unknown): boolean {
-  if (e == null) return false;
-  if (typeof e === "string") return e.includes(SINGLE_DEVICE_VIOLATION_CODE);
-  if (typeof e === "object") {
-    if ((e as { code?: unknown }).code === SINGLE_DEVICE_VIOLATION_CODE) return true;
-    const msg = (e as { message?: unknown }).message;
-    return typeof msg === "string" && msg.includes(SINGLE_DEVICE_VIOLATION_CODE);
-  }
-  return false;
+  return errorMatchesCode(e, SINGLE_DEVICE_VIOLATION_CODE);
 }

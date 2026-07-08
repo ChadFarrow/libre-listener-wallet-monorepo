@@ -6,6 +6,7 @@ import { channelCountLabel } from "../core/stat-format";
 import { parseNwcLimit } from "../core/nwc-limit";
 import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
 import { computeChecklist, getSeedBackedUp, setSeedBackedUp } from "../core/onboarding";
+import { guardedClick } from "../core/ui-helpers";
 import { driveRestore } from "../drive-integration";
 import {
   parseBudgetRenewal,
@@ -221,12 +222,8 @@ export function initHome(ctx: AppContext): void {
   });
 
   // ---- NWC pairing ----
-  $("create-nwc").addEventListener("click", async () => {
-    // Guard against a double-tap minting two live pairings (two spend secrets) before the first
-    // resolves. Disabled for the whole async handler; re-enabled in finally.
-    const nwcBtn = $<HTMLButtonElement>("create-nwc");
-    if (nwcBtn.disabled) return;
-    nwcBtn.disabled = true;
+  // guardedClick: a double-tap must not mint two live pairings (two spend secrets).
+  guardedClick($<HTMLButtonElement>("create-nwc"), async () => {
     setMsg("nwc-msg", "Creating pairing…");
     try {
       const maxRes = parseMaxAmount(($("nwc-max") as HTMLInputElement).value);
@@ -266,8 +263,6 @@ export function initHome(ctx: AppContext): void {
       void refreshNwcList();
     } catch (e) {
       setMsg("nwc-msg", (e as Error).message, "err");
-    } finally {
-      nwcBtn.disabled = false;
     }
   });
   $("copy-nwc").addEventListener("click", async () => {
@@ -325,46 +320,39 @@ export function initHome(ctx: AppContext): void {
   $("saved").addEventListener("change", (e) => {
     ($("create-confirm") as HTMLButtonElement).disabled = !(e.target as HTMLInputElement).checked;
   });
-  $("create-confirm").addEventListener("click", async () => {
-    // Disable for the whole async handler (incl. the confirm modal + createWallet) so a double-tap
-    // can't kick off two creates; re-enabled in finally.
-    const createBtn = $<HTMLButtonElement>("create-confirm");
-    if (createBtn.disabled) return;
-    createBtn.disabled = true;
+  // guardedClick: disabled for the whole handler (incl. the confirm modal + createWallet) so a
+  // double-tap can't kick off two creates.
+  guardedClick($<HTMLButtonElement>("create-confirm"), async () => {
+    const own = ($("seed-input") as HTMLInputElement).value.trim();
+    const seedHex = own || ($("seed").textContent || "");
+    if (own && !/^[0-9a-fA-F]{64}$/.test(own)) {
+      setMsg("create-msg", "That seed isn't valid — it must be 64 hex characters (32 bytes).", "err");
+      return;
+    }
+    // FORCE-CLOSE GUARD: creating with a pasted seed starts a FRESH, EMPTY node. If that seed
+    // already has a channel, connecting the peer force-closes it — a funded wallet must come back
+    // via Restore from backup.
+    if (own) {
+      const ok = await confirmModal({
+        title: "Only for a seed that has no channel",
+        body:
+          "Creating with a seed starts a brand-new, EMPTY wallet. If this seed already has a channel " +
+          "or a backup, this will FORCE-CLOSE that channel once you connect. To bring back a funded " +
+          "wallet, cancel and use Restore from backup instead.",
+        confirmLabel: "This seed has no channel — create",
+        cancelLabel: "Cancel",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setMsg("create-msg", "");
+    setMsg("msg", "Creating wallet & starting node…");
     try {
-      const own = ($("seed-input") as HTMLInputElement).value.trim();
-      const seedHex = own || ($("seed").textContent || "");
-      if (own && !/^[0-9a-fA-F]{64}$/.test(own)) {
-        setMsg("create-msg", "That seed isn't valid — it must be 64 hex characters (32 bytes).", "err");
-        return;
-      }
-      // FORCE-CLOSE GUARD: creating with a pasted seed starts a FRESH, EMPTY node. If that seed
-      // already has a channel, connecting the peer force-closes it — a funded wallet must come back
-      // via Restore from backup.
-      if (own) {
-        const ok = await confirmModal({
-          title: "Only for a seed that has no channel",
-          body:
-            "Creating with a seed starts a brand-new, EMPTY wallet. If this seed already has a channel " +
-            "or a backup, this will FORCE-CLOSE that channel once you connect. To bring back a funded " +
-            "wallet, cancel and use Restore from backup instead.",
-          confirmLabel: "This seed has no channel — create",
-          cancelLabel: "Cancel",
-          danger: true,
-        });
-        if (!ok) return;
-      }
-      setMsg("create-msg", "");
-      setMsg("msg", "Creating wallet & starting node…");
-      try {
-        await controller.createWallet({ seedHex });
-        setMsg("msg", "Wallet created", "ok");
-        void refresh();
-      } catch (e) {
-        setMsg("msg", (e as Error).message, "err");
-      }
-    } finally {
-      createBtn.disabled = false;
+      await controller.createWallet({ seedHex });
+      setMsg("msg", "Wallet created", "ok");
+      void refresh();
+    } catch (e) {
+      setMsg("msg", (e as Error).message, "err");
     }
   });
 

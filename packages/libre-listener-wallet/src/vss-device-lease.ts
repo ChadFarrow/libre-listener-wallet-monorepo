@@ -1,4 +1,4 @@
-import type { VssClient } from "./vss-client";
+import type { VssClient, VssLogger } from "./vss-client";
 import { isVssConflict } from "./vss-client";
 import {
   DEVICE_LEASE_MS,
@@ -10,12 +10,6 @@ import { CrossDeviceLockError } from "./cross-device-lease-error";
 
 // Storage key for the cross-device lease inside the (per-seed) VSS store.
 export const VSS_DEVICE_LEASE_KEY = "node_lease";
-
-interface LeaseLogger {
-  info?: (m: string) => void;
-  warn?: (m: string) => void;
-  error?: (m: string) => void;
-}
 
 // The subset of VssClient the lease needs — lets tests inject a stub over the in-memory VSS server.
 export type LeaseVssTarget = Pick<VssClient, "getObject" | "putObjects" | "deleteObject">;
@@ -36,12 +30,12 @@ export class VssDeviceLease {
   private readonly leaseMs: number;
   private readonly renewMs: number;
   private readonly now: () => number;
-  private readonly logger?: LeaseLogger;
+  private readonly logger?: VssLogger;
 
   constructor(
     private client: LeaseVssTarget,
     private ownerId: string,
-    opts: { leaseMs?: number; renewMs?: number; now?: () => number; logger?: LeaseLogger } = {},
+    opts: { leaseMs?: number; renewMs?: number; now?: () => number; logger?: VssLogger } = {},
   ) {
     this.leaseMs = opts.leaseMs ?? DEVICE_LEASE_MS;
     this.renewMs = opts.renewMs ?? DEVICE_LEASE_RENEW_MS;

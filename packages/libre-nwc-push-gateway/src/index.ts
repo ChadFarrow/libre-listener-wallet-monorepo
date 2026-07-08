@@ -1,46 +1,27 @@
 import webpush from "web-push";
 import Database from "better-sqlite3";
 import { Relay, verifyEvent } from "nostr-tools";
+import {
+  GATEWAY_AUTH_KIND,
+  GATEWAY_AUTH_MAX_AGE_SEC,
+  verifyGatewayAuth as verifyGatewayAuthShared,
+  type GatewayAuthAction,
+} from "@libre/shared";
 
-// NIP-98-style push-auth: the client proves control of its (public) walletPubkey by signing a
-// fresh, action/relay/endpoint-bound event. Without it, anyone who scrapes a wallet's public
-// Nostr pubkey off a relay could hijack or delete its push subscription. Kind + max age below.
-export const GATEWAY_AUTH_KIND = 27235;
-export const GATEWAY_AUTH_MAX_AGE_SEC = 300;
+// NIP-98-style push-auth. The wire contract (kind, tag names, freshness window) lives in
+// @libre/shared gateway-auth.ts — the SAME module the SDK's buildGatewayAuth signs against —
+// so the signer and this verifier cannot drift. Re-exported for the existing consumers/tests.
+export { GATEWAY_AUTH_KIND, GATEWAY_AUTH_MAX_AGE_SEC };
 
-/**
- * True only if `auth` is a valid signed event that proves control of `walletPubkey`, targets this
- * exact `action` + `relayUrl` (and, for register, `endpoint`), and is fresh. Every binding must
- * match, so a captured event can't be replayed to a different action/relay/endpoint or reused
- * after it expires. Pure (side-effect-free) and `now`-injectable for tests.
- */
+/** Shared verifier bound to nostr-tools' signature check. See @libre/shared gateway-auth.ts. */
 export function verifyGatewayAuth(
   auth: unknown,
   walletPubkey: string,
-  action: "register" | "unregister",
+  action: GatewayAuthAction,
   relayUrl: string,
   opts: { endpoint?: string; now?: number; maxAgeSec?: number } = {},
 ): boolean {
-  if (!auth || typeof auth !== "object") return false;
-  const ev = auth as Record<string, unknown>;
-  if (ev.kind !== GATEWAY_AUTH_KIND) return false;
-  if (typeof ev.pubkey !== "string" || ev.pubkey !== walletPubkey) return false;
-  const now = opts.now ?? Math.floor(Date.now() / 1000);
-  const maxAge = opts.maxAgeSec ?? GATEWAY_AUTH_MAX_AGE_SEC;
-  if (typeof ev.created_at !== "number" || Math.abs(now - ev.created_at) > maxAge) return false;
-  const tags: unknown[] = Array.isArray(ev.tags) ? ev.tags : [];
-  const tagVal = (name: string): string | undefined => {
-    const t = tags.find((x) => Array.isArray(x) && x[0] === name) as string[] | undefined;
-    return t?.[1];
-  };
-  if (tagVal("action") !== action) return false;
-  if (tagVal("relay") !== relayUrl) return false;
-  if (action === "register" && (!opts.endpoint || tagVal("endpoint") !== opts.endpoint)) return false;
-  try {
-    return verifyEvent(ev as any);
-  } catch {
-    return false;
-  }
+  return verifyGatewayAuthShared(auth, walletPubkey, action, relayUrl, (ev) => verifyEvent(ev), opts);
 }
 
 export interface GatewayConfig {
@@ -85,6 +66,16 @@ const RGS_MAX_BYTES = 32 * 1024 * 1024; // 32 MB
 const RGS_CACHE_TTL_MS = 60_000;
 const RGS_MAX_CACHE_ENTRIES = 8;
 
+// A non-OK / oversized upstream RGS response, carrying the HTTP status the proxy should relay
+// (an empty message means "status only, no JSON error body" — matching a passthrough of the
+// upstream status).
+class RgsUpstreamError extends Error {
+  constructor(readonly status: number, message = "") {
+    super(message);
+    this.name = "RgsUpstreamError";
+  }
+}
+
 /** True for a private / loopback / link-local / reserved IPv4 literal. */
 function isPrivateIpv4(ip: string): boolean {
   if (ip === "0.0.0.0") return true;
@@ -115,6 +106,9 @@ function mappedIpv4(h: string): string | null {
 // Private / loopback / link-local / reserved IPv4 literals + IPv6 loopback/ULA/link-local
 // and IPv4-mapped IPv6. Blocking these prevents an attacker-supplied relayUrl from making
 // the server probe internal services (e.g. cloud metadata at 169.254.169.254).
+// NOTE: kept in sync BY HAND with ws-bridge/src/allowlist.ts (that package can't import
+// @libre/shared — Railway builds it with Root Directory=ws-bridge, where workspace packages
+// don't resolve). Harden both together.
 function isPrivateHost(host: string): boolean {
   const h = host.toLowerCase().replace(/^\[|\]$/g, "");
   if (h === "localhost" || h === "::1" || h === "::") return true;
@@ -255,8 +249,29 @@ export class LibreNWCPushGateway {
   private vapidPublicKey: string = "";
   private listeners: Map<string, NostrRelayListener> = new Map();
   private server: any = null;
-  // In-memory TTL cache for RGS snapshots, keyed by validated timestamp.
-  private rgsCache: Map<string, { body: Buffer; expires: number }> = new Map();
+  // In-memory TTL cache for RGS snapshots, keyed by validated timestamp. Holds the in-flight
+  // fetch promise (not the finished body) so concurrent misses coalesce onto one upstream request.
+  private rgsCache: Map<string, { body: Promise<Buffer>; expires: number }> = new Map();
+
+  /** Fetch one upstream RGS snapshot, bounded in time and size. Throws RgsUpstreamError. */
+  private async fetchRgsSnapshot(ts: string): Promise<Buffer> {
+    const upstream = await fetch(`https://rapidsync.lightningdevkit.org/snapshot/${ts}`, {
+      signal: AbortSignal.timeout(RGS_FETCH_TIMEOUT_MS),
+    });
+    if (!upstream.ok) throw new RgsUpstreamError(upstream.status);
+    // Reject an oversized body (before and after download) to bound memory.
+    const declared = Number(upstream.headers.get("content-length") ?? "");
+    if (Number.isFinite(declared) && declared > RGS_MAX_BYTES) {
+      console.warn(`[RGS] upstream snapshot too large (content-length ${declared})`);
+      throw new RgsUpstreamError(502, "rgs snapshot too large");
+    }
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    if (buf.length > RGS_MAX_BYTES) {
+      console.warn(`[RGS] upstream snapshot too large (${buf.length} bytes)`);
+      throw new RgsUpstreamError(502, "rgs snapshot too large");
+    }
+    return buf;
+  }
 
   constructor(config: GatewayConfig) {
     this.config = {
@@ -458,43 +473,37 @@ export class LibreNWCPushGateway {
         res.status(400).json({ error: "timestamp must be a non-negative integer" });
         return;
       }
-      // Serve a recent snapshot from cache so a burst of browser fetches doesn't
-      // re-hit upstream once per client.
-      const cached = this.rgsCache.get(ts);
-      if (cached && cached.expires > Date.now()) {
-        res.set("Content-Type", "application/octet-stream").send(cached.body);
-        return;
+      const now = Date.now();
+      // Evict every expired entry up front — the TTL check alone left dead multi-MB Buffers
+      // resident until the size cap happened to push them out.
+      for (const [key, entry] of this.rgsCache) {
+        if (entry.expires <= now) this.rgsCache.delete(key);
       }
-      try {
-        // Bound how long we'll wait on the upstream fetch.
-        const upstream = await fetch(`https://rapidsync.lightningdevkit.org/snapshot/${ts}`, {
-          signal: AbortSignal.timeout(RGS_FETCH_TIMEOUT_MS),
+      // Serve from cache. The cache holds the in-flight PROMISE (set before the fetch starts),
+      // so an app-start burst of concurrent misses for one timestamp shares a single upstream
+      // fetch instead of buffering up to 32MB per request; a rejected fetch is dropped from the
+      // cache immediately so errors are never cached past the burst that shared them.
+      let entry = this.rgsCache.get(ts);
+      if (!entry) {
+        const body = this.fetchRgsSnapshot(ts);
+        entry = { body, expires: now + RGS_CACHE_TTL_MS };
+        this.rgsCache.set(ts, entry);
+        body.catch(() => {
+          if (this.rgsCache.get(ts) === entry) this.rgsCache.delete(ts);
         });
-        if (!upstream.ok) {
-          res.status(upstream.status).end();
-          return;
-        }
-        // Reject an oversized body (before and after download) to bound memory.
-        const declared = Number(upstream.headers.get("content-length") ?? "");
-        if (Number.isFinite(declared) && declared > RGS_MAX_BYTES) {
-          console.warn(`[RGS] upstream snapshot too large (content-length ${declared})`);
-          res.status(502).json({ error: "rgs snapshot too large" });
-          return;
-        }
-        const buf = Buffer.from(await upstream.arrayBuffer());
-        if (buf.length > RGS_MAX_BYTES) {
-          console.warn(`[RGS] upstream snapshot too large (${buf.length} bytes)`);
-          res.status(502).json({ error: "rgs snapshot too large" });
-          return;
-        }
-        // Cache with a short TTL, evicting the oldest entry past the cap.
-        this.rgsCache.set(ts, { body: buf, expires: Date.now() + RGS_CACHE_TTL_MS });
         if (this.rgsCache.size > RGS_MAX_CACHE_ENTRIES) {
           const oldest = this.rgsCache.keys().next().value;
           if (oldest !== undefined) this.rgsCache.delete(oldest);
         }
-        res.set("Content-Type", "application/octet-stream").send(buf);
+      }
+      try {
+        res.set("Content-Type", "application/octet-stream").send(await entry.body);
       } catch (err: any) {
+        if (err instanceof RgsUpstreamError) {
+          if (err.message) res.status(err.status).json({ error: err.message });
+          else res.status(err.status).end();
+          return;
+        }
         console.error("[RGS] proxy failed:", err.message || err);
         res.status(502).json({ error: "rgs upstream fetch failed" });
       }

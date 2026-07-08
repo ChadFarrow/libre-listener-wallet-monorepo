@@ -1,18 +1,19 @@
 import { z } from "zod";
+import { parseStrictInt } from "./strict-int";
 
 export const getInfoParamsSchema = z.object({}).optional();
 export const getBalanceParamsSchema = z.object({}).optional();
 
 // Coerce a number-or-string field to an integer, validating strictly. A string is
-// accepted ONLY if it is a plain base-10 integer (`/^\d+$/`), so lossy/ambiguous
-// forms a client might send — `"1e9"` (parseInt → 1), `"1,000"` (→ 1), `"-5"`,
-// `" 12"`, `""` — are rejected at the boundary instead of silently truncating.
+// accepted ONLY if it passes `parseStrictInt` (plain canonical base-10 integer), so
+// lossy/ambiguous forms a client might send — `"1e9"` (parseInt → 1), `"1,000"`
+// (→ 1), `"-5"`, `""` — are rejected at the boundary instead of silently truncating.
 // `mustBePositive` distinguishes an amount (must be > 0) from a bound like expiry
 // (>= 0). A failed coercion adds a Zod issue so `.parse` throws → the NWC layer
 // answers INVALID_PARAMS rather than handing a NaN/negative to a spend-cap check.
 function intField(mustBePositive: boolean) {
   return z.union([z.number(), z.string()]).transform((v, ctx) => {
-    const n = typeof v === "number" ? v : /^\d+$/.test(v.trim()) ? parseInt(v.trim(), 10) : NaN;
+    const n = typeof v === "number" ? v : (parseStrictInt(v) ?? NaN);
     if (!Number.isInteger(n) || (mustBePositive ? n <= 0 : n < 0)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

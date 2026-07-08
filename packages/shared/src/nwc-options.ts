@@ -4,6 +4,7 @@
 // parsing/validation is unit-testable without the DOM, and shared by the PWA
 // create form and the browser-extension popup.
 import type { BudgetRenewal, NwcMethod } from "./nwc-schema";
+import { parseStrictInt } from "./strict-int";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -21,8 +22,8 @@ export function parseBudgetRenewal(raw: string): BudgetRenewal {
 export function parseMaxAmount(raw: string): ParseResult<number | undefined> {
   const trimmed = raw.trim();
   if (trimmed === "") return { ok: true, value: undefined };
-  if (!/^\d+$/.test(trimmed)) return { ok: false, error: "Max per-payment must be a whole number of sats (or blank for no cap)." };
-  const n = parseInt(trimmed, 10);
+  const n = parseStrictInt(trimmed);
+  if (n === null) return { ok: false, error: "Max per-payment must be a whole number of sats (or blank for no cap)." };
   if (n <= 0) return { ok: false, error: "Max per-payment must be greater than 0 (leave blank for no cap)." };
   return { ok: true, value: n };
 }

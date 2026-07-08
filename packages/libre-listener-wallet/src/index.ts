@@ -118,7 +118,6 @@ import {
   serializeHighwater,
   mergeHighwater,
   findRegression,
-  highwaterEquals,
   ChannelStateRegressionError,
   type Highwater,
 } from "./state-highwater";
@@ -371,6 +370,8 @@ export class LibreListenerWallet {
   private nextDescriptorId: number = 1;
   private stateVersion: number = 0;
   private monitorHighwater: Highwater = new Map();
+  // Memoized funding-outpoint ("txidHex:index") → channelId for recordDurableHighwater.
+  private monitorChannelIds: Map<string, string> = new Map();
   private stateListeners: (() => void)[] = [];
   private connectedPeers: Map<string, WebSocketDescriptor> = new Map(); // hex pubkey -> descriptor
   // Peers we want to keep connected (hex pubkey -> address). Drives auto-reconnect.
@@ -477,6 +478,16 @@ export class LibreListenerWallet {
       seed = parseSeedHex(seedHex);
     }
 
+    // One VSS store id + client per start (opt-in via config.vssUrl), shared by the three VSS
+    // consumers below — re-hydrate (3b), device lease (3c), and the mirror — so the store
+    // derivation and client config can never drift between them.
+    let vssClient: VssClient | undefined;
+    let vssStoreId: string | undefined;
+    if (this.config.vssUrl) {
+      vssStoreId = await deriveVssStoreId(seedHex);
+      vssClient = new VssClient({ baseUrl: this.config.vssUrl, storeId: vssStoreId, logger: this.logger });
+    }
+
     // 3b. VSS durable-replica re-hydration (opt-in via config.vssUrl). If this origin has the seed
     // but NO channel_manager — local storage was lost/reaped, or the user did a seed-only restore —
     // pull the encrypted state envelope from VSS and restore it BEFORE loading the manager. This
@@ -485,8 +496,8 @@ export class LibreListenerWallet {
     // and channel_manager is absent (NEVER overwrites existing local channel state). Best-effort:
     // any failure (network, wrong-network envelope, decrypt) falls through to the normal path, where
     // the readiness/regression guards still apply.
-    if (this.config.vssUrl && seedExistedInStorage) {
-      const restored = await this.maybeRestoreStateFromVss(seedHex);
+    if (vssClient && seedExistedInStorage) {
+      const restored = await this.maybeRestoreStateFromVss(vssClient, seedHex);
       if (restored) {
         // reload() (NOT load(), which no-ops once loaded) so the cache actually picks up the
         // channel_manager + monitor keys importState just wrote straight to storage — otherwise
@@ -502,11 +513,9 @@ export class LibreListenerWallet {
     // same wallet running on another device. Claim a time-boxed lease in the shared VSS store BEFORE
     // dialing any peer; if another device holds a live lease, throw CrossDeviceLockError so we never
     // put a second node on the same channel (→ force-close). VSS unreachable → start with a warning.
-    if (this.config.vssUrl && this.config.enforceSingleDevice !== false) {
-      const leaseStoreId = await deriveVssStoreId(seedHex);
-      const leaseClient = new VssClient({ baseUrl: this.config.vssUrl, storeId: leaseStoreId, logger: this.logger });
+    if (vssClient && this.config.enforceSingleDevice !== false) {
       const ownerId = bytesToHex(getSecureRandomBytes(16));
-      const lease = new VssDeviceLease(leaseClient, ownerId, { logger: this.logger });
+      const lease = new VssDeviceLease(vssClient, ownerId, { logger: this.logger });
       await lease.acquire(); // throws CrossDeviceLockError if another device holds a live lease
       // Assign only AFTER acquire returns (didn't throw): a BLOCKED start must not later release/
       // delete the OTHER device's lease during teardown. A degraded (VSS-down) acquire still returns,
@@ -978,16 +987,11 @@ export class LibreListenerWallet {
     // Best-effort off-device backup of the encrypted state envelope after each state change; it
     // NEVER gates the node. Design A: a blind write of the same slim, seed-encrypted envelope the
     // Drive backup already produces, so the server only sees ciphertext (key-isolation guardrail).
-    if (this.config.vssUrl) {
+    if (vssClient) {
       try {
-        const seedForStore = await this.storage.getItem("ldk_seed");
-        if (seedForStore) {
-          const storeId = await deriveVssStoreId(seedForStore);
-          const vssClient = new VssClient({ baseUrl: this.config.vssUrl, storeId, logger: this.logger });
-          this.vssMirror = new VssMirror(vssClient, () => this.exportState(), { logger: this.logger });
-          this.vssMirror.flushNow(); // seed VSS with current state without waiting for a change
-          this.logger?.info(`[VSS] Durable-replica mirror enabled (store ${storeId.slice(0, 8)}…)`);
-        }
+        this.vssMirror = new VssMirror(vssClient, () => this.exportState(), { logger: this.logger });
+        void this.vssMirror.flush(); // seed VSS with current state without waiting for a change
+        this.logger?.info(`[VSS] Durable-replica mirror enabled (store ${vssStoreId!.slice(0, 8)}…)`);
       } catch (e) {
         // Never let VSS setup break startup.
         this.logger?.warn(`[VSS] Mirror setup failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
@@ -1050,50 +1054,15 @@ export class LibreListenerWallet {
     await this.nwc.start();
     } catch (e) {
       // A failed start that already flipped isRunning / armed the background loops must tear
-      // them ALL down before freeing the lock. Otherwise the loops keep persisting channel
-      // state and dialing peers on a "stopped" node while the run lock is released — letting a
-      // second context acquire the lock and start a SECOND node over the same IndexedDB (the
-      // dual-node race the single-node lock exists to prevent → stale-state force-close). We do
-      // NOT persist here (unlike stop()): a half-started node's state must not be written out.
-      this.vssMirror?.stop();
-      this.vssMirror = undefined;
-      // Release the lease only if WE acquired it (this.vssLease is set only after a non-blocked
-      // acquire) — a CrossDeviceLockError leaves it undefined so we never delete the holder's lease.
-      if (this.vssLease) { await this.vssLease.release().catch(() => {}); this.vssLease = undefined; }
+      // them ALL down before freeing the lock (see teardownRuntime). persist: false — a
+      // half-started node's state must not be written out.
       try {
-        await this.nwc.stop();
-      } catch (stopErr) {
-        this.logger?.error(`[start] NWC teardown after failed start: ${stopErr instanceof Error ? stopErr.message : stopErr}`);
+        await this.teardownRuntime({ persist: false });
+      } finally {
+        // Now free the lock so a retry / fresh instance in this context can start cleanly.
+        this.releaseRunLock?.();
+        this.releaseRunLock = undefined;
       }
-      for (const id of [this.syncIntervalId, this.peerTickIntervalId, this.eventTickIntervalId, this.gossipIntervalId]) {
-        if (id) clearInterval(id);
-      }
-      this.syncIntervalId = undefined;
-      this.peerTickIntervalId = undefined;
-      this.eventTickIntervalId = undefined;
-      this.gossipIntervalId = undefined;
-      for (const timer of this.reconnectTimers.values()) clearTimeout(timer);
-      this.reconnectTimers.clear();
-      this.reconnectAttempts.clear();
-      this.desiredPeers.clear();
-      for (const descriptor of this.connectedPeers.values()) {
-        try { descriptor.disconnect_socket(); } catch { /* best-effort during failed-start teardown */ }
-      }
-      this.connectedPeers.clear();
-      this.channelManager = undefined;
-      this.chainMonitor = undefined;
-      this.keysManager = undefined;
-      this.networkGraph = undefined;
-      this.scorer = undefined;
-      this.lockableScore = undefined;
-      this.monitorUpdatingPersister = undefined;
-      this.peerManager = undefined;
-      this.ldkLogger = undefined;
-      this.isRunning = false;
-
-      // Now free the lock so a retry / fresh instance in this context can start cleanly.
-      this.releaseRunLock?.();
-      this.releaseRunLock = undefined;
       throw e;
     }
   }
@@ -1200,27 +1169,43 @@ export class LibreListenerWallet {
    */
   private recordDurableHighwater(txidLe: Uint8Array, index: number, updateId: bigint): void {
     if (!this.chainMonitor) return;
-    const txidHex = bytesToHex(txidLe);
     let channelId: string | undefined;
     try {
-      for (const tuple of this.chainMonitor.list_monitors()) {
-        const outpoint = tuple.get_a();
-        if (outpoint.get_index() === index && bytesToHex(outpoint.get_txid()) === txidHex) {
-          channelId = bytesToHex(tuple.get_b().get_a());
-          break;
-        }
-      }
+      channelId = this.lookupMonitorChannelId(bytesToHex(txidLe), index);
     } catch (e) {
       this.logger?.error(`[Highwater] list_monitors lookup failed: ${e instanceof Error ? e.message : e}`);
       return;
     }
     if (!channelId) return; // channel closed/removed between persist and ack — nothing to track
-    const merged = mergeHighwater(this.monitorHighwater, [{ channelId, latestUpdateId: updateId }]);
-    if (highwaterEquals(merged, this.monitorHighwater)) return;
-    this.monitorHighwater = merged;
+    // In-place monotonic advance (mergeHighwater's semantics for a single channel, without the
+    // per-ack full-Map copy + deep-equals — this runs in the durable-ack hot path, ~2-3× per payment).
+    const cur = this.monitorHighwater.get(channelId);
+    if (cur !== undefined && updateId <= cur) return;
+    this.monitorHighwater.set(channelId, updateId);
     this.storage
-      .setItem(MONITOR_HIGHWATER_KEY, serializeHighwater(merged))
+      .setItem(MONITOR_HIGHWATER_KEY, serializeHighwater(this.monitorHighwater))
       .catch((e) => this.logger?.error(`Failed to persist ${MONITOR_HIGHWATER_KEY}: ${e instanceof Error ? e.message : e}`));
+  }
+
+  /**
+   * Funding-outpoint → channelId, memoized. The monitor set only changes on channel open/close,
+   * so scanning list_monitors() (a WASM vector materialization) on every durable ack is wasted
+   * work; a miss re-scans, and the cache is cleared on teardown. A stale entry for a closed
+   * channel is benign: findRegression ignores a mark that has no loaded monitor.
+   */
+  private lookupMonitorChannelId(txidHex: string, index: number): string | undefined {
+    const key = `${txidHex}:${index}`;
+    const cached = this.monitorChannelIds.get(key);
+    if (cached) return cached;
+    for (const tuple of this.chainMonitor!.list_monitors()) {
+      const outpoint = tuple.get_a();
+      if (outpoint.get_index() === index && bytesToHex(outpoint.get_txid()) === txidHex) {
+        const channelId = bytesToHex(tuple.get_b().get_a());
+        this.monitorChannelIds.set(key, channelId);
+        return channelId;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -1360,52 +1345,48 @@ export class LibreListenerWallet {
     }
   }
 
-  async stop(): Promise<void> {
-    if (!this.isRunning) {
-      this.logger?.warn("Wallet is not running");
-      return;
-    }
-    this.logger?.info("Stopping LDK Node...");
-
-    const releaseRunLock = this.releaseRunLock;
-    this.releaseRunLock = undefined;
-
-    // FLUSH the VSS mirror before stopping — upload this device's FINAL state (the channel manager
-    // is still alive here) so the next device to pick up the wallet re-hydrates the latest state, not
-    // a throttled-stale one. This is what makes a cross-device handoff safe. Then stop the mirror.
+  /**
+   * Tear down every runtime resource start() arms — the VSS mirror/lease, NWC listeners, the 4
+   * background loops, reconnect timers, peer sockets — and null the LDK pointers. The ONE teardown
+   * path, shared by stop() and start()'s failure handler, so a resource added to start() can never
+   * leak on just one of them (a leaked loop keeps persisting channel state and dialing peers after
+   * the run lock frees — letting a second context start a SECOND node over the same IndexedDB, the
+   * dual-node race the single-node lock exists to prevent → stale-state force-close).
+   *
+   * `persist: true` (a clean stop()) additionally flushes the VSS mirror FIRST — uploading this
+   * device's FINAL state while the channel manager is still alive, which is what makes a
+   * cross-device handoff safe — and persists the channel manager. A failed start passes
+   * `persist: false`: a half-started node's state must NOT be written out.
+   */
+  private async teardownRuntime(opts: { persist: boolean }): Promise<void> {
     if (this.vssMirror) {
-      await this.vssMirror.flush().catch((e) =>
-        this.logger?.error(`[VSS] Final mirror flush on stop failed: ${e instanceof Error ? e.message : e}`)
-      );
+      if (opts.persist) {
+        await this.vssMirror.flush().catch((e) =>
+          this.logger?.error(`[VSS] Final mirror flush on stop failed: ${e instanceof Error ? e.message : e}`)
+        );
+      }
       this.vssMirror.stop();
       this.vssMirror = undefined;
     }
     // Release the cross-device lease so another device can take over immediately (best-effort).
+    // Only if WE acquired it (this.vssLease is set only after a non-blocked acquire) — a
+    // CrossDeviceLockError leaves it undefined so we never delete the holder's lease.
     if (this.vssLease) { await this.vssLease.release().catch(() => {}); this.vssLease = undefined; }
 
+    // Stop Nostr Wallet Connect listeners (log-and-continue: the rest of the teardown must run).
     try {
-    // Stop Nostr Wallet Connect listeners
-    await this.nwc.stop();
-
-    if (this.syncIntervalId) {
-      clearInterval(this.syncIntervalId);
-      this.syncIntervalId = undefined;
+      await this.nwc.stop();
+    } catch (e) {
+      this.logger?.error(`NWC teardown failed: ${e instanceof Error ? e.message : e}`);
     }
 
-    if (this.peerTickIntervalId) {
-      clearInterval(this.peerTickIntervalId);
-      this.peerTickIntervalId = undefined;
+    for (const id of [this.syncIntervalId, this.peerTickIntervalId, this.eventTickIntervalId, this.gossipIntervalId]) {
+      if (id) clearInterval(id);
     }
-
-    if (this.eventTickIntervalId) {
-      clearInterval(this.eventTickIntervalId);
-      this.eventTickIntervalId = undefined;
-    }
-
-    if (this.gossipIntervalId) {
-      clearInterval(this.gossipIntervalId);
-      this.gossipIntervalId = undefined;
-    }
+    this.syncIntervalId = undefined;
+    this.peerTickIntervalId = undefined;
+    this.eventTickIntervalId = undefined;
+    this.gossipIntervalId = undefined;
 
     // Stop auto-reconnect first: cancel pending redials and forget desired peers so the
     // disconnects below don't schedule new reconnect attempts.
@@ -1416,12 +1397,15 @@ export class LibreListenerWallet {
 
     // Disconnect peers
     for (const descriptor of this.connectedPeers.values()) {
-      descriptor.disconnect_socket();
+      try { descriptor.disconnect_socket(); } catch { /* best-effort during teardown */ }
     }
     this.connectedPeers.clear();
+    this.monitorChannelIds.clear();
 
     // Persist final states
-    await this.persistManagerState();
+    if (opts.persist) {
+      await this.persistManagerState();
+    }
 
     // Free pointers to prevent WASM leaks
     this.channelManager = undefined;
@@ -1435,6 +1419,20 @@ export class LibreListenerWallet {
     this.ldkLogger = undefined;
 
     this.isRunning = false;
+  }
+
+  async stop(): Promise<void> {
+    if (!this.isRunning) {
+      this.logger?.warn("Wallet is not running");
+      return;
+    }
+    this.logger?.info("Stopping LDK Node...");
+
+    const releaseRunLock = this.releaseRunLock;
+    this.releaseRunLock = undefined;
+
+    try {
+      await this.teardownRuntime({ persist: true });
     } finally {
       releaseRunLock?.();
     }
@@ -1557,14 +1555,11 @@ export class LibreListenerWallet {
    * import so a VSS replica behind this device's proven progress still trips the Layer-A regression
    * halt on the manager load rather than silently reconnecting with stale state.
    */
-  private async maybeRestoreStateFromVss(seedHex: string): Promise<boolean> {
-    if (!this.config.vssUrl) return false;
+  private async maybeRestoreStateFromVss(client: VssClient, seedHex: string): Promise<boolean> {
     try {
       // Only re-hydrate into EMPTY local storage. (Newer-VSS-over-stale-local is not safe to copy —
       // that's the cross-device active-handoff limitation; the safe pattern is one node + NWC clients.)
       if ((await this.storage.getItem("channel_manager")) !== null) return false;
-      const storeId = await deriveVssStoreId(seedHex);
-      const client = new VssClient({ baseUrl: this.config.vssUrl, storeId, logger: this.logger });
       const obj = await client.getObject(VSS_STATE_BACKUP_KEY);
       if (!obj || obj.value.length === 0) return false; // nothing durable to restore
       const envelope = new TextDecoder().decode(obj.value);

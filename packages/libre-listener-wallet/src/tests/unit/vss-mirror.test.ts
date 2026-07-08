@@ -90,10 +90,10 @@ describe("VssMirror", () => {
     expect(client.putObjects).not.toHaveBeenCalled();
   });
 
-  it("flushNow() uploads immediately without waiting for the debounce", async () => {
+  it("flush() uploads immediately without waiting for the debounce", async () => {
     const client = stubClient();
     const mirror = new VssMirror(client, async () => "now", { debounceMs: 5000 });
-    mirror.flushNow();
+    void mirror.flush();
     await vi.advanceTimersByTimeAsync(0);
     expect(client.putObjects).toHaveBeenCalledTimes(1);
     expect(new TextDecoder().decode(client.puts[0][0].value)).toBe("now");

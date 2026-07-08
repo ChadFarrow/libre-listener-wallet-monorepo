@@ -1,0 +1,41 @@
+{
+  "name": "@libre/lsps1-mock-server",
+  "version": "0.1.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./msw": {
+      "types": "./dist/msw.d.ts",
+      "default": "./dist/msw.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node server.cjs",
+    "test": "vitest run",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@libre/shared": "workspace:*"
+  },
+  "peerDependencies": {
+    "msw": "^2.3.0"
+  },
+  "peerDependenciesMeta": {
+    "msw": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "msw": "^2.3.0",
+    "tsup": "^8.0.2",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

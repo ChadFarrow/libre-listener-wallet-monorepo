@@ -344,28 +344,9 @@ export function initHome(ctx: AppContext): void {
   // guardedClick: disabled for the whole handler (incl. the confirm modal + createWallet) so a
   // double-tap can't kick off two creates.
   guardedClick($<HTMLButtonElement>("create-confirm"), async () => {
-    const own = ($("seed-input") as HTMLInputElement).value.trim();
-    const seedHex = own || ($("seed").textContent || "");
-    if (own && !/^[0-9a-fA-F]{64}$/.test(own)) {
-      setMsg("create-msg", "That seed isn't valid — it must be 64 hex characters (32 bytes).", "err");
-      return;
-    }
-    // FORCE-CLOSE GUARD: creating with a pasted seed starts a FRESH, EMPTY node. If that seed
-    // already has a channel, connecting the peer force-closes it — a funded wallet must come back
-    // via Restore from backup.
-    if (own) {
-      const ok = await confirmModal({
-        title: "Only for a seed that has no channel",
-        body:
-          "Creating with a seed starts a brand-new, EMPTY wallet. If this seed already has a channel " +
-          "or a backup, this will FORCE-CLOSE that channel once you connect. To bring back a funded " +
-          "wallet, cancel and use Restore from backup instead.",
-        confirmLabel: "This seed has no channel — create",
-        cancelLabel: "Cancel",
-        danger: true,
-      });
-      if (!ok) return;
-    }
+    // Create is always a brand-new, freshly generated seed. Bringing back an existing wallet is a
+    // Restore action (needs the backup envelope), so there's no pasted-seed path here anymore.
+    const seedHex = $("seed").textContent || "";
     setMsg("create-msg", "");
     setMsg("msg", "Creating wallet & starting node…");
     try {

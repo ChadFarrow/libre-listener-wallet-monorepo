@@ -5,6 +5,7 @@ import { confirmModal } from "../ui/confirm-modal";
 import { channelCountLabel } from "../core/stat-format";
 import { parseNwcLimit } from "../core/nwc-limit";
 import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
+import { computeChecklist, getSeedBackedUp, setSeedBackedUp } from "../core/onboarding";
 import { guardedClick } from "../core/ui-helpers";
 import { driveRestore } from "../drive-integration";
 import {
@@ -28,6 +29,13 @@ function randomSeedHex(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(32)))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+// Switch tabs (via the global wired in main.ts) and scroll a target card into view. Used by the
+// onboarding checklist to deep-link the buried Settings actions (recovery phrase, get-a-channel).
+function goTo(tab: string, elId: string): void {
+  (window as unknown as { showTab?: (t: string) => void }).showTab?.(tab);
+  requestAnimationFrame(() => document.getElementById(elId)?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
 export function initHome(ctx: AppContext): void {
@@ -73,14 +81,65 @@ export function initHome(ctx: AppContext): void {
           ($(id) as HTMLButtonElement).disabled = !running;
         }
         if (running) void refreshNwcList();
+
+        // Guided setup checklist + the "you need a channel to receive" hint.
+        const checklist = computeChecklist({
+          hasWallet: true,
+          backedUp: getSeedBackedUp(s.network),
+          running,
+          channels: s.channels ?? 0,
+          usableChannels: s.usableChannels ?? 0,
+        });
+        renderChecklist(checklist);
+        show($("receive-hint"), running && (s.balance?.receivableSat ?? 0) === 0);
       }
     } catch (e) {
       setMsg("msg", (e as Error).message, "err");
     }
   }
 
+  function renderChecklist(cl: ReturnType<typeof computeChecklist>): void {
+    show($("onboarding-checklist"), cl.visible);
+    if (!cl.visible) return;
+    const list = $("checklist-items");
+    list.innerHTML = "";
+    for (const it of cl.items) {
+      const li = document.createElement("li");
+      li.className = `checklist-item ${it.done ? "done" : it.active ? "active" : "upcoming"}`;
+      const mark = document.createElement("span");
+      mark.className = "mark";
+      mark.textContent = it.done ? "✓" : "";
+      const body = document.createElement("div");
+      body.className = "body";
+      const label = document.createElement("span");
+      label.className = "label";
+      label.textContent = it.label;
+      body.appendChild(label);
+      if (it.note) {
+        const note = document.createElement("span");
+        note.className = "note";
+        note.textContent = it.note;
+        body.appendChild(note);
+      }
+      if (it.active && it.actionLabel) {
+        const btn = document.createElement("button");
+        btn.className = "btn primary small";
+        btn.textContent = it.actionLabel;
+        btn.disabled = !!it.actionDisabled;
+        btn.addEventListener("click", () => {
+          if (it.key === "backup") goTo("settings", "recovery-card");
+          else if (it.key === "start") void startNode();
+          else if (it.key === "channel") goTo("settings", "lsps1-card");
+        });
+        body.appendChild(btn);
+      }
+      li.append(mark, body);
+      list.appendChild(li);
+    }
+  }
+
   // ---- lifecycle ----
-  $("start").addEventListener("click", async () => {
+  async function startNode(): Promise<void> {
     setMsg("msg", "Starting node…");
     try {
       await controller.startNode();
@@ -107,7 +166,8 @@ export function initHome(ctx: AppContext): void {
       setMsg("msg", (e as Error).message, "err");
     }
     void refresh();
-  });
+  }
+  $("start").addEventListener("click", () => void startNode());
 
   $("stop").addEventListener("click", async () => {
     await controller.stopNode().catch((e) => setMsg("msg", (e as Error).message, "err"));
@@ -297,6 +357,11 @@ export function initHome(ctx: AppContext): void {
   });
 
   // ---- setup: restore ----
+  // A successful restore means the user already holds a backup — tick the checklist's backup step.
+  async function markBackedUp(): Promise<void> {
+    const st = await controller.getState().catch(() => null);
+    if (st) setSeedBackedUp(st.network);
+  }
   $("restore-btn").addEventListener("click", () => {
     show($("restore-panel"), true);
     show($("create-panel"), false);
@@ -316,6 +381,7 @@ export function initHome(ctx: AppContext): void {
     try {
       await controller.restoreWallet(envelope, secret);
       setMsg("restore-msg", "Wallet restored", "ok");
+      void markBackedUp();
       void refresh();
     } catch (e) {
       if (isNodeAlreadyRunningError(e)) {
@@ -346,6 +412,7 @@ export function initHome(ctx: AppContext): void {
       setMsg("restore-msg", "Restoring…");
       await controller.restoreWallet(envelope, secret);
       setMsg("restore-msg", "Wallet restored", "ok");
+      void markBackedUp();
       void refresh();
     } catch (e) {
       if (isNodeAlreadyRunningError(e)) {
@@ -365,6 +432,7 @@ export function initHome(ctx: AppContext): void {
     try {
       await driveRestore(controller, secret);
       setMsg("restore-msg", "Wallet restored from Drive", "ok");
+      void markBackedUp();
       void refresh();
     } catch (e) {
       if (isNodeAlreadyRunningError(e)) {

@@ -52,6 +52,7 @@ jobs:
           pnpm --filter @libre/shared test
           pnpm --filter @libre/nwc-push-gateway test
           pnpm --filter @libre/lsps2-server test
+          pnpm --filter @libre/lsps1-mock-server test
           pnpm --filter @libre/example-app test
           pnpm --filter @libre/browser-extension test
           pnpm --filter @libre/wallet-pwa test

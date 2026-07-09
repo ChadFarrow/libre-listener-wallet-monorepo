@@ -21,6 +21,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@libre/lsps1-mock-server": "workspace:*",
     "@libre/lsps2-server": "workspace:*",
     "@types/ws": "^8.18.1",
     "bolt11": "^1.4.1",

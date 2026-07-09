@@ -9,6 +9,7 @@ import {
   downloadBackup,
   listBackupNetworks,
   pickRestoreNetwork,
+  deleteAllBackups,
 } from "./drive-backup";
 import type { WalletController } from "./wallet-controller";
 
@@ -45,6 +46,13 @@ export async function ensureDriveConnected(opts: { silent?: boolean } = {}): Pro
   await driveConnect(clientId, { silent: opts.silent, hint });
   const email = getConnectedEmail();
   if (email) localStorage.setItem(HINT_KEY, email);
+}
+
+// Remove every network's encrypted backup from Google Drive. Ensures a live token first (it's
+// in-memory, so it's null after a page reload). Returns which networks were removed.
+export async function driveDeleteBackups(): Promise<string[]> {
+  await ensureDriveConnected();
+  return deleteAllBackups();
 }
 
 export async function driveBackupNow(controller: WalletController): Promise<{ network: string }> {

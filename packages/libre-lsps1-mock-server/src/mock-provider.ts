@@ -34,6 +34,9 @@ export interface MockLsps1Config {
   maxChannelExpiryBlocks?: number;
   // 0 advertises a zero-conf-capable LSP (Megalith); 3 mirrors Olympus.
   minRequiredChannelConfirmations?: number;
+  // Whether get_info advertises supports_zero_channel_reserve. Independent of 0-conf — a zero
+  // channel RESERVE is a different capability than zero CONFIRMATIONS. The SDK ignores this field.
+  supportsZeroChannelReserve?: boolean;
   // Opening fee = feeBaseSat + ceil(lsp_balance_sat * feePpm / 1e6).
   feeBaseSat?: number;
   feePpm?: number;
@@ -67,6 +70,7 @@ const DEFAULTS = {
   maxChannelSat: 16_000_000,
   maxChannelExpiryBlocks: 13_140,
   minRequiredChannelConfirmations: 0,
+  supportsZeroChannelReserve: false,
   feeBaseSat: 2_000,
   feePpm: 4_000,
   nodePubkey: "038a9e56512ec98da2b5789761f7af8f280baf98a09282360cd6ff1381b5e889bf",
@@ -92,6 +96,8 @@ export class MockLsps1Provider {
       maxChannelExpiryBlocks: config.maxChannelExpiryBlocks ?? DEFAULTS.maxChannelExpiryBlocks,
       minRequiredChannelConfirmations:
         config.minRequiredChannelConfirmations ?? DEFAULTS.minRequiredChannelConfirmations,
+      supportsZeroChannelReserve:
+        config.supportsZeroChannelReserve ?? DEFAULTS.supportsZeroChannelReserve,
       feeBaseSat: config.feeBaseSat ?? DEFAULTS.feeBaseSat,
       feePpm: config.feePpm ?? DEFAULTS.feePpm,
       nodePubkey: config.nodePubkey ?? DEFAULTS.nodePubkey,
@@ -121,7 +127,7 @@ export class MockLsps1Provider {
       max_channel_expiry_blocks: this.cfg.maxChannelExpiryBlocks,
       min_required_channel_confirmations: this.cfg.minRequiredChannelConfirmations,
       min_funding_confirms_within_blocks: 6,
-      supports_zero_channel_reserve: this.cfg.minRequiredChannelConfirmations === 0,
+      supports_zero_channel_reserve: this.cfg.supportsZeroChannelReserve,
       uris: [this.uri],
     };
   }
@@ -141,6 +147,15 @@ export class MockLsps1Provider {
       throw new MockLspError(
         400,
         `lsp_balance_sat ${lspBalanceSat} outside bounds [${this.cfg.minChannelSat}, ${this.cfg.maxChannelSat}]`
+      );
+    }
+    // A real LSP rejects a lease longer than its advertised max (the SDK clamps, so only a buggy
+    // client hits this — which the mock should surface, not absorb).
+    const expiryBlocks = body.channel_expiry_blocks;
+    if (!Number.isFinite(expiryBlocks) || expiryBlocks < 1 || expiryBlocks > this.cfg.maxChannelExpiryBlocks) {
+      throw new MockLspError(
+        400,
+        `channel_expiry_blocks ${expiryBlocks} outside bounds [1, ${this.cfg.maxChannelExpiryBlocks}]`
       );
     }
 
@@ -193,13 +208,7 @@ export class MockLsps1Provider {
 
   complete(orderId: string): Lsps1RestOrderResponse {
     const rec = this.require(orderId);
-    this.setPaid(rec.order);
-    rec.order.order_state = "COMPLETED";
-    rec.order.channel = {
-      funded_at: new Date(this.cfg.clock()).toISOString(),
-      funding_outpoint: `${"0".repeat(64)}:0`,
-      expires_at: new Date(this.cfg.clock() + 90 * 86_400_000).toISOString(),
-    };
+    this.setCompleted(rec.order);
     rec.pinned = true;
     return this.clone(rec.order);
   }
@@ -225,9 +234,7 @@ export class MockLsps1Provider {
   private applyTimedAdvance(rec: MockOrder): void {
     const elapsed = this.cfg.clock() - rec.createdAtMs;
     if (elapsed >= this.cfg.completedAfterMs) {
-      this.setPaid(rec.order);
-      rec.order.order_state = "COMPLETED";
-      rec.order.channel = { funded_at: new Date(this.cfg.clock()).toISOString() };
+      this.setCompleted(rec.order);
     } else if (elapsed >= this.cfg.paidAfterMs) {
       this.setPaid(rec.order);
     }
@@ -235,6 +242,18 @@ export class MockLsps1Provider {
 
   private setPaid(order: Lsps1RestOrderResponse): void {
     if (order.payment?.bolt11) order.payment.bolt11.state = "PAID";
+  }
+
+  // One channel shape for BOTH completion paths (manual complete() and timed advance) so the UI
+  // sees the same fields either way.
+  private setCompleted(order: Lsps1RestOrderResponse): void {
+    this.setPaid(order);
+    order.order_state = "COMPLETED";
+    order.channel = {
+      funded_at: new Date(this.cfg.clock()).toISOString(),
+      funding_outpoint: `${"0".repeat(64)}:0`,
+      expires_at: new Date(this.cfg.clock() + 90 * 86_400_000).toISOString(),
+    };
   }
 
   private require(orderId: string): MockOrder {

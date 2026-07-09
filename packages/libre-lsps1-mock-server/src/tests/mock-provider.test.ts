@@ -30,6 +30,16 @@ describe("MockLsps1Provider.getInfo", () => {
     expect(info.min_required_channel_confirmations).toBe(3);
     expect(info.supports_zero_channel_reserve).toBe(false);
   });
+
+  it("supports_zero_channel_reserve is its own knob (zero reserve ≠ zero conf), default off", () => {
+    // A 0-conf LSP does not imply a zero channel reserve — keep the two signals independent.
+    expect(new MockLsps1Provider().getInfo().supports_zero_channel_reserve).toBe(false);
+    const info = new MockLsps1Provider({
+      minRequiredChannelConfirmations: 0,
+      supportsZeroChannelReserve: true,
+    }).getInfo();
+    expect(info.supports_zero_channel_reserve).toBe(true);
+  });
 });
 
 describe("MockLsps1Provider.createOrder", () => {
@@ -52,6 +62,18 @@ describe("MockLsps1Provider.createOrder", () => {
       p.createOrder(orderBody({ lsp_balance_sat: "1000" }));
     } catch (e) {
       expect((e as MockLspError).status).toBe(400);
+    }
+  });
+
+  it("rejects channel_expiry_blocks beyond the LSP max with a 400-class error", () => {
+    const p = new MockLsps1Provider({ maxChannelExpiryBlocks: 13140 });
+    try {
+      p.createOrder(orderBody({ channel_expiry_blocks: 13141 }));
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(MockLspError);
+      expect((e as MockLspError).status).toBe(400);
+      expect((e as MockLspError).message).toMatch(/channel_expiry_blocks/);
     }
   });
 
@@ -117,6 +139,22 @@ describe("order lifecycle — timed mode (deterministic via injected clock)", ()
     now += 4000; // total 9000, past completedAfterMs
     expect(p.getOrder(id).order_state).toBe("COMPLETED");
     expect(p.getOrder(id).channel).toBeTruthy();
+  });
+
+  it("a timed COMPLETED order carries the same full channel shape as manual complete()", () => {
+    let now = 1_000_000;
+    const p = new MockLsps1Provider({
+      advance: "timed",
+      paidAfterMs: 1000,
+      completedAfterMs: 2000,
+      clock: () => now,
+    });
+    const id = p.createOrder(orderBody()).order_id;
+    now += 3000; // past completedAfterMs
+    const ch = p.getOrder(id).channel as { funded_at?: string; funding_outpoint?: string; expires_at?: string };
+    expect(ch.funded_at).toBeTruthy();
+    expect(ch.funding_outpoint).toBeTruthy();
+    expect(ch.expires_at).toBeTruthy();
   });
 });
 

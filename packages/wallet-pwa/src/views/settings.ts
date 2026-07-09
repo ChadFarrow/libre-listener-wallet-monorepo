@@ -332,9 +332,12 @@ export function initSettings(ctx: AppContext): void {
     setMsg("backup-msg", "Opening Google sign-in…");
     try {
       await ensureDriveConnected();
-      setMsg("backup-msg", "Drive connected", "ok");
+      setMsg("backup-msg", "Drive connected — backups now sync automatically", "ok");
       refreshDriveStatus();
       void markSeedBackedUp();
+      // Catch-up backup right away, and emit so the onboarding checklist's cloud-backup step ticks.
+      if (ctx.isRunning()) void driveBackupNow(controller).catch((e) => console.warn("[Drive] initial backup failed:", (e as Error)?.message || e));
+      emitControllerEvent("state-changed");
     } catch (e) {
       setMsg("backup-msg", (e as Error).message, "err");
     }

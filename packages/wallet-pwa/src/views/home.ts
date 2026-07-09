@@ -9,7 +9,7 @@ import { computeChecklist, getSeedBackedUp, setSeedBackedUp } from "../core/onbo
 import { resolveSeedInput } from "../core/seed-input";
 import { guardedClick } from "../core/ui-helpers";
 import { formatOpeningFee } from "../core/lsps1-provider-ui";
-import { driveRestore } from "../drive-integration";
+import { driveRestore, driveConfigured, ensureDriveConnected, driveBackupNow } from "../drive-integration";
 import {
   parseBudgetRenewal,
   parseMaxAmount,
@@ -105,6 +105,7 @@ export function initHome(ctx: AppContext): void {
         const checklist = computeChecklist({
           hasWallet: true,
           backedUp: getSeedBackedUp(s.network),
+          cloudBackup: driveConfigured(),
           running,
           channels: s.channels ?? 0,
           usableChannels: s.usableChannels ?? 0,
@@ -160,6 +161,7 @@ export function initHome(ctx: AppContext): void {
         btn.disabled = !!it.actionDisabled;
         btn.addEventListener("click", () => {
           if (it.key === "backup") goTo("settings", "recovery-card");
+          else if (it.key === "cloudBackup") void connectCloudBackup();
           else if (it.key === "start") void startNode();
           else if (it.key === "channel") void orderQuickChannel();
         });
@@ -578,6 +580,18 @@ export function initHome(ctx: AppContext): void {
 
   async function orderQuickChannel(): Promise<void> {
     if (quickChannelBusy) return;
+    // MANDATORY cloud backup: never let funds land in a channel before there's an off-device backup
+    // destination. The checklist disables this action until Drive is configured, but guard here too
+    // (belt-and-suspenders) and point the user at the connect step.
+    if (!driveConfigured()) {
+      show($("quick-channel"), true);
+      $("quick-channel-fee").textContent = "";
+      show($("quick-channel-qr"), false);
+      show($("quick-channel-invoice"), false);
+      show($("quick-channel-copy"), false);
+      setMsg("quick-channel-msg", "Turn on cloud backup (Google Drive) first — a channel can't be recovered without a backup.", "err");
+      return;
+    }
     const provider = LSPS1_REST_PROVIDERS.megalith;
     quickChannelBusy = true;
     show($("quick-channel"), true);
@@ -621,6 +635,24 @@ export function initHome(ctx: AppContext): void {
     await navigator.clipboard.writeText($<HTMLTextAreaElement>("quick-channel-invoice").value).catch(() => {});
     setMsg("quick-channel-msg", "Invoice copied", "ok");
   });
+
+  // ---- mandatory cloud backup (checklist step) ----
+  // Connects Google Drive (interactive — fine, this runs from a button gesture) and, if the node is
+  // running, does an immediate catch-up backup so current state is saved right away. Ongoing state
+  // changes are then auto-synced by the listener in main.ts.
+  async function connectCloudBackup(): Promise<void> {
+    setMsg("checklist-msg", "Connecting Google Drive…");
+    try {
+      await ensureDriveConnected();
+      setMsg("checklist-msg", "Cloud backup on ✓", "ok");
+      if (running) {
+        void driveBackupNow(controller).catch((e) => console.warn("[DriveSync] initial backup failed:", (e as Error)?.message || e));
+      }
+      void refresh();
+    } catch (e) {
+      setMsg("checklist-msg", `Couldn't connect Google Drive: ${(e as Error).message}`, "err");
+    }
+  }
 
   onControllerEvent(() => void refresh());
   void refresh();

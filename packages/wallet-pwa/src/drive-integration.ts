@@ -30,6 +30,12 @@ export function driveConnected(): boolean {
 export function rememberedEmail(): string | null {
   return getConnectedEmail() || localStorage.getItem(HINT_KEY);
 }
+// Persistent "cloud backup has been set up" signal for the onboarding gate. Uses the remembered
+// account (set the first time Drive connects) rather than the in-memory token, so the mandatory
+// backup step stays satisfied across reloads — the token silently reconnects on first interaction.
+export function driveConfigured(): boolean {
+  return !!rememberedEmail();
+}
 
 export async function ensureDriveConnected(opts: { silent?: boolean } = {}): Promise<void> {
   if (isConnected()) return;

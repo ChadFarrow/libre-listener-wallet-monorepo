@@ -10,6 +10,7 @@ import {
 const base: ChecklistInputs = {
   hasWallet: true,
   backedUp: false,
+  cloudBackup: false,
   running: false,
   channels: 0,
   usableChannels: 0,
@@ -18,52 +19,73 @@ const base: ChecklistInputs = {
 const item = (r: ReturnType<typeof computeChecklist>, key: string) => r.items.find((i) => i.key === key)!;
 
 describe("computeChecklist", () => {
-  it("fresh wallet: four steps, create done, backup active", () => {
+  it("fresh wallet: five steps, create done, backup active", () => {
     const r = computeChecklist(base);
     expect(r.visible).toBe(true);
-    expect(r.items.map((i) => i.key)).toEqual(["create", "backup", "start", "channel"]);
+    expect(r.items.map((i) => i.key)).toEqual(["create", "backup", "cloudBackup", "start", "channel"]);
     expect(item(r, "create").done).toBe(true);
     expect(item(r, "backup").active).toBe(true);
+    expect(item(r, "cloudBackup").active).toBe(false);
+  });
+
+  it("phrase backed up but no cloud backup: cloud backup is the active step", () => {
+    const r = computeChecklist({ ...base, backedUp: true });
+    expect(item(r, "backup").done).toBe(true);
+    expect(item(r, "cloudBackup").active).toBe(true);
     expect(item(r, "start").active).toBe(false);
   });
 
-  it("backed up but node stopped: start is the active step", () => {
-    const r = computeChecklist({ ...base, backedUp: true });
-    expect(item(r, "backup").done).toBe(true);
+  it("both backups done, node stopped: start is the active step", () => {
+    const r = computeChecklist({ ...base, backedUp: true, cloudBackup: true });
+    expect(item(r, "cloudBackup").done).toBe(true);
     expect(item(r, "start").active).toBe(true);
     expect(item(r, "channel").active).toBe(false);
   });
 
-  it("running with no channel: get-a-channel is active and enabled", () => {
-    const r = computeChecklist({ ...base, backedUp: true, running: true });
+  it("running with both backups and no channel: get-a-channel is active and enabled", () => {
+    const r = computeChecklist({ ...base, backedUp: true, cloudBackup: true, running: true });
     expect(item(r, "start").done).toBe(true);
     const ch = item(r, "channel");
     expect(ch.active).toBe(true);
     expect(ch.actionDisabled).toBe(false);
   });
 
-  it("get-a-channel action is disabled until the node runs", () => {
-    const r = computeChecklist({ ...base, backedUp: true });
+  it("cloud backup gates the channel: disabled with a connect-backup note even when running", () => {
+    const r = computeChecklist({ ...base, backedUp: true, cloudBackup: false, running: true });
+    const ch = item(r, "channel");
+    expect(ch.actionDisabled).toBe(true);
+    expect(ch.note).toBe("Turn on cloud backup first.");
+    expect(item(r, "cloudBackup").active).toBe(true);
+  });
+
+  it("cloud backup on but node stopped: channel disabled with a start-first note", () => {
+    const r = computeChecklist({ ...base, backedUp: true, cloudBackup: true });
     expect(item(r, "channel").actionDisabled).toBe(true);
     expect(item(r, "channel").note).toBe("Start the node first.");
   });
 
   it("channel pending (not yet usable): step done with an opening note", () => {
-    const r = computeChecklist({ ...base, backedUp: true, running: true, channels: 1, usableChannels: 0 });
+    const r = computeChecklist({ ...base, backedUp: true, cloudBackup: true, running: true, channels: 1, usableChannels: 0 });
     const ch = item(r, "channel");
     expect(ch.done).toBe(true);
     expect(ch.note).toBe("Channel opening — this can take a bit.");
   });
 
-  it("funded but NOT backed up: still visible, only backup incomplete", () => {
-    const r = computeChecklist({ ...base, backedUp: false, running: true, channels: 1, usableChannels: 1 });
+  it("funded but NOT phrase-backed up: still visible, backup incomplete", () => {
+    const r = computeChecklist({ ...base, backedUp: false, cloudBackup: true, running: true, channels: 1, usableChannels: 1 });
     expect(r.visible).toBe(true);
     expect(item(r, "backup").active).toBe(true);
     expect(item(r, "channel").done).toBe(true);
   });
 
-  it("backed up AND has a channel: hidden", () => {
-    const r = computeChecklist({ ...base, backedUp: true, running: true, channels: 1, usableChannels: 1 });
+  it("funded + phrase backed up but no cloud backup: still visible (cloud backup incomplete)", () => {
+    const r = computeChecklist({ ...base, backedUp: true, cloudBackup: false, running: true, channels: 1, usableChannels: 1 });
+    expect(r.visible).toBe(true);
+    expect(item(r, "cloudBackup").active).toBe(true);
+  });
+
+  it("both backups done AND has a channel: hidden", () => {
+    const r = computeChecklist({ ...base, backedUp: true, cloudBackup: true, running: true, channels: 1, usableChannels: 1 });
     expect(r.visible).toBe(false);
   });
 

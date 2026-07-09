@@ -5,6 +5,7 @@ import { emitControllerEvent, onControllerEvent } from "./core/events";
 import { AUTO_START_KEY } from "./core/auto-start";
 import { registerServiceWorker, wireInstallPrompt } from "./register-sw";
 import { downloadBackupName } from "./core/backup-name";
+import { driveConnected, driveBackupNow } from "./drive-integration";
 import { initHome } from "./views/home";
 import { initSettings } from "./views/settings";
 
@@ -54,6 +55,21 @@ onControllerEvent((event) => {
       }
     })();
   }, 8000);
+});
+
+// ---- Google Drive auto-sync (debounced on every state change) ----
+// Once Drive is connected, keep the encrypted backup current automatically so a newly opened channel
+// is always recoverable — the whole reason cloud backup is mandatory before getting a channel. Only
+// runs when a live token exists; a fresh launch silently reconnects on the user's first interaction
+// (drive-ui), after which the next state change syncs. Never prompts on its own.
+let driveSyncTimer: ReturnType<typeof setTimeout> | undefined;
+onControllerEvent((event) => {
+  if (event !== "state-changed") return;
+  if (!controller.isRunning() || !driveConnected()) return;
+  clearTimeout(driveSyncTimer);
+  driveSyncTimer = setTimeout(() => {
+    void driveBackupNow(controller).catch((e) => console.warn("[DriveSync] auto-backup failed:", (e as Error)?.message || e));
+  }, 5000);
 });
 
 // ---- boot ----

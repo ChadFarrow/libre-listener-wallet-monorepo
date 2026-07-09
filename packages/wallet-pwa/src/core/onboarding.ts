@@ -28,7 +28,7 @@ export function setSeedBackedUp(network: string): void {
   }
 }
 
-export type ChecklistStepKey = "create" | "backup" | "start" | "channel";
+export type ChecklistStepKey = "create" | "backup" | "cloudBackup" | "start" | "channel";
 
 export interface ChecklistItem {
   key: ChecklistStepKey;
@@ -43,6 +43,7 @@ export interface ChecklistItem {
 export interface ChecklistInputs {
   hasWallet: boolean;
   backedUp: boolean;
+  cloudBackup: boolean; // Google Drive backup configured — MANDATORY before getting a channel
   running: boolean;
   channels: number; // total channels (pending counts) — 0 when the node is stopped/unknown
   usableChannels: number; // channels ready to route
@@ -72,6 +73,15 @@ export function computeChecklist(i: ChecklistInputs): Checklist {
     actionLabel: "Show recovery phrase",
   };
 
+  const cloudBackup: ChecklistItem = {
+    key: "cloudBackup",
+    label: "Turn on cloud backup (Google Drive)",
+    done: i.cloudBackup,
+    active: false,
+    actionLabel: "Connect Google Drive",
+    note: "Required before you get a channel — it's the only way to restore channel funds if you lose this device.",
+  };
+
   const start: ChecklistItem = {
     key: "start",
     label: "Start the node",
@@ -86,25 +96,28 @@ export function computeChecklist(i: ChecklistInputs): Checklist {
     done: hasChannel,
     active: false,
     actionLabel: "Get a channel",
-    // Needs a live node to buy a channel — show the action but disable it until the node runs.
-    actionDisabled: !i.running,
+    // Needs a live node AND a cloud backup destination — a channel opened with no backup can't be
+    // recovered if the device is lost. Show the action but disable it until both are satisfied.
+    actionDisabled: !i.running || !i.cloudBackup,
   };
   if (hasChannel && i.usableChannels === 0) {
     channel.note = "Channel opening — this can take a bit.";
+  } else if (!i.cloudBackup) {
+    channel.note = "Turn on cloud backup first.";
   } else if (!i.running) {
     channel.note = "Start the node first.";
   }
 
-  const items = [create, backup, start, channel];
+  const items = [create, backup, cloudBackup, start, channel];
 
   // The active step is the first incomplete one (create is done whenever the card shows).
   const firstIncomplete = items.find((it) => !it.done);
   if (firstIncomplete) firstIncomplete.active = true;
 
-  // Show the card while the wallet still needs the essentials: a real backup AND a channel. A
-  // funded-but-unbacked wallet keeps showing the backup nag (funds are at risk); a backed-up,
-  // funded (or restored/established) wallet hides it entirely.
-  const visible = i.hasWallet && !(i.backedUp && hasChannel);
+  // Show the card while the wallet still needs the essentials: recovery-phrase backup, a cloud
+  // backup destination, AND a channel. Any missing one keeps the card up (a funded-but-unbacked
+  // wallet keeps nagging — funds are at risk); a fully-set-up wallet hides it entirely.
+  const visible = i.hasWallet && !(i.backedUp && i.cloudBackup && hasChannel);
 
   return { items, visible };
 }

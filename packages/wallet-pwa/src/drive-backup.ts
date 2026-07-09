@@ -209,3 +209,19 @@ export async function downloadBackup(network: string): Promise<string | null> {
   );
   return await res.text();
 }
+
+// Delete a single network's backup file. No-op if there's nothing to delete. DELETE returns
+// HTTP 204 with an empty body, so we don't read the response.
+export async function deleteBackup(network: string): Promise<void> {
+  const id = await findBackupFileId(network);
+  if (!id) return;
+  await driveFetch(`https://www.googleapis.com/drive/v3/files/${id}`, { method: "DELETE" });
+}
+
+// Remove EVERY network's backup from the app's private Drive folder. Returns the networks that
+// had a backup (for a status message).
+export async function deleteAllBackups(): Promise<string[]> {
+  const nets = await listBackupNetworks();
+  for (const n of nets) await deleteBackup(n);
+  return nets;
+}

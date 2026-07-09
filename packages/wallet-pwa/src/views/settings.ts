@@ -29,6 +29,7 @@ import {
   rememberedEmail,
   ensureDriveConnected,
   driveBackupNow,
+  driveDeleteBackups,
 } from "../drive-integration";
 import { enablePush, disablePush, isPushEnabled, pushSupported } from "../web-push";
 
@@ -348,6 +349,36 @@ export function initSettings(ctx: AppContext): void {
       const { network } = await driveBackupNow(controller);
       setMsg("backup-msg", `Backed up (${network}) to Google Drive`, "ok");
       void markSeedBackedUp();
+    } catch (e) {
+      setMsg("backup-msg", (e as Error).message, "err");
+    }
+  });
+  // guardedClick: single-flight so a double-tap can't fire two deletes.
+  guardedClick($<HTMLButtonElement>("drive-delete"), async () => {
+    // Require the node stopped: auto-sync (main.ts) only runs while running, so a stopped node keeps
+    // the delete deleted instead of silently re-uploading it moments later.
+    if (ctx.isRunning()) {
+      setMsg("backup-msg", "Stop the node first, then delete the Drive backup.", "err");
+      return;
+    }
+    const ok = await confirmModal({
+      title: "Delete Google Drive backup?",
+      body:
+        "This permanently removes your encrypted backup from Google Drive. If you have a channel and " +
+        "no other backup, its funds become UNRECOVERABLE. Your local wallet is not affected.",
+      confirmLabel: "Delete backup",
+      danger: true,
+    });
+    if (!ok) return;
+    setMsg("backup-msg", "Deleting Drive backup…");
+    try {
+      const removed = await driveDeleteBackups();
+      setMsg(
+        "backup-msg",
+        removed.length ? `Deleted Drive backup (${removed.join(", ")}).` : "No Drive backup found to delete.",
+        "ok"
+      );
+      refreshDriveStatus();
     } catch (e) {
       setMsg("backup-msg", (e as Error).message, "err");
     }

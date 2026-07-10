@@ -608,6 +608,9 @@ export function initSettings(ctx: AppContext): void {
       void refreshBackupState();
       void loadChannels();
       void loadNodeInfo();
+      // The Drive silent reconnect (main.ts, first-gesture) emits state-changed — without this
+      // the card kept showing "reconnect <email>" after the token was already live.
+      refreshDriveStatus();
     }
   });
 }

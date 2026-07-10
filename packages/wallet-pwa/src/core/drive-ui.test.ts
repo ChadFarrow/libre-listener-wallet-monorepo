@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { driveButtonView, shouldArmGestureReconnect } from "./drive-ui";
+import { driveButtonView, shouldArmGestureReconnect, backupMsgOnStateChange, NODE_STOPPED_BACKUP_MSG } from "./drive-ui";
 
 describe("driveButtonView", () => {
   it("shows a success-styled 'Connected' button when connected", () => {
@@ -31,5 +31,25 @@ describe("shouldArmGestureReconnect", () => {
   it("does not arm without a prior-account hint", () => {
     expect(shouldArmGestureReconnect(false, null)).toBe(false);
     expect(shouldArmGestureReconnect(false, "")).toBe(false);
+  });
+});
+
+describe("backupMsgOnStateChange", () => {
+  it("shows the stopped hint whenever the node is not running", () => {
+    expect(backupMsgOnStateChange(false, "")).toBe(NODE_STOPPED_BACKUP_MSG);
+    expect(backupMsgOnStateChange(false, "Downloaded backup.json. Store it safely.")).toBe(NODE_STOPPED_BACKUP_MSG);
+  });
+
+  it("clears the stale stopped hint once the node is running", () => {
+    // Settings renders before the async auto-start completes, so the stopped hint gets
+    // set at init; the state-changed refresh must clear it or it sticks forever.
+    expect(backupMsgOnStateChange(true, NODE_STOPPED_BACKUP_MSG)).toBe("");
+  });
+
+  it("leaves any other message alone while running", () => {
+    // state-changed fires on every channel-state persist — an unconditional clear
+    // would wipe a real status like the export-success message within seconds.
+    expect(backupMsgOnStateChange(true, "Downloaded backup.json. Store it safely.")).toBeNull();
+    expect(backupMsgOnStateChange(true, "")).toBeNull();
   });
 });

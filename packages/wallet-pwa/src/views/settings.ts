@@ -33,6 +33,7 @@ import {
   driveDeleteBackups,
 } from "../drive-integration";
 import { isMobileUa } from "../core/backup-policy";
+import { backupMsgOnStateChange } from "../core/drive-ui";
 import { enablePush, disablePush, isPushEnabled, pushSupported } from "../web-push";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -293,7 +294,8 @@ export function initSettings(ctx: AppContext): void {
     const running = ctx.isRunning();
     ($("export") as HTMLButtonElement).disabled = !running;
     ($("drive-backup-now") as HTMLButtonElement).disabled = !running;
-    if (!running) setMsg("backup-msg", "Start the node to export or sync a backup.");
+    const msg = backupMsgOnStateChange(running, $("backup-msg").textContent ?? "");
+    if (msg !== null) setMsg("backup-msg", msg);
     lsps1Running = running;
     updateLsps1OrderBtn();
   }

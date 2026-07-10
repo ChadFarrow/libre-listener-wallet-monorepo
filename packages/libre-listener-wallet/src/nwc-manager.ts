@@ -892,9 +892,24 @@ export class NwcManager {
         // of boost splits is exactly why later ones were timing out client-side).
         signalReserved();
 
-        const preimageHex = await this.awaitSettlementCharged(pairing, amtSats, settled);
+        // Ack on dispatch. We OWN the keysend preimage, so the client can be answered the moment
+        // the payment is irrevocably in flight — no need to block on settlement like pay_invoice
+        // (whose preimage is the payee's secret, revealed only on settlement). A browser LDK node
+        // settles a boost burst slower than a client's (Alby Go's) request timeout, so waiting for
+        // Event_PaymentSent made every boost surface as "Failed" even though it succeeded — the
+        // client only learned of the settle via the async payment_sent notification, too late to
+        // clear the already-failed request. Settlement is still tracked in the background: the
+        // payment_sent notification fires on it (the real confirmation) and the optimistic budget
+        // debit is refunded on a definitive failure. Trade-off: a keysend that later fails to
+        // route was already reported sent — acceptable for tiny fire-and-forget V4V boosts, and
+        // LDK retries the route up to 10× before giving up.
+        void this.awaitSettlementCharged(pairing, amtSats, settled).catch(() => {
+          // A definitive failure already refunded the debit inside; a bare timeout keeps the
+          // charge (still in flight). Nothing to send here — the client was acked on dispatch,
+          // and a late settle still delivers the payment_sent notification.
+        });
 
-        await this.sendResultResponse(event, "pay_keysend", { preimage: preimageHex }, relayUrl, rpcReq.id);
+        await this.sendResultResponse(event, "pay_keysend", { preimage: bytesToHex(keysendPreimage) }, relayUrl, rpcReq.id);
 
       } else if (request.method === "list_transactions") {
         // Read-only history (Alby Go et al.). No spending-limit/budget checks. The wallet's

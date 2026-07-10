@@ -502,6 +502,56 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
 
       expect(sendSpy).toHaveBeenCalledTimes(2);
     });
+
+    it("acks a keysend on dispatch, returning the preimage without waiting for settlement", async () => {
+      // We own the keysend preimage, so the client is answered as soon as the payment is
+      // irrevocably in flight — a browser LDK node settles a boost burst slower than Alby Go's
+      // request timeout, and waiting for Event_PaymentSent made every boost show "Failed" even
+      // though the async payment_sent notification later confirmed it. The response must NOT
+      // depend on settlement. Regression guard.
+      const clientSecretBytes = generateSecretKey();
+      const clientSecretHex = bytesToHex(clientSecretBytes);
+      const clientPubkeyHex = getPublicKey(clientSecretBytes);
+
+      nwc["connections"].push({
+        name: "Ack App",
+        clientPubkey: clientPubkeyHex,
+        secret: clientSecretHex,
+        spendingLimitSats: 0,
+        spentTodaySats: 0,
+        lastSpentTimestamp: Date.now(),
+        createdAt: Date.now(),
+        enabled: true,
+        relayUrl: "wss://relay.test.io",
+      });
+      await nwc["saveConnections"]();
+
+      // Initiates OK but never settles (no Event_PaymentSent/Failed is ever fired).
+      vi.spyOn(wallet, "sendKeysendPayment").mockResolvedValue({ ok: true, paymentId: "00", paymentHash: "00" } as any);
+
+      await nwc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      const walletPubkeyHex = nwc["walletPubkey"]!;
+
+      const preimageHex = "ab".repeat(32); // client-supplied preimage → echoed back in the response
+      const dest = "02" + "c".repeat(64);
+      const content = await nip04.encrypt(
+        clientSecretHex,
+        walletPubkeyHex,
+        JSON.stringify({ jsonrpc: "2.0", id: "ack-1", method: "pay_keysend", params: { amount: 2000, pubkey: dest, preimage: preimageHex } })
+      );
+
+      mockPublish.mockClear();
+      await subHandler!({ kind: 23194, pubkey: clientPubkeyHex, id: "evt-ack-1", content });
+
+      // A success response is published even though nothing settled.
+      const respCall = mockPublish.mock.calls.map((c) => c[0]).find((e: any) => e.kind === 23195);
+      expect(respCall).toBeDefined();
+      const resp = JSON.parse(await nip04.decrypt(clientSecretHex, walletPubkeyHex, respCall.content));
+      expect(resp.result_type).toBe("pay_keysend");
+      expect(resp.result.preimage).toBe(preimageHex);
+      expect(resp.error).toBeUndefined();
+    });
   });
 
   describe("Spending budget is charged at initiation, not only on synchronous settlement", () => {

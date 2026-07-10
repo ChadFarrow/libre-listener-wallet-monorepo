@@ -271,7 +271,8 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       expect(lastCallEvent!.kind).toBe(23195);
       const responsePlain = await nip04.decrypt(clientSecretHex, walletPubkeyHex, lastCallEvent!.content);
       const responseObj = JSON.parse(responsePlain);
-      expect(responseObj.id).toBe(reqId1);
+      // NIP-47 correlates the response to its request via the `e` tag (request event id).
+      expect(lastCallEvent!.tags).toContainEqual(["e", "evt-1"]);
       expect(responseObj.result.preimage).toBeDefined();
 
       // Check cumulative spending
@@ -343,7 +344,9 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       expect(successCall3).toBeDefined();
       const res3Plain = await nip04.decrypt(clientSecretHex, walletPubkeyHex, successCall3.content);
       const res3Obj = JSON.parse(res3Plain);
-      expect(res3Obj.id).toBe(reqId3);
+      // NIP-47 correlates a response to its request via the `e` tag (the request event id),
+      // not a content `id` field — so assert the tag rather than a (no-longer-emitted) id.
+      expect(successCall3.tags).toContainEqual(["e", "evt-3"]);
       expect(res3Obj.result.preimage).toBeDefined();
 
       // Limit should have reset and now have spent 50 sats

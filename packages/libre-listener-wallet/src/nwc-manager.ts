@@ -956,17 +956,19 @@ export class NwcManager {
     resultType: string,
     result: any,
     relayUrl: string,
-    id?: string | number
+    // Kept for call-site symmetry with sendErrorResponse; the response no longer echoes a content
+    // id (NIP-47 correlates by the `e` tag). Underscore-prefixed so it's not flagged as unused.
+    _id?: string | number
   ): Promise<void> {
     const relay = this.relays.get(relayUrl);
     if (!relay) return;
 
-    // NIP-47 requires the `error` field on EVERY response — null on success. A strict client can
-    // reject a response that omits it (was omitted here). `jsonrpc`/`id` aren't part of NIP-47 but
-    // are harmless extras that clients ignore.
+    // Match the NIP-47 response schema EXACTLY: only `result_type`, `error` (null on success —
+    // required, not optional), and `result`. The old response also carried `jsonrpc`/`id`, which
+    // are NOT part of NIP-47 (that's JSON-RPC 2.0, a different protocol); a strict client parser
+    // (Alby Go 2.x) can reject a response with unexpected fields, marking a settled payment
+    // "failed". Responses are correlated by the `e` tag (the request event id), never a content id.
     const plaintext = JSON.stringify({
-      jsonrpc: "2.0",
-      id: id || null,
       result_type: resultType,
       error: null,
       result,

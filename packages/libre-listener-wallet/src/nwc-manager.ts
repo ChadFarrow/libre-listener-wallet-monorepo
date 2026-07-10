@@ -573,24 +573,35 @@ export class NwcManager {
       this.markEventHandled(eventId);
     }
 
-    // Serialize requests per client so the spending-limit check-and-update is atomic —
-    // concurrent requests from one client must not both pass the limit check before
-    // either records its spend (TOCTOU race).
+    // Serialize the spending-limit check-and-debit per client so it stays atomic —
+    // concurrent requests from one client must not both pass the limit check before either
+    // records its spend (TOCTOU race). But gate the NEXT request only on THIS one's budget
+    // RESERVATION (check + debit + initiation), NOT its settlement: a V4V boost arrives as a
+    // burst of pay_keysend requests from one client, and holding the serialization lock through
+    // each settlement await (up to 90s) made later splits wait behind every prior settlement,
+    // blow the client's request timeout, and surface as "failed" though they actually settled.
     const key = event.pubkey;
     const prev = this.requestChains.get(key) ?? Promise.resolve();
-    const run = prev.then(() => this.processNwcRequest(event, relayUrl));
-    const chain = run.catch(() => {});
-    this.requestChains.set(key, chain);
+    let releaseReserved!: () => void;
+    const reserved = new Promise<void>((res) => { releaseReserved = res; });
+    // Full processing (may await settlement) still runs after the previous request has at least
+    // reserved its budget, so the debit ordering is preserved.
+    const run = prev.then(() => this.processNwcRequest(event, relayUrl, releaseReserved));
+    // Belt-and-suspenders: always release the gate when processing ends, covering every exit
+    // that didn't explicitly signal (early rejections, throws before the debit).
+    void run.catch(() => {}).finally(() => releaseReserved());
+    // The next request queues behind this request's RESERVATION, not its settlement.
+    this.requestChains.set(key, reserved);
     // Drop the entry once this client's queue drains, so the map can't grow one permanent entry
     // per (unauthenticated) sender pubkey over a long-lived session. Only delete if we're still
     // the tail — a newer request may have replaced us.
-    void chain.finally(() => {
-      if (this.requestChains.get(key) === chain) this.requestChains.delete(key);
+    void reserved.finally(() => {
+      if (this.requestChains.get(key) === reserved) this.requestChains.delete(key);
     });
     return run;
   }
 
-  private async processNwcRequest(event: any, relayUrl: string): Promise<void> {
+  private async processNwcRequest(event: any, relayUrl: string, signalReserved: () => void = () => {}): Promise<void> {
     // 1. Locate connection object
     const pairing = this.connections.find((c) => c.clientPubkey === event.pubkey && c.enabled);
     if (!pairing) {
@@ -808,6 +819,10 @@ export class NwcManager {
           throw new Error(`LDK send_payment failed: ${(sendRes as any).err?.toString() || "Route not found"}`);
         }
 
+        // Budget is reserved and the payment is in flight: release this client's serialization
+        // gate so the next queued request can start, instead of holding it through settlement.
+        signalReserved();
+
         const preimageHex = await this.awaitSettlementCharged(pairing, amtSats, promise);
 
         await this.sendResultResponse(event, "pay_invoice", { preimage: preimageHex }, relayUrl, rpcReq.id);
@@ -871,6 +886,11 @@ export class NwcManager {
           await this.refundBudget(pairing, amtSats); // never initiated — reverse the debit
           throw new Error(`Keysend failed to initiate: ${sendRes.error}`);
         }
+
+        // Budget is reserved and the keysend is in flight: release this client's serialization
+        // gate so the next split can start, instead of holding it through settlement (the burst
+        // of boost splits is exactly why later ones were timing out client-side).
+        signalReserved();
 
         const preimageHex = await this.awaitSettlementCharged(pairing, amtSats, settled);
 

@@ -443,6 +443,65 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       expect(quota).toBe(1);
       expect((await nwc.listConnections())[0].spentTodaySats).toBeLessThanOrEqual(100);
     });
+
+    it("initiates a burst of keysends without blocking each on the previous one's settlement", async () => {
+      // A V4V boost arrives as a burst of pay_keysend requests from ONE client (Alby Go).
+      // The per-client serialization must gate the NEXT request only on the previous one's
+      // budget reservation, NOT its settlement — otherwise later splits wait through each
+      // prior settlement, blow the client's request timeout, and show as "Failed" even though
+      // they settle. Regression guard for that bug.
+      const clientSecretBytes = generateSecretKey();
+      const clientSecretHex = bytesToHex(clientSecretBytes);
+      const clientPubkeyHex = getPublicKey(clientSecretBytes);
+
+      nwc["connections"].push({
+        name: "Boost App",
+        clientPubkey: clientPubkeyHex,
+        secret: clientSecretHex,
+        spendingLimitSats: 0, // unlimited — isolate the serialization behavior
+        spentTodaySats: 0,
+        lastSpentTimestamp: Date.now(),
+        createdAt: Date.now(),
+        enabled: true,
+        relayUrl: "wss://relay.test.io",
+      });
+      await nwc["saveConnections"]();
+
+      // Each keysend initiates OK but never settles (the `settled` promise the manager awaits
+      // stays pending), simulating an in-flight HTLC.
+      const sendSpy = vi
+        .spyOn(wallet, "sendKeysendPayment")
+        .mockResolvedValue({ ok: true, paymentId: "00", paymentHash: "00" } as any);
+
+      await nwc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      const walletPubkeyHex = nwc["walletPubkey"]!;
+
+      // Two distinct destinations (valid 33-byte compressed pubkeys).
+      const dest1 = "02" + "a".repeat(64);
+      const dest2 = "03" + "b".repeat(64);
+      const mkKeysend = async (id: string, pubkey: string) => ({
+        kind: 23194,
+        pubkey: clientPubkeyHex,
+        id: `evt-${id}`,
+        content: await nip04.encrypt(
+          clientSecretHex,
+          walletPubkeyHex,
+          JSON.stringify({ jsonrpc: "2.0", id, method: "pay_keysend", params: { amount: 2000, pubkey } })
+        ),
+      });
+
+      const e1 = await mkKeysend("k1", dest1);
+      const e2 = await mkKeysend("k2", dest2);
+
+      // Fire both, then wait briefly. Neither settles. With the bug, the second keysend is
+      // never initiated (blocked behind the first's settlement await); with the fix, both are.
+      void subHandler!(e1);
+      void subHandler!(e2);
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(sendSpy).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("Spending budget is charged at initiation, not only on synchronous settlement", () => {

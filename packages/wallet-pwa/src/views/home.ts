@@ -347,7 +347,7 @@ export function initHome(ctx: AppContext): void {
     const box = $("nwc-list");
     box.innerHTML = "";
     for (const c of list) {
-      const cap = c.spendingLimitSats > 0 ? `${c.spentTodaySats ?? 0}/${c.spendingLimitSats} sat` : "no cap";
+      const cap = c.spendingLimitSats > 0 ? `${c.spentThisPeriodSats ?? 0}/${c.spendingLimitSats} sat` : "no cap";
       const item = document.createElement("div");
       item.className = "nwc-item";
       const nm = document.createElement("span");

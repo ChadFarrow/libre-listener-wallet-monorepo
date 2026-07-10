@@ -1,13 +1,19 @@
 import {
   LibreListenerWallet,
   IndexedDBStorageProvider,
+  PaymentLogger,
   bytesToHex,
   seedHexToMnemonic,
+  resolveLnAddressInvoice,
+  parsePeerAddressBook,
   type SecureStorageProvider,
   type ChannelInfo,
 } from "@libre/listener-wallet";
 import { zeroConfTrustedPubkeys, acquireWebNodeLock, nodeLockName } from "@libre/shared";
-import type { BudgetRenewal, NwcMethod } from "@libre/shared";
+import type { BudgetRenewal, NwcMethod, PaymentRecord } from "@libre/shared";
+import { classifySendInput } from "./core/send-input";
+import { sanitizeConnection, type NwcConnectionView } from "./core/nwc-connection-view";
+import { buildPeerRows, type PeerRow } from "./core/peer-list";
 import {
   dbNameForNetwork,
   META_DB_NAME,
@@ -516,23 +522,94 @@ export class WalletController {
     return { uri };
   }
 
-  async nwcListConnections(): Promise<Array<{ name: string; clientPubkey: string; relayUrl: string; spendingLimitSats: number; spentTodaySats?: number }>> {
+  async nwcListConnections(): Promise<NwcConnectionView[]> {
     this.requireRunning();
     const list = await this.wallet!.nwc.listConnections();
-    // Deliberately omit each pairing's `secret` — it never leaves the wallet controller.
-    return list.map((c) => ({
-      name: c.name,
-      clientPubkey: c.clientPubkey,
-      relayUrl: c.relayUrl,
-      spendingLimitSats: c.spendingLimitSats ?? 0,
-      spentTodaySats: c.spentTodaySats ?? 0,
-    }));
+    // sanitizeConnection deliberately omits each pairing's `secret` — it never leaves the
+    // wallet controller (pinned by core/nwc-connection-view.test.ts).
+    return list.map(sanitizeConnection);
   }
 
   async nwcDeleteConnection(clientPubkey: string): Promise<void> {
     this.requireRunning();
     await this.wallet!.nwc.deleteConnection(clientPubkey);
     this.emit("state-changed");
+  }
+
+  // ---- Payment history + send ----
+
+  // Forward-only payment history (SDK PaymentLogger is the source of truth). Works with the
+  // node stopped: a fresh logger reads the persisted tx_* records straight from storage, so
+  // the transactions sheet is usable offline/at rest.
+  async getPayments(): Promise<PaymentRecord[]> {
+    if (this.isRunning()) return this.wallet!.getPayments();
+    const logger = new PaymentLogger({ storage: this.storageForNetwork(await this.activeNetwork()) });
+    await logger.load();
+    return logger.getRecords();
+  }
+
+  // Serialize concurrent sends — a double-tap must never double-pay (the UI's guardedClick is
+  // the first line; this is the controller-level backstop).
+  private payingPromise?: Promise<{ preimage: string; amountSats: number }>;
+
+  // Pay a pasted BOLT11 invoice or Lightning Address. Input-shape validation happens before
+  // any wallet access so errors are cheap and specific; fund-safety semantics (timeout =
+  // in-flight, never "failed") come from the SDK's payBolt11 / PaymentTimeoutError.
+  async payLightning(
+    input: string,
+    opts?: { amountSats?: number; comment?: string }
+  ): Promise<{ preimage: string; amountSats: number }> {
+    const classified = classifySendInput(input);
+    if (classified.kind === "invalid") {
+      throw new Error("Enter a BOLT11 invoice or Lightning Address (name@domain).");
+    }
+    if (classified.kind === "lnaddress") {
+      const amt = Math.floor(Number(opts?.amountSats));
+      if (!Number.isFinite(amt) || amt <= 0) {
+        throw new Error("Enter an amount in sats for a Lightning Address payment.");
+      }
+    }
+    this.requireRunning();
+    if (this.payingPromise) throw new Error("A payment is already in progress.");
+    this.payingPromise = (async () => {
+      let bolt11 = classified.value;
+      if (classified.kind === "lnaddress") {
+        const { invoice } = await resolveLnAddressInvoice({
+          address: classified.value,
+          amountMsat: Math.floor(Number(opts!.amountSats)) * 1000,
+          comment: opts?.comment,
+        });
+        bolt11 = invoice;
+      }
+      return this.wallet!.payBolt11(bolt11);
+    })();
+    try {
+      return await this.payingPromise;
+    } finally {
+      this.payingPromise = undefined;
+      this.emit("state-changed");
+    }
+  }
+
+  // ---- Peers ----
+
+  // Rows for the Peers screen. Works stopped (address book only, all disconnected); running
+  // adds live connections + channel counterparties. Combination is pure (core/peer-list.ts).
+  async listPeers(): Promise<PeerRow[]> {
+    if (this.isRunning()) {
+      const [book, channels] = await Promise.all([
+        this.wallet!.getPeerAddresses(),
+        Promise.resolve(this.wallet!.getChannels()),
+      ]);
+      return buildPeerRows({
+        connected: this.wallet!.getConnectedPeers(),
+        book,
+        channelPeers: channels.map((c) => c.counterpartyNodeId),
+      });
+    }
+    const storage = this.storageForNetwork(await this.activeNetwork());
+    const book = parsePeerAddressBook(await storage.getItem("peer_addresses"));
+    return buildPeerRows({ connected: [], book, channelPeers: [] });
   }
 
   async connectPeer(pubkey: string, host: string, port: number): Promise<void> {

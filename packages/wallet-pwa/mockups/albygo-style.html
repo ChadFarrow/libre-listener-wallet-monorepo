@@ -1,0 +1,1617 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Libre Wallet — UI mockup (Alby Go direction)</title>
+<style>
+  /* ————— design tokens ————— */
+  :root {
+    --bg: #000000;
+    --panel: #121212;
+    --panel-2: #1a1a1a;
+    --line: #232323;
+    --text: #f2f2f2;
+    --text-dim: #9a9a9a;
+    --text-faint: #5c5c5c;
+    --accent: #22c45e;
+    --accent-ink: #04180b;
+    --accent-dim: rgba(34, 196, 94, 0.14);
+    --warn: #f0b429;
+    --danger: #ef4444;
+    --recv: #22c45e;
+    --sent: #e8862e;
+    --radius-xl: 28px;
+    --radius-lg: 20px;
+    --radius-md: 14px;
+    --ease-spring: cubic-bezier(0.32, 0.72, 0.24, 1);
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Segoe UI", ui-sans-serif, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    background: #0a0a0a;
+    color: var(--text);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  /* ————— phone frame (desktop) / fullscreen (mobile) ————— */
+  #stage {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+      radial-gradient(1200px 800px at 70% -10%, rgba(34,196,94,0.06), transparent 60%),
+      #0a0a0a;
+  }
+  #phone {
+    position: relative;
+    width: 390px;
+    height: 800px;
+    max-height: 96vh;
+    background: var(--bg);
+    border-radius: 44px;
+    border: 1px solid #262626;
+    box-shadow: 0 40px 120px rgba(0,0,0,0.7), 0 0 0 8px #050505;
+    overflow: hidden;
+  }
+  @media (max-width: 520px) {
+    #stage { display: block; background: var(--bg); }
+    #phone {
+      width: 100%; height: 100%; max-height: none;
+      border-radius: 0; border: none; box-shadow: none;
+    }
+  }
+
+  /* ————— screens ————— */
+  .screen {
+    position: absolute; inset: 0;
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.42s var(--ease-spring);
+    z-index: 10;
+  }
+  .screen.current { transform: translateX(0); }
+  .screen.behind { transform: translateX(0); z-index: 5; transition: none; }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 22px 20px 10px;
+    min-height: 64px;
+  }
+  .topbar .title { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .iconbtn {
+    width: 44px; height: 44px; border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; color: var(--text);
+    cursor: pointer; position: relative;
+    transition: background 0.2s;
+  }
+  .iconbtn:active { background: var(--panel); }
+  .iconbtn svg { width: 24px; height: 24px; }
+  .iconbtn .badge {
+    position: absolute; top: 7px; right: 7px;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--warn); border: 2px solid var(--bg);
+    display: none;
+  }
+
+  /* ————— HOME ————— */
+  #home { transform: translateX(0); }
+  .home-center {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 6px; padding: 0 24px; margin-top: -30px;
+  }
+  .wallet-name {
+    color: var(--text-dim); font-size: 16px; font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+    background: none; border: none; cursor: pointer; font-family: inherit;
+    padding: 6px 10px; border-radius: 12px;
+    transition: background 0.2s;
+  }
+  .wallet-name:active { background: var(--panel); }
+  .wallet-name svg { width: 14px; height: 14px; opacity: 0.6; }
+  .balance {
+    font-size: 54px; font-weight: 800; letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    display: flex; align-items: baseline; gap: 10px;
+    animation: rise 0.6s var(--ease-spring) both;
+  }
+  .balance .unit { font-size: 30px; font-weight: 600; color: var(--text-dim); letter-spacing: -0.01em; }
+  .fiat { font-size: 20px; color: var(--text-dim); font-weight: 500; font-variant-numeric: tabular-nums; animation: rise 0.6s 0.06s var(--ease-spring) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+  /* status pill — variant A */
+  .status-pill {
+    margin-top: 18px;
+    display: none; align-items: center; gap: 8px;
+    padding: 8px 14px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line);
+    font-size: 13px; font-weight: 600; color: var(--text-dim);
+    cursor: pointer; border-style: solid;
+    animation: rise 0.5s 0.12s var(--ease-spring) both;
+  }
+  .status-pill .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .status-pill.warn { color: #ffd479; border-color: rgba(240,180,41,0.35); }
+  .status-pill.warn .dot { background: var(--warn); }
+  .status-pill.bad { color: #ff8a8a; border-color: rgba(239,68,68,0.35); }
+  .status-pill.bad .dot { background: var(--danger); }
+
+  .home-bottom { padding: 0 18px calc(20px + env(safe-area-inset-bottom)); }
+  .chevron-hint {
+    display: flex; justify-content: center; padding: 10px 0 16px;
+    color: var(--text-faint); cursor: pointer; border: none; background: none; width: 100%;
+  }
+  .chevron-hint svg { width: 26px; height: 26px; animation: bob 2.4s ease-in-out infinite; }
+  @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+
+  .actions { display: flex; gap: 14px; }
+  .action-big {
+    flex: 1; aspect-ratio: 1.16; border-radius: var(--radius-xl);
+    border: none; cursor: pointer;
+    background: linear-gradient(160deg, #2bd76c, #1cab50);
+    color: var(--accent-ink);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    font-family: inherit; font-size: 22px; font-weight: 800; letter-spacing: -0.01em;
+    box-shadow: 0 10px 34px rgba(34,196,94,0.25), inset 0 1px 0 rgba(255,255,255,0.28);
+    transition: transform 0.15s var(--ease-spring), box-shadow 0.2s;
+  }
+  .action-big:active { transform: scale(0.965); box-shadow: 0 4px 16px rgba(34,196,94,0.2); }
+  .action-big svg { width: 30px; height: 30px; }
+
+  /* ————— overlay scrim ————— */
+  #scrim {
+    position: absolute; inset: 0; z-index: 40;
+    background: rgba(0,0,0,0.55);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.35s;
+  }
+  #scrim.show { opacity: 1; pointer-events: auto; }
+
+  /* ————— transactions bottom sheet ————— */
+  #sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 50;
+    height: 86%;
+    background: #0d0d0d;
+    border-radius: 26px 26px 0 0;
+    border-top: 1px solid var(--line);
+    transform: translateY(103%);
+    transition: transform 0.45s var(--ease-spring);
+    display: flex; flex-direction: column;
+  }
+  #sheet.open { transform: translateY(0); }
+  .sheet-grip { display: flex; justify-content: center; padding: 10px 0 2px; cursor: grab; }
+  .sheet-grip::before { content: ""; width: 42px; height: 5px; border-radius: 3px; background: #333; }
+  .sheet-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 20px 12px;
+  }
+  .sheet-head h2 { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+  .txlist { flex: 1; overflow-y: auto; padding: 0 14px calc(20px + env(safe-area-inset-bottom)); overscroll-behavior: contain; }
+  .tx {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 8px; border-radius: var(--radius-md);
+    cursor: pointer; transition: background 0.15s;
+  }
+  .tx:active { background: var(--panel); }
+  .tx + .tx { border-top: 1px solid rgba(255,255,255,0.04); }
+  .tx-ico {
+    width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .tx-ico svg { width: 20px; height: 20px; }
+  .tx.sent .tx-ico { background: rgba(232,134,46,0.16); color: var(--sent); }
+  .tx.recv .tx-ico { background: var(--accent-dim); color: var(--recv); }
+  .tx.pending .tx-ico { background: rgba(255,255,255,0.07); color: var(--text-dim); }
+  .tx-mid { flex: 1; min-width: 0; }
+  .tx-l1 { display: flex; align-items: baseline; gap: 8px; font-size: 16px; font-weight: 600; }
+  .tx-l1 .when { font-size: 13px; font-weight: 500; color: var(--text-faint); }
+  .tx-l2 {
+    margin-top: 2px; font-size: 13.5px; color: var(--text-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    letter-spacing: 0.01em;
+  }
+  .tx-amt { text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .tx-amt .sats { font-size: 15.5px; font-weight: 700; }
+  .tx.recv .tx-amt .sats { color: var(--recv); }
+  .tx-amt .cents { font-size: 12.5px; color: var(--text-faint); margin-top: 2px; }
+  .tx-pendtag {
+    font-size: 11px; font-weight: 700; color: var(--warn);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .day-sep {
+    padding: 18px 10px 6px; font-size: 12.5px; font-weight: 700;
+    color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.08em;
+  }
+
+  /* ————— settings drawer ————— */
+  #drawer {
+    position: absolute; top: 0; bottom: 0; left: 0; z-index: 60;
+    width: 84%; max-width: 330px;
+    background: #0e0e0e;
+    border-right: 1px solid var(--line);
+    transform: translateX(-104%);
+    transition: transform 0.42s var(--ease-spring);
+    display: flex; flex-direction: column;
+  }
+  #drawer.open { transform: translateX(0); }
+  .drawer-head { padding: 26px 20px 14px; display: flex; align-items: center; gap: 12px; }
+  /* the standard small logo: ink bolt on the green gradient tile */
+  .logo-mark {
+    background: linear-gradient(160deg, #2bd76c, #17913f) !important;
+    color: var(--accent-ink) !important;
+    box-shadow: 0 4px 14px rgba(34,196,94,0.25), inset 0 1px 0 rgba(255,255,255,0.25);
+  }
+  .drawer-head .logo {
+    width: 40px; height: 40px; border-radius: 13px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .drawer-head .logo svg { width: 22px; height: 22px; }
+  .drawer-head .t1 { font-size: 17px; font-weight: 700; }
+  .drawer-head .t2 { font-size: 12.5px; color: var(--text-dim); }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 4px 12px 24px; overscroll-behavior: contain; }
+  .d-section { padding: 14px 8px 4px; font-size: 11.5px; font-weight: 800; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.09em; }
+  .d-item {
+    width: 100%; display: flex; align-items: center; gap: 12px;
+    padding: 12px 10px; border-radius: var(--radius-md);
+    background: none; border: none; color: var(--text);
+    font-family: inherit; font-size: 15.5px; font-weight: 550; text-align: left;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .d-item:active { background: var(--panel); }
+  .d-item svg { width: 20px; height: 20px; color: var(--text-dim); flex-shrink: 0; }
+  .d-item .grow { flex: 1; }
+  .d-item .val { font-size: 13px; color: var(--text-dim); font-weight: 500; }
+  .d-item .val.ok { color: var(--accent); }
+  .d-item .val.warn { color: var(--warn); }
+  .d-item.danger { color: #ff7b7b; }
+  .d-item.danger svg { color: #ff7b7b; }
+  .node-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px rgba(34,196,94,0.8); }
+  .node-dot.off { background: #555; box-shadow: none; }
+  .d-note { padding: 10px 12px 0; font-size: 12px; color: var(--text-faint); line-height: 1.5; }
+
+  /* ————— generic sub-screens (receive / send / settings) ————— */
+  .sub-body { flex: 1; overflow-y: auto; padding: 8px 18px calc(24px + env(safe-area-inset-bottom)); }
+
+  .btn-primary {
+    width: 100%; padding: 17px; border-radius: var(--radius-lg);
+    background: linear-gradient(160deg, #2bd76c, #1cab50);
+    border: none; color: var(--accent-ink);
+    font-family: inherit; font-size: 16.5px; font-weight: 800;
+    cursor: pointer; box-shadow: 0 8px 26px rgba(34,196,94,0.22);
+    transition: transform 0.15s var(--ease-spring);
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .btn-primary:active { transform: scale(0.97); }
+  .btn-primary svg { width: 19px; height: 19px; }
+  .btn-primary:disabled {
+    background: var(--panel-2); color: var(--text-faint);
+    box-shadow: none; cursor: default; transform: none;
+  }
+  .btn-ghost {
+    width: 100%; padding: 15px; border-radius: var(--radius-lg);
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    font-family: inherit; font-size: 15px; font-weight: 650; cursor: pointer;
+  }
+  .btn-ghost:active { background: var(--panel-2); }
+
+  .field-label { font-size: 13px; font-weight: 700; color: var(--text-dim); margin: 18px 2px 8px; }
+  .field {
+    width: 100%; padding: 15px 16px; border-radius: var(--radius-md);
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    font-family: inherit; font-size: 16px; outline: none;
+  }
+  .field:focus { border-color: var(--accent); }
+  textarea.field { min-height: 96px; resize: none; font-size: 14px; font-family: ui-monospace, Menlo, monospace; }
+
+  /* fake QR */
+  .qr-wrap { display: flex; justify-content: center; margin: 22px 0 10px; }
+  .qr {
+    background: #fff; padding: 14px; border-radius: 18px;
+    display: grid; grid-template-columns: repeat(21, 9px); grid-auto-rows: 9px;
+  }
+  .qr i { background: #000; }
+  .qr i.o { background: #fff; }
+  .center-note { text-align: center; color: var(--text-dim); font-size: 13.5px; line-height: 1.5; padding: 6px 12px; }
+  .order-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg);
+    padding: 6px 16px; margin-bottom: 10px;
+  }
+  .order-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 11px 0; font-size: 14.5px; color: var(--text-dim);
+  }
+  .order-row b { color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
+  .order-row + .order-row { border-top: 1px solid rgba(255,255,255,0.05); }
+  .order-row.total { font-size: 15.5px; }
+  .order-row.total b { color: var(--accent); font-weight: 800; }
+  .chan-status {
+    text-align: center; font-size: 14px; font-weight: 650; color: var(--text-dim);
+    padding: 16px 0 2px;
+  }
+  .chan-status.ok { color: var(--accent); }
+  .success-body {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    gap: 12px; padding: 0 30px;
+  }
+  .success-body .ob-emblem { margin-bottom: 6px; }
+  .success-body h1 { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; animation: rise 0.5s 0.05s var(--ease-spring) both; }
+  .success-body p { font-size: 15.5px; color: var(--text-dim); line-height: 1.55; animation: rise 0.5s 0.1s var(--ease-spring) both; }
+  .success-body p b { color: var(--text); }
+  .success-foot {
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 0 26px calc(28px + env(safe-area-inset-bottom));
+  }
+  .chan-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg);
+    padding: 16px 16px 6px;
+  }
+  .chan-head { display: flex; align-items: center; justify-content: space-between; font-size: 16px; font-weight: 700; }
+  .cap-bar { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--panel-2); margin: 14px 0 8px; }
+  .cap-bar .sp { background: var(--accent); }
+  .cap-bar .rs { background: #666; }
+  .cap-bar .rv { background: rgba(34,196,94,0.22); }
+  .bar-legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--text-dim); margin-bottom: 10px; }
+  .bar-legend .dotc { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  .seed-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg);
+    padding: 12px 14px;
+  }
+  .seed-word {
+    display: flex; align-items: baseline; gap: 8px;
+    background: none; border: none; padding: 5px 4px; border-radius: 8px;
+    font-family: inherit; font-size: 13.5px; color: var(--text);
+    cursor: pointer; text-align: left; min-width: 0;
+  }
+  .seed-word:active { background: var(--panel-2); }
+  .seed-word .idx { color: var(--text-faint); font-size: 12px; font-variant-numeric: tabular-nums; width: 18px; text-align: right; flex-shrink: 0; }
+  .seed-word .w { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .seed-word.masked .w { color: var(--text-faint); letter-spacing: 0.1em; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 0; }
+  .btn-danger {
+    background: linear-gradient(160deg, #f87171, #dc2626) !important;
+    color: #2b0505 !important; box-shadow: 0 8px 26px rgba(239,68,68,0.2) !important;
+  }
+  #modal {
+    position: absolute; inset: 0; z-index: 90;
+    display: none; align-items: center; justify-content: center;
+    padding: 28px; background: rgba(0,0,0,0.65);
+  }
+  #modal.show { display: flex; }
+  .modal-box {
+    background: #161616; border: 1px solid var(--line); border-radius: 22px;
+    padding: 22px; width: 100%; max-width: 320px;
+    animation: rise 0.3s var(--ease-spring) both;
+  }
+  .modal-box h3 { font-size: 18px; font-weight: 800; letter-spacing: -0.01em; margin-bottom: 8px; }
+  .modal-box p { font-size: 14px; color: var(--text-dim); line-height: 1.5; }
+  .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+  .modal-actions button { flex: 1; padding: 13px; font-size: 15px; }
+  .peer-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px; margin-bottom: 10px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  }
+  .p-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--accent); box-shadow: 0 0 8px rgba(34,196,94,0.7); }
+  .p-dot.off { background: #555; box-shadow: none; }
+  .p-main { flex: 1; min-width: 0; }
+  .p-name { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .p-chan-tag {
+    font-size: 10.5px; font-weight: 800; color: var(--accent);
+    background: var(--accent-dim); border-radius: 6px; padding: 2px 7px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .p-pk { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--text-dim); margin-top: 3px; }
+  .p-addr { font-size: 12px; color: var(--text-faint); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .amount-display { display: flex; justify-content: center; padding: 16px 0 2px; }
+  .amount-chip {
+    display: flex; align-items: baseline; gap: 8px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius-lg); padding: 12px 18px 14px;
+    transition: border-color 0.2s;
+  }
+  .amount-chip:focus-within { border-color: var(--accent); }
+  .amount-chip input {
+    background: none; border: none; outline: none;
+    color: var(--text); font-family: inherit;
+    font-size: 38px; font-weight: 800; letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    text-align: right; width: 5.5ch; min-width: 2ch; max-width: 60vw;
+    padding: 0;
+  }
+  .amount-chip .unit { font-size: 19px; color: var(--text-dim); font-weight: 600; }
+  .amount-pencil {
+    align-self: center; background: var(--accent-dim); border: none; border-radius: 10px;
+    width: 34px; height: 34px; margin-left: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; color: var(--accent);
+  }
+  .amount-pencil svg { width: 17px; height: 17px; }
+
+  /* ————— onboarding ————— */
+  #onboarding {
+    position: absolute; inset: 0; z-index: 80;
+    background: var(--bg);
+    display: none; flex-direction: column;
+    padding: 0 26px calc(28px + env(safe-area-inset-bottom));
+  }
+  #onboarding.show { display: flex; }
+  .ob-progress { display: flex; gap: 6px; padding: 26px 0 0; }
+  .ob-progress i { height: 4px; flex: 1; border-radius: 2px; background: var(--panel-2); transition: background 0.3s; }
+  .ob-progress i.done { background: var(--accent); }
+  .ob-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+  .ob-emblem {
+    width: 72px; height: 72px; border-radius: 24px;
+    background: var(--accent-dim); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 8px;
+    animation: rise 0.5s var(--ease-spring) both;
+  }
+  .ob-emblem svg { width: 36px; height: 36px; }
+  .ob-body h1 { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.12; animation: rise 0.5s 0.05s var(--ease-spring) both; }
+  .ob-body p { font-size: 16px; color: var(--text-dim); line-height: 1.55; animation: rise 0.5s 0.1s var(--ease-spring) both; }
+  .ob-extra { animation: rise 0.5s 0.15s var(--ease-spring) both; }
+  .seed-hex {
+    display: block; width: 100%;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg);
+    padding: 16px; cursor: pointer; text-align: left;
+    font-family: ui-monospace, Menlo, monospace; font-size: 14.5px; line-height: 1.65;
+    color: var(--text); letter-spacing: 0.04em;
+    white-space: normal; word-break: break-all; overflow-wrap: anywhere;
+    max-width: 100%; transition: border-color 0.2s;
+  }
+  .seed-hex.masked { color: var(--text-faint); }
+  .seed-hex:active { border-color: var(--accent); }
+  .seed-hint { font-size: 12px; color: var(--text-faint); text-align: center; margin-top: 8px; }
+  .seed-actions { display: flex; gap: 10px; margin-top: 12px; }
+  .seed-actions .btn-ghost { padding: 12px; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 7px; }
+  .seed-actions svg { width: 16px; height: 16px; }
+  .ob-check {
+    display: flex; gap: 10px; align-items: flex-start;
+    font-size: 14px; color: var(--text-dim); line-height: 1.45;
+    padding: 4px 2px; cursor: pointer;
+  }
+  .ob-check input { width: 19px; height: 19px; accent-color: var(--accent); margin-top: 1px; flex-shrink: 0; }
+  .ob-foot { display: flex; flex-direction: column; gap: 10px; }
+
+  /* ————— demo control ————— */
+  #demo-fab {
+    position: absolute; top: 14px; right: -1px; z-index: 95;
+    background: #1b1b1b; color: var(--text-dim);
+    border: 1px solid var(--line); border-right: none;
+    border-radius: 12px 0 0 12px;
+    font-family: inherit; font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em;
+    padding: 7px 9px; cursor: pointer; writing-mode: vertical-rl; text-orientation: mixed;
+    opacity: 0.55;
+  }
+  #demo-panel {
+    position: absolute; inset: auto 0 0 0; z-index: 96;
+    background: #141414; border-top: 1px solid var(--line);
+    border-radius: 22px 22px 0 0;
+    padding: 16px 18px calc(20px + env(safe-area-inset-bottom));
+    transform: translateY(105%); transition: transform 0.35s var(--ease-spring);
+  }
+  #demo-panel.open { transform: translateY(0); }
+  #demo-panel h3 { font-size: 13px; font-weight: 800; letter-spacing: 0.06em; color: var(--text-faint); text-transform: uppercase; margin-bottom: 12px; }
+  .demo-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .chip {
+    padding: 8px 13px; border-radius: 999px; font-family: inherit;
+    font-size: 13px; font-weight: 650; cursor: pointer;
+    background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--line);
+  }
+  .chip.on { background: var(--accent-dim); color: var(--accent); border-color: rgba(34,196,94,0.4); }
+  .demo-label { font-size: 12px; color: var(--text-faint); font-weight: 700; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="phone">
+
+    <!-- ══════════ HOME ══════════ -->
+    <section class="screen current" id="home">
+      <div class="topbar">
+        <button class="iconbtn" id="btn-drawer" aria-label="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h16"/></svg>
+          <span class="badge" id="hamburger-badge"></span>
+        </button>
+        <span style="width:44px"></span>
+      </div>
+
+      <div class="home-center">
+        <div class="wallet-name" style="cursor:default">Libre</div>
+        <div class="balance"><span id="bal-sats">21,847</span><span class="unit">sats</span></div>
+        <div class="fiat" id="bal-fiat">$13.97</div>
+        <button class="status-pill" id="status-pill">
+          <span class="dot"></span><span id="status-pill-text"></span>
+        </button>
+      </div>
+
+      <div class="home-bottom">
+        <button class="chevron-hint" id="btn-sheet" aria-label="Show transactions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 15l6-6 6 6"/></svg>
+        </button>
+        <div class="actions">
+          <button class="action-big" id="btn-receive">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v14m0 0l-6-6m6 6l6-6"/></svg>
+            Receive
+          </button>
+          <button class="action-big" id="btn-send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V6m0 0l-6 6m6-6l6 6"/></svg>
+            Send
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════ RECEIVE ══════════ -->
+    <section class="screen" id="receive">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Receive</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="amount-display">
+          <div class="amount-chip">
+            <input id="recv-amount" inputmode="numeric" autocomplete="off" value="5,000" aria-label="Amount in sats" />
+            <span class="unit">sats</span>
+            <button class="amount-pencil" id="recv-amount-edit" aria-label="Edit amount">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1L20 7.5a2.1 2.1 0 00-3-3L5.5 16 4 20z"/></svg>
+            </button>
+          </div>
+        </div>
+        <p class="center-note">Lightning invoice · expires in 24h</p>
+        <div class="qr-wrap"><div class="qr" id="qr1"></div></div>
+        <p class="center-note" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px;word-break:break-all">lnbc50u1p3xnhl2pp5jptserfk3zk4qy42tlucycrfwdhkm…</p>
+        <div style="height:16px"></div>
+        <button class="btn-ghost">Copy invoice</button>
+        <p class="center-note" style="margin-top:12px">Tip: make your first top-up at least 5,000 sats — the channel holds back a small reserve, so tiny amounts won't show as spendable.</p>
+      </div>
+    </section>
+
+    <!-- ══════════ SEND ══════════ -->
+    <section class="screen" id="send">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Send</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="field-label">Invoice or Lightning Address</div>
+        <textarea class="field" placeholder="lnbc… or artist@getalby.com"></textarea>
+        <div style="height:18px"></div>
+        <button class="btn-primary">Continue</button>
+        <div style="height:12px"></div>
+        <button class="btn-ghost">
+          Scan QR
+        </button>
+      </div>
+    </section>
+
+    <!-- ══════════ PEERS ══════════ -->
+    <section class="screen" id="peers">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Peers</div>
+        <button class="iconbtn" id="btn-peer-add" aria-label="Connect a peer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+      <div class="sub-body">
+        <div id="peer-list"></div>
+        <div style="height:8px"></div>
+        <button class="btn-primary" id="btn-peer-connect">Connect a peer</button>
+        <p class="center-note" style="margin-top:14px">Peers are nodes your wallet talks to directly. Your channel lives with a peer — it reconnects automatically.</p>
+      </div>
+    </section>
+
+    <!-- ══════════ CONNECT PEER ══════════ -->
+    <section class="screen" id="peer-connect">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Connect a peer</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="field-label">Node address</div>
+        <textarea class="field" id="peer-input" placeholder="pubkey@host:port"></textarea>
+        <p class="center-note" style="text-align:left;padding:8px 2px">Paste the node's <b>pubkey@host:port</b>. Once connected, that node can open a channel to your wallet.</p>
+        <div style="height:14px"></div>
+        <button class="btn-primary" id="btn-peer-save">Connect</button>
+      </div>
+    </section>
+
+    <!-- ══════════ GET A CHANNEL ══════════ -->
+    <section class="screen" id="channel">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Get a channel</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="order-card">
+          <div class="order-row"><span>Channel size</span><b>150,000 sats</b></div>
+          <div class="order-row"><span>Provider</span><b>Megalith · instant</b></div>
+          <div class="order-row"><span>Lease</span><b>~3 months</b></div>
+          <div class="order-row total"><span>Opening fee</span><b>13,126 sats</b></div>
+        </div>
+        <p class="center-note">Pay this invoice from another wallet to open your channel.</p>
+        <div class="qr-wrap"><div class="qr" id="qr2"></div></div>
+        <button class="btn-ghost">Copy invoice</button>
+        <div class="chan-status" id="chan-status">Waiting for payment…</div>
+      </div>
+    </section>
+
+    <!-- ══════════ CHANNEL READY (confirmation) ══════════ -->
+    <section class="screen" id="chan-success">
+      <div class="success-body">
+        <div class="ob-emblem logo-mark"><svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M13 3L4 14h6l-1 7 9-11h-6l1-7z"/></svg></div>
+        <h1>Channel ready ⚡</h1>
+        <p>Your channel is open — you're on the Lightning Network.</p>
+        <p>Heads up: your balance is still <b>0 sats</b>. That payment covered the channel opening fee, not your wallet. Add some sats to start boosting.</p>
+      </div>
+      <div class="success-foot">
+        <button class="btn-primary" id="chan-receive-btn">Fund wallet</button>
+        <button class="btn-ghost" id="chan-later-btn">Later</button>
+      </div>
+    </section>
+
+    <!-- ══════════ NODE ══════════ -->
+    <section class="screen" id="node-screen">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Lightning node</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="order-card">
+          <div class="order-row"><span>Status</span><b id="node-scr-status">Running</b></div>
+          <div class="order-row"><span>Network</span><b>mainnet</b></div>
+          <div class="order-row"><span>Peers</span><b>2 connected</b></div>
+        </div>
+        <div class="field-label">Node ID</div>
+        <button class="seed-hex" id="node-id-box" style="font-size:12.5px;cursor:default"></button>
+        <div style="height:10px"></div>
+        <button class="btn-ghost" id="node-id-copy">Copy node ID</button>
+        <p class="center-note">Share your node ID so another node can open a channel to your wallet.</p>
+        <div style="height:8px"></div>
+        <button class="btn-primary" id="node-toggle">Stop node</button>
+      </div>
+    </section>
+
+    <!-- ══════════ CHANNELS ══════════ -->
+    <section class="screen" id="channels-screen">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Channels</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="chan-card">
+          <div class="chan-head"><span>Megalith LSP</span><span class="p-chan-tag">active</span></div>
+          <div class="cap-bar">
+            <i class="sp" style="width:3%"></i><i class="rs" style="width:1%"></i><i class="rv" style="width:96%"></i>
+          </div>
+          <div class="bar-legend">
+            <span><i class="dotc" style="background:var(--accent)"></i>Spendable</span>
+            <span><i class="dotc" style="background:#666"></i>Reserve</span>
+            <span><i class="dotc" style="background:rgba(34,196,94,0.25)"></i>Receivable</span>
+          </div>
+          <div class="order-row"><span>Spendable</span><b>3,500 sats</b></div>
+          <div class="order-row"><span>Reserve (locked)</span><b>1,500 sats</b></div>
+          <div class="order-row"><span>Receivable</span><b>145,000 sats</b></div>
+          <div class="order-row"><span>Capacity</span><b>150,000 sats</b></div>
+        </div>
+        <p class="center-note">The reserve is your ~1% of channel capacity that stays locked while the channel is open — it comes back when it closes.</p>
+        <div style="height:8px"></div>
+        <button class="btn-ghost" id="chan-another">Get another channel</button>
+      </div>
+    </section>
+
+    <!-- ══════════ APP CONNECTIONS ══════════ -->
+    <section class="screen" id="appconns">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">App connections</div>
+        <button class="iconbtn" id="btn-appconn-add" aria-label="New connection"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+      <div class="sub-body">
+        <div id="appconn-list"></div>
+        <div style="height:8px"></div>
+        <button class="btn-primary" id="btn-appconn-new">Create connection</button>
+        <p class="center-note" style="margin-top:14px">Apps connect over Nostr Wallet Connect to pay from this wallet — stablekraft boosts, Alby Go on the go.</p>
+      </div>
+    </section>
+
+    <!-- ══════════ NEW APP CONNECTION ══════════ -->
+    <section class="screen" id="appconn-new">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">New connection</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div id="appconn-form">
+          <div class="field-label">App name</div>
+          <input class="field" id="appconn-name" placeholder="e.g. stablekraft" />
+          <div class="field-label">Permissions</div>
+          <div class="chip-row chip-group" id="appconn-perms">
+            <button class="chip on" data-v="Full access">Full access</button>
+            <button class="chip" data-v="Pay only">Pay only</button>
+            <button class="chip" data-v="Read only">Read only</button>
+          </div>
+          <div class="field-label">Spending limit (sats)</div>
+          <input class="field" id="appconn-limit" inputmode="numeric" value="10,000" />
+          <div class="field-label">Limit renews</div>
+          <div class="chip-row chip-group" id="appconn-renew">
+            <button class="chip on" data-v="day">Daily</button>
+            <button class="chip" data-v="week">Weekly</button>
+            <button class="chip" data-v="month">Monthly</button>
+          </div>
+          <div class="field-label">Connection expires</div>
+          <div class="chip-row chip-group" id="appconn-expiry">
+            <button class="chip" data-v="1 week">1 week</button>
+            <button class="chip" data-v="1 month">1 month</button>
+            <button class="chip" data-v="1 year">1 year</button>
+            <button class="chip on" data-v="Never">Never</button>
+          </div>
+          <div style="height:22px"></div>
+          <button class="btn-primary" id="appconn-create">Create</button>
+          <p class="center-note" style="margin-top:12px">Read only can't spend — it only sees balance and history. Up to 10 connections.</p>
+        </div>
+        <div id="appconn-result" style="display:none">
+          <p class="center-note">Scan this from the app, or copy the pairing string.</p>
+          <div class="qr-wrap"><div class="qr" id="qr3"></div></div>
+          <p class="center-note" style="font-family:ui-monospace,Menlo,monospace;font-size:11px;word-break:break-all">nostr+walletconnect://b7c2…?relay=wss://relay.getalby.com&secret=••••••••</p>
+          <p class="center-note" style="color:#ffd479">Anyone with this string can spend up to your limit — treat it like cash.</p>
+          <div style="height:10px"></div>
+          <button class="btn-ghost">Copy pairing string</button>
+          <div style="height:10px"></div>
+          <button class="btn-primary" id="appconn-done">Done</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════ APP CONNECTION DETAIL ══════════ -->
+    <section class="screen" id="appconn-detail">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title" id="acd-title">Connection</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="order-card">
+          <div class="order-row"><span>Status</span><b style="color:var(--accent)">Active</b></div>
+          <div class="order-row"><span>Permissions</span><b id="acd-perms"></b></div>
+          <div class="order-row"><span>Spending limit</span><b id="acd-limit"></b></div>
+          <div class="order-row"><span>Spent this period</span><b id="acd-spent"></b></div>
+          <div class="order-row"><span>Created</span><b id="acd-created"></b></div>
+          <div class="order-row"><span>Expires</span><b id="acd-expiry"></b></div>
+        </div>
+        <p class="center-note">The pairing secret can't be shown again — if the app lost it, revoke this connection and create a new one.</p>
+        <div style="height:8px"></div>
+        <button class="btn-primary btn-danger" id="acd-revoke">Revoke connection</button>
+      </div>
+    </section>
+
+    <!-- ══════════ CLOUD BACKUP ══════════ -->
+    <section class="screen" id="backup-screen">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Cloud backup</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="order-card">
+          <div class="order-row"><span>Google Drive</span><b style="color:var(--accent)">Connected ✓</b></div>
+          <div class="order-row"><span>Account</span><b>chad···@gmail.com</b></div>
+          <div class="order-row"><span>Last sync</span><b id="backup-last">2 min ago</b></div>
+          <div class="order-row"><span>Auto-sync</span><b>On</b></div>
+        </div>
+        <p class="center-note">Backups are encrypted with your wallet seed before they leave this device — Google can't read them.</p>
+        <div style="height:8px"></div>
+        <button class="btn-primary" id="backup-sync">Sync now</button>
+        <div style="height:10px"></div>
+        <button class="btn-ghost" id="backup-delete">Delete Drive backup</button>
+      </div>
+    </section>
+
+    <!-- ══════════ RECOVERY ══════════ -->
+    <section class="screen" id="recovery-screen">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Recovery</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="field-label">Wallet seed · hex (copy/paste format)</div>
+        <button class="seed-hex masked" id="rec-hex"></button>
+        <div class="seed-hint" id="rec-hex-hint">Tap to reveal</div>
+        <div class="seed-actions"><button class="btn-ghost" id="rec-hex-copy">Copy seed</button></div>
+        <div class="field-label" style="margin-top:26px">Recovery phrase · 24 words (pen &amp; paper)</div>
+        <div class="seed-grid" id="rec-words"></div>
+        <div class="seed-hint">Tap a word to reveal it</div>
+        <div class="seed-actions">
+          <button class="btn-ghost" id="rec-words-reveal" style="flex:1">Reveal all</button>
+          <button class="btn-ghost" id="rec-words-copy" style="flex:1">Copy phrase</button>
+        </div>
+        <p class="center-note" style="margin-top:14px">Either form restores <b>this wallet only</b> — other wallet apps derive different keys from the same words.</p>
+      </div>
+    </section>
+
+    <!-- ══════════ RECOVERY ADDRESS ══════════ -->
+    <section class="screen" id="sweep-screen">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Recovery address</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <p class="center-note" style="text-align:left;padding:4px 2px">If a channel ever force-closes, your funds return on-chain. They're swept automatically to this Bitcoin address — set it once and forget it.</p>
+        <div class="field-label">Bitcoin address</div>
+        <input class="field" id="sweep-input" value="bc1q7x04kd9mrge5nq2u8w3tkc0ynzl4v8kf2" style="font-family:ui-monospace,Menlo,monospace;font-size:13.5px" />
+        <div style="height:18px"></div>
+        <button class="btn-primary" id="sweep-save">Save</button>
+      </div>
+    </section>
+
+    <!-- ══════════ DEVELOPER SETTINGS ══════════ -->
+    <section class="screen" id="dev-screen">
+      <div class="topbar">
+        <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="title">Developer settings</div>
+        <span style="width:44px"></span>
+      </div>
+      <div class="sub-body">
+        <div class="order-card"><div class="order-row"><span>Network</span><b>mainnet</b></div></div>
+        <div class="field-label">Esplora URL</div>
+        <input class="field" value="https://mempool.space/api" style="font-size:13.5px" />
+        <div class="field-label">Bridge URL</div>
+        <input class="field" value="wss://ws-bridge-production-9e2f.up.railway.app" style="font-size:13.5px" />
+        <div class="field-label">Gossip (RGS) URL</div>
+        <input class="field" value="https://nwc-push-gateway-production.up.railway.app/rgs/snapshot" style="font-size:13.5px" />
+        <p class="center-note" style="margin-top:16px">Defaults ship with the app — only change these if you run your own infrastructure.</p>
+      </div>
+    </section>
+
+    <!-- ══════════ confirm modal ══════════ -->
+    <div id="modal">
+      <div class="modal-box">
+        <h3 id="modal-title"></h3>
+        <p id="modal-msg"></p>
+        <div class="modal-actions">
+          <button class="btn-ghost" id="modal-cancel">Cancel</button>
+          <button class="btn-primary btn-danger" id="modal-confirm">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ transactions sheet ══════════ -->
+    <div id="scrim"></div>
+    <div id="sheet">
+      <div class="sheet-grip" id="sheet-grip"></div>
+      <div class="sheet-head">
+        <h2>Transactions</h2>
+        <button class="iconbtn" id="btn-sheet-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="txlist" id="txlist"></div>
+    </div>
+
+    <!-- ══════════ settings drawer ══════════ -->
+    <aside id="drawer">
+      <div class="drawer-head">
+        <div class="logo logo-mark">
+          <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M13 3L4 14h6l-1 7 9-11h-6l1-7z"/></svg>
+        </div>
+        <div>
+          <div class="t1">Libre Wallet</div>
+          <div class="t2" id="drawer-node-line">Node running · mainnet</div>
+        </div>
+      </div>
+      <div class="drawer-body">
+        <div class="d-section">Node</div>
+        <button class="d-item" id="d-node">
+          <span class="node-dot" id="node-dot"></span>
+          <span class="grow">Lightning node</span>
+          <span class="val ok" id="node-val">Running</span>
+        </button>
+        <button class="d-item" id="d-channels">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3L4 14h6l-1 7 9-11h-6l1-7z"/></svg>
+          <span class="grow">Channels</span>
+          <span class="val" id="chan-val">1 · 150k sat</span>
+        </button>
+        <button class="d-item" id="d-peers">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.6"/><circle cx="18" cy="6" r="2.6"/><circle cx="12" cy="18" r="2.6"/><path d="M7.8 7.8l2.8 7.4M16.2 7.8l-2.8 7.4M8.6 6h6.8"/></svg>
+          <span class="grow">Peers</span>
+          <span class="val" id="peers-val"></span>
+        </button>
+        <button class="d-item" id="d-getchannel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          <span class="grow">Get a channel</span>
+          <span class="val">LSP</span>
+        </button>
+
+        <div class="d-section">Wallets & apps</div>
+        <button class="d-item" id="d-appconns">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a3 3 0 106 0 3 3 0 00-6 0zM3 12h3m12 0h3"/></svg>
+          <span class="grow">App connections</span>
+          <span class="val" id="appconns-val">2 apps</span>
+        </button>
+
+        <div class="d-section">Backup & security</div>
+        <button class="d-item" id="d-backup">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 19a4 4 0 01-.5-7.97A6 6 0 0117.4 9.6 4.5 4.5 0 0117.5 19H6z"/></svg>
+          <span class="grow">Cloud backup</span>
+          <span class="val" id="backup-val">Synced ✓</span>
+        </button>
+        <button class="d-item" id="d-recovery">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 118 0v3"/></svg>
+          <span class="grow">Recovery phrase</span>
+        </button>
+        <button class="d-item" id="d-sweep">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l5-5m0 0V9a5 5 0 015-5h6v6a5 5 0 01-5 5H9z"/></svg>
+          <span class="grow">Recovery address</span>
+          <span class="val">bc1q…8kf2</span>
+        </button>
+
+        <div class="d-section">Advanced</div>
+        <button class="d-item" id="d-dev">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4h4l.6 2.6a7 7 0 012 1.2L19 7l2 3.4-2 1.7a7.2 7.2 0 010 2.3l2 1.7-2 3.4-2.4-.8a7 7 0 01-2 1.2L14 22h-4l-.6-2.6a7 7 0 01-2-1.2L5 19l-2-3.4 2-1.7a7.2 7.2 0 010-2.3L3 9.9 5 6.5l2.4.8a7 7 0 012-1.2L10 4z"/><circle cx="12" cy="13" r="3"/></svg>
+          <span class="grow">Developer settings</span>
+        </button>
+        <button class="d-item danger" id="d-delete">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14m-9-3h4M7 7l1 13h8l1-13"/></svg>
+          <span class="grow">Delete all wallet data</span>
+        </button>
+        <p class="d-note">Fiat amounts are illustrative — live rates are a follow-up.</p>
+      </div>
+    </aside>
+
+    <!-- ══════════ onboarding ══════════ -->
+    <section id="onboarding">
+      <div class="ob-progress" id="ob-progress"></div>
+      <div class="ob-body" id="ob-body"></div>
+      <div class="ob-foot">
+        <button class="btn-primary" id="ob-next">Continue</button>
+      </div>
+    </section>
+
+    <!-- ══════════ demo controls ══════════ -->
+    <button id="demo-fab">DEMO</button>
+    <div id="demo-panel">
+      <h3>Mockup controls</h3>
+      <div class="demo-label">Wallet state scenario</div>
+      <div class="demo-row" id="demo-scenarios">
+        <button class="chip" data-scenario="good">All good</button>
+        <button class="chip" data-scenario="nochannel">No channel yet</button>
+        <button class="chip" data-scenario="nodestopped">Node stopped</button>
+        <button class="chip" data-scenario="nobackup">Backup missing</button>
+      </div>
+      <div class="demo-label">Status indicator placement (the open design question)</div>
+      <div class="demo-row" id="demo-variants">
+        <button class="chip" data-variant="pill">A · pill under balance</button>
+        <button class="chip" data-variant="badge">B · dot on menu icon</button>
+      </div>
+      <div class="demo-row">
+        <button class="chip" id="demo-onboarding">Replay onboarding</button>
+        <button class="chip" id="demo-close">Close</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ───────────────────────── data (all fake) ───────────────────────── */
+const SATS_USD = 0.000639; // mocked rate
+const fmt = new Intl.NumberFormat("en-US");
+const fiat = (s) => "$" + (s * SATS_USD).toFixed(2);
+
+const TXS = [
+  { dir: "sent", when: "an hour ago", sats: 2,  ctx: "",                              day: "Today" },
+  { dir: "sent", when: "an hour ago", sats: 1,  ctx: "ECHO REALITY · PINK FLIGHT",   day: "Today" },
+  { dir: "sent", when: "an hour ago", sats: 47, ctx: "ECHO REALITY · PINK FLIGHT",   day: "Today", boost: true },
+  { dir: "sent", when: "an hour ago", sats: 1,  ctx: "ECHO REALITY · PINK FLIGHT",   day: "Today" },
+  { dir: "sent", when: "2 hours ago", sats: 100, ctx: "Doerman Music · boost!",      day: "Today", boost: true, pending: true },
+  { dir: "recv", when: "6 hours ago", sats: 5000, ctx: "Top-up from Strike",         day: "Today" },
+  { dir: "sent", when: "6 hours ago", sats: 16, ctx: "",                             day: "Today" },
+  { dir: "sent", when: "6 hours ago", sats: 16, ctx: "ChadF · just jammin",          day: "Today" },
+  { dir: "sent", when: "6 hours ago", sats: 18, ctx: "ChadF · just jammin",          day: "Today" },
+  { dir: "recv", when: "yesterday",   sats: 21000, ctx: "Channel opened · Megalith", day: "Yesterday" },
+  { dir: "sent", when: "yesterday",   sats: 250, ctx: "Sir TJ The Wrathful · epic",  day: "Yesterday", boost: true },
+  { dir: "sent", when: "yesterday",   sats: 33, ctx: "The Trusty Hucksters",         day: "Yesterday" },
+  { dir: "sent", when: "2 days ago",  sats: 500, ctx: "boost · Able and The Wolf",   day: "Earlier" },
+  { dir: "sent", when: "2 days ago",  sats: 2,  ctx: "",                             day: "Earlier" },
+  { dir: "sent", when: "3 days ago",  sats: 21, ctx: "MakeHeroism · great ep",       day: "Earlier" },
+];
+
+/* ───────────────────────── screen navigation ───────────────────────── */
+const stack = ["home"];
+function show(id) {
+  const cur = document.getElementById(stack[stack.length - 1]);
+  const nxt = document.getElementById(id);
+  cur.classList.remove("current"); cur.classList.add("behind");
+  nxt.classList.add("current");
+  stack.push(id);
+  setTimeout(() => cur.classList.remove("behind"), 450);
+}
+function back() {
+  if (stack.length < 2) return;
+  const cur = document.getElementById(stack.pop());
+  const prev = document.getElementById(stack[stack.length - 1]);
+  prev.classList.add("behind");
+  requestAnimationFrame(() => {
+    cur.classList.remove("current");
+    setTimeout(() => { prev.classList.remove("behind"); prev.classList.add("current"); }, 430);
+  });
+}
+document.querySelectorAll(".back").forEach(b => b.addEventListener("click", back));
+
+/* ───────────────────────── transactions ───────────────────────── */
+function renderTxs() {
+  const host = document.getElementById("txlist");
+  host.innerHTML = "";
+  let day = null;
+  for (const t of TXS) {
+    if (t.day !== day) {
+      day = t.day;
+      const sep = document.createElement("div");
+      sep.className = "day-sep"; sep.textContent = day;
+      host.appendChild(sep);
+    }
+    const el = document.createElement("div");
+    el.className = "tx " + t.dir + (t.pending ? " pending" : "");
+    const arrow = t.dir === "sent"
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m0 0l-5 5m5-5l5 5"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14m0 0l-5-5m5 5l5-5"/></svg>';
+    const icon = t.pending
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v4l2.5 2.5"/></svg>'
+      : arrow;
+    el.innerHTML = `
+      <div class="tx-ico">${icon}</div>
+      <div class="tx-mid">
+        <div class="tx-l1">${t.dir === "sent" ? "Sent" : "Received"} <span class="when">${t.when}</span></div>
+        ${t.ctx ? `<div class="tx-l2">${t.ctx}</div>` : ""}
+      </div>
+      <div class="tx-amt">
+        <div class="sats">${t.dir === "sent" ? "−" : "+"} ${fmt.format(t.sats)} sat${t.sats === 1 ? "" : "s"}</div>
+        <div class="cents">${t.pending ? '<span class="tx-pendtag">Pending</span>' : fiat(t.sats)}</div>
+      </div>`;
+    host.appendChild(el);
+  }
+}
+renderTxs();
+
+/* sheet open/close incl. drag-down */
+const sheet = document.getElementById("sheet");
+const scrim = document.getElementById("scrim");
+function openSheet() { sheet.classList.add("open"); scrim.classList.add("show"); }
+function closeSheet() { sheet.classList.remove("open"); scrim.classList.remove("show"); closeDrawer(); }
+document.getElementById("btn-sheet").addEventListener("click", openSheet);
+document.getElementById("btn-sheet-close").addEventListener("click", closeSheet);
+scrim.addEventListener("click", () => { closeSheet(); closeDrawer(); });
+
+let dragY = null;
+sheet.addEventListener("touchstart", (e) => {
+  if (e.target.closest(".txlist") && document.getElementById("txlist").scrollTop > 0) return;
+  dragY = e.touches[0].clientY;
+  sheet.style.transition = "none";
+}, { passive: true });
+sheet.addEventListener("touchmove", (e) => {
+  if (dragY === null) return;
+  const dy = Math.max(0, e.touches[0].clientY - dragY);
+  sheet.style.transform = `translateY(${dy}px)`;
+}, { passive: true });
+sheet.addEventListener("touchend", (e) => {
+  if (dragY === null) return;
+  const dy = e.changedTouches[0].clientY - dragY;
+  sheet.style.transition = ""; sheet.style.transform = "";
+  if (dy > 90) closeSheet();
+  dragY = null;
+});
+/* swipe up on home opens the sheet */
+let homeY = null;
+const home = document.getElementById("home");
+home.addEventListener("touchstart", (e) => { homeY = e.touches[0].clientY; }, { passive: true });
+home.addEventListener("touchend", (e) => {
+  if (homeY !== null && homeY - e.changedTouches[0].clientY > 60) openSheet();
+  homeY = null;
+});
+
+/* ───────────────────────── drawer ───────────────────────── */
+const drawer = document.getElementById("drawer");
+function openDrawer() { drawer.classList.add("open"); scrim.classList.add("show"); }
+function closeDrawer() { drawer.classList.remove("open"); if (!sheet.classList.contains("open")) scrim.classList.remove("show"); }
+document.getElementById("btn-drawer").addEventListener("click", openDrawer);
+
+
+/* ───────────────────────── receive / send ───────────────────────── */
+document.getElementById("btn-receive").addEventListener("click", () => show("receive"));
+document.getElementById("btn-send").addEventListener("click", () => show("send"));
+
+/* fake QR (deterministic) */
+function drawQrInto(qr, seedInit) {
+  let seed = seedInit;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const finder = (r, c) => (r < 7 && c < 7) || (r < 7 && c > 13) || (r > 13 && c < 7);
+  for (let r = 0; r < 21; r++) for (let c = 0; c < 21; c++) {
+    const cell = document.createElement("i");
+    if (finder(r, c)) {
+      const rr = r > 13 ? r - 14 : r, cc = c > 13 ? c - 14 : c;
+      const on = rr === 0 || rr === 6 || cc === 0 || cc === 6 || (rr >= 2 && rr <= 4 && cc >= 2 && cc <= 4);
+      if (!on) cell.className = "o";
+    } else if (rnd() < 0.52) { /* filled */ } else cell.className = "o";
+    qr.appendChild(cell);
+  }
+}
+drawQrInto(document.getElementById("qr1"), 42);
+drawQrInto(document.getElementById("qr2"), 77);
+
+/* editable receive amount — re-mints the (fake) invoice on change */
+const recvAmt = document.getElementById("recv-amount");
+function syncRecvAmount() {
+  const digits = recvAmt.value.replace(/\D/g, "").slice(0, 9);
+  const n = parseInt(digits || "0", 10);
+  recvAmt.value = n ? fmt.format(n) : "";
+  recvAmt.style.width = Math.max(recvAmt.value.length + 1, 3) + "ch";
+  const qr = document.getElementById("qr1");
+  qr.innerHTML = "";
+  drawQrInto(qr, (n || 42) % 0x7fffffff);
+}
+recvAmt.addEventListener("input", syncRecvAmount);
+document.getElementById("recv-amount-edit").addEventListener("click", () => {
+  recvAmt.focus(); recvAmt.select();
+});
+syncRecvAmount();
+
+/* ───────────────────────── get-a-channel (mock order lifecycle) ───────────────────────── */
+let chanTimers = [];
+function openChannelScreen() {
+  show("channel");
+  const st = document.getElementById("chan-status");
+  chanTimers.forEach(clearTimeout); chanTimers = [];
+  st.className = "chan-status"; st.textContent = "Waiting for payment…";
+  chanTimers.push(setTimeout(() => { st.textContent = "Payment received — opening your channel…"; }, 4000));
+  chanTimers.push(setTimeout(() => {
+    st.className = "chan-status ok";
+    st.textContent = "Channel ready ⚡";
+    show("chan-success");
+  }, 8000));
+}
+function resetToHome() {
+  while (stack.length > 1) stack.pop();
+  document.querySelectorAll(".screen").forEach(s => s.classList.remove("current", "behind"));
+  document.getElementById("home").classList.add("current");
+}
+document.getElementById("chan-receive-btn").addEventListener("click", () => {
+  resetToHome(); show("receive");
+});
+document.getElementById("chan-later-btn").addEventListener("click", resetToHome);
+
+/* ───────────────────────── peers ───────────────────────── */
+const PEERS = [
+  { name: "Megalith LSP", pk: "038a9e56…b512d", addr: "143.42.101.77:9735", online: true, channel: true },
+  { name: "Chad's node", pk: "03ae9f91…61a4a", addr: "54.71.27.149:20093", online: true },
+  { name: "voidzeronode", pk: "03c3a201…2c209", addr: "rxo5dyenrloih5ckgtn5…oacfwczx3tqd.onion:9735", online: false },
+];
+function renderPeers() {
+  const host = document.getElementById("peer-list");
+  host.innerHTML = "";
+  for (const p of PEERS) {
+    const el = document.createElement("div");
+    el.className = "peer-row";
+    el.innerHTML = `
+      <span class="p-dot${p.online ? "" : " off"}"></span>
+      <div class="p-main">
+        <div class="p-name">${p.name}${p.channel ? '<span class="p-chan-tag">channel</span>' : ""}</div>
+        <div class="p-pk">${p.pk}</div>
+        <div class="p-addr">${p.addr}</div>
+      </div>`;
+    host.appendChild(el);
+  }
+  document.getElementById("peers-val").textContent =
+    PEERS.filter(p => p.online).length + " online";
+}
+renderPeers();
+document.getElementById("d-peers").addEventListener("click", () => {
+  closeDrawer(); scrim.classList.remove("show"); show("peers");
+});
+document.getElementById("btn-peer-connect").addEventListener("click", () => show("peer-connect"));
+document.getElementById("btn-peer-add").addEventListener("click", () => show("peer-connect"));
+document.getElementById("btn-peer-save").addEventListener("click", () => {
+  const raw = document.getElementById("peer-input").value.trim();
+  const [pk, addr] = raw.includes("@") ? raw.split("@") : ["03newpeer…mock", raw];
+  PEERS.push({
+    name: "New peer",
+    pk: pk.length > 14 ? pk.slice(0, 8) + "…" + pk.slice(-5) : pk || "03newpeer…mock",
+    addr: addr || "host:9735",
+    online: true,
+  });
+  renderPeers(); back();
+});
+document.getElementById("d-getchannel").addEventListener("click", () => {
+  closeDrawer(); scrim.classList.remove("show"); openChannelScreen();
+});
+
+/* ───────────────────────── wallet-state scenarios ───────────────────────── */
+const SCENARIOS = {
+  good:        { pill: null, node: true,  chan: "1 · 150k sat", backup: "Synced ✓" },
+  nochannel:   { pill: { cls: "warn", text: "No channel yet — get one to receive" }, node: true, chan: "None", backup: "Synced ✓" },
+  nodestopped: { pill: { cls: "bad", text: "Node stopped — tap to start" }, node: false, chan: "1 · 150k sat", backup: "Synced ✓" },
+  nobackup:    { pill: { cls: "warn", text: "Back up your wallet" }, node: true, chan: "1 · 150k sat", backup: "Not set up" },
+};
+let scenario = "good", variant = "pill";
+function applyState() {
+  const s = SCENARIOS[scenario];
+  const pill = document.getElementById("status-pill");
+  const badge = document.getElementById("hamburger-badge");
+  pill.style.display = "none"; badge.style.display = "none";
+  pill.className = "status-pill";
+  if (s.pill) {
+    if (variant === "pill") {
+      pill.classList.add(s.pill.cls);
+      document.getElementById("status-pill-text").textContent = s.pill.text;
+      pill.style.display = "flex";
+    } else {
+      badge.style.background = s.pill.cls === "bad" ? "var(--danger)" : "var(--warn)";
+      badge.style.display = "block";
+    }
+  }
+  document.getElementById("node-dot").className = "node-dot" + (s.node ? "" : " off");
+  document.getElementById("node-val").textContent = s.node ? "Running" : "Stopped";
+  document.getElementById("node-val").className = "val " + (s.node ? "ok" : "warn");
+  document.getElementById("drawer-node-line").textContent = (s.node ? "Node running" : "Node stopped") + " · mainnet";
+  document.getElementById("chan-val").textContent = s.chan;
+  document.getElementById("backup-val").textContent = s.backup;
+  document.getElementById("backup-val").className = "val " + (s.backup.includes("✓") ? "ok" : "warn");
+  document.querySelectorAll("#demo-scenarios .chip").forEach(c => c.classList.toggle("on", c.dataset.scenario === scenario));
+  document.querySelectorAll("#demo-variants .chip").forEach(c => c.classList.toggle("on", c.dataset.variant === variant));
+}
+document.querySelectorAll("#demo-scenarios .chip").forEach(c =>
+  c.addEventListener("click", () => { scenario = c.dataset.scenario; applyState(); }));
+document.querySelectorAll("#demo-variants .chip").forEach(c =>
+  c.addEventListener("click", () => { variant = c.dataset.variant; applyState(); }));
+document.getElementById("status-pill").addEventListener("click", openDrawer);
+applyState();
+
+/* ───────────────────────── onboarding ───────────────────────── */
+const OB_STEPS = [
+  {
+    icon: '<path d="M13 3L4 14h6l-1 7 9-11h-6l1-7z"/>',
+    logo: true,
+    h: "Your wallet,<br/>no one else's.",
+    p: "Libre runs a real Lightning node right here on your phone. No account, no company holding your sats.",
+    extra: "",
+    cta: "Create wallet",
+  },
+  {
+    icon: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 118 0v3"/>',
+    h: "Save your<br/>wallet seed.",
+    p: "This key is the only way back into your wallet if you lose this device. Keep it secret — anyone with it can spend your sats. A password manager is a great place to save it.",
+    extra: `<button class="seed-hex masked" id="seed-hex"></button>
+    <div class="seed-hint" id="seed-hint">Tap to reveal</div>
+    <div class="seed-actions">
+      <button class="btn-ghost" id="seed-copy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/></svg>
+        Copy seed
+      </button>
+    </div>
+    <label class="ob-check"><input type="checkbox" id="ob-seed-ok"/> I saved my seed somewhere safe.</label>`,
+    cta: "Continue",
+    gate: "ob-seed-ok",
+  },
+  {
+    icon: '<path d="M6 19a4 4 0 01-.5-7.97A6 6 0 0117.4 9.6 4.5 4.5 0 0117.5 19H6z"/>',
+    h: "Back up to<br/>your cloud.",
+    p: "An encrypted copy of your wallet keeps your channel state safe. Only your wallet seed unlocks it — Google never sees your sats.",
+    extra: "",
+    cta: "Connect Google Drive",
+  },
+  {
+    icon: '<path d="M12 5v14M5 12h14"/>',
+    h: "Get your first<br/>channel.",
+    p: "A channel is your lane on the Lightning Network — it's what lets you receive. Around 13,000 sats in fees, ready in seconds.",
+    extra: "",
+    cta: "Get a channel · ~13,000 sats",
+  },
+];
+let obStep = 0;
+const ob = document.getElementById("onboarding");
+const FAKE_SEED = "8f3a1c9e5b2d7f0a4e6c8b1d3f5a7c9e2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a";
+function renderOb() {
+  const s = OB_STEPS[obStep];
+  document.getElementById("ob-progress").innerHTML =
+    OB_STEPS.map((_, i) => `<i class="${i <= obStep ? "done" : ""}"></i>`).join("");
+  const emblem = s.logo
+    ? `<div class="ob-emblem logo-mark"><svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">${s.icon}</svg></div>`
+    : `<div class="ob-emblem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${s.icon}</svg></div>`;
+  document.getElementById("ob-body").innerHTML = `
+    ${emblem}
+    <h1>${s.h}</h1><p>${s.p}</p>
+    ${s.extra ? `<div class="ob-extra">${s.extra}</div>` : ""}`;
+  const next = document.getElementById("ob-next");
+  next.textContent = s.cta;
+  next.disabled = !!s.gate;
+  bindSeedStep();
+}
+function bindSeedStep() {
+  const gateBox = document.getElementById("ob-seed-ok");
+  if (gateBox) {
+    gateBox.addEventListener("change", () => {
+      document.getElementById("ob-next").disabled = !gateBox.checked;
+    });
+  }
+  const hexEl = document.getElementById("seed-hex");
+  if (!hexEl) return;
+  const hint = document.getElementById("seed-hint");
+  const group8 = (s) => s.match(/.{8}/g).join(" ");
+  const setMasked = (m) => {
+    hexEl.classList.toggle("masked", m);
+    hexEl.textContent = group8(m ? "•".repeat(64) : FAKE_SEED);
+    hint.textContent = m ? "Tap to reveal" : "Tap to hide";
+  };
+  setMasked(true);
+  hexEl.addEventListener("click", () => setMasked(!hexEl.classList.contains("masked")));
+  const copyBtn = document.getElementById("seed-copy");
+  copyBtn.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(FAKE_SEED); } catch {}
+    const old = copyBtn.innerHTML;
+    copyBtn.textContent = "Copied ✓";
+    setTimeout(() => { copyBtn.innerHTML = old; }, 1400);
+  });
+}
+document.getElementById("ob-next").addEventListener("click", () => {
+  const s = OB_STEPS[obStep];
+  if (s.gate && !document.getElementById(s.gate)?.checked) {
+    document.querySelector(".ob-check").style.color = "var(--warn)";
+    return;
+  }
+  obStep++;
+  if (obStep >= OB_STEPS.length) { finishOb(); openChannelScreen(); return; }
+  renderOb();
+});
+function finishOb() {
+  try { localStorage.setItem("libre_mockup_onboarded", "1"); } catch {}
+  ob.classList.remove("show");
+}
+function maybeShowOb(force) {
+  let done = false;
+  try { done = !!localStorage.getItem("libre_mockup_onboarded"); } catch {}
+  if (force || !done) { obStep = 0; renderOb(); ob.classList.add("show"); }
+}
+maybeShowOb(false);
+
+/* ───────────────────────── drawer sub-screens ───────────────────────── */
+function drawerNav(itemId, screenId, before) {
+  document.getElementById(itemId).addEventListener("click", () => {
+    closeDrawer(); scrim.classList.remove("show");
+    if (before) before();
+    show(screenId);
+  });
+}
+const flash = (btn, txt) => {
+  const old = btn.textContent;
+  btn.textContent = txt;
+  setTimeout(() => { btn.textContent = old; }, 1400);
+};
+
+/* modal */
+let modalCb = null;
+const modal = document.getElementById("modal");
+function openModal(title, msg, label, cb) {
+  document.getElementById("modal-title").textContent = title;
+  document.getElementById("modal-msg").textContent = msg;
+  document.getElementById("modal-confirm").textContent = label;
+  modalCb = cb;
+  modal.classList.add("show");
+}
+document.getElementById("modal-cancel").addEventListener("click", () => modal.classList.remove("show"));
+document.getElementById("modal-confirm").addEventListener("click", () => {
+  modal.classList.remove("show");
+  if (modalCb) modalCb();
+});
+
+/* node */
+const NODE_PUBKEY = "02fbc1a2d94e5b3c7f80a1e6c9b2d4f7a0c3e5b8d1f4a6c9e2b5d8f0a3c6e9b2d4";
+document.getElementById("node-id-box").textContent = NODE_PUBKEY.match(/.{1,8}/g).join(" ");
+document.getElementById("node-id-copy").addEventListener("click", async (e) => {
+  try { await navigator.clipboard.writeText(NODE_PUBKEY); } catch {}
+  flash(e.currentTarget, "Copied ✓");
+});
+function syncNodeScreen() {
+  const running = SCENARIOS[scenario].node;
+  const st = document.getElementById("node-scr-status");
+  st.textContent = running ? "Running" : "Stopped";
+  st.style.color = running ? "var(--accent)" : "var(--warn)";
+  document.getElementById("node-toggle").textContent = running ? "Stop node" : "Start node";
+}
+document.getElementById("node-toggle").addEventListener("click", () => {
+  scenario = SCENARIOS[scenario].node ? "nodestopped" : "good";
+  applyState(); syncNodeScreen();
+});
+drawerNav("d-node", "node-screen", syncNodeScreen);
+
+/* channels */
+drawerNav("d-channels", "channels-screen");
+document.getElementById("chan-another").addEventListener("click", openChannelScreen);
+
+/* app connections */
+const APPCONNS = [
+  { name: "stablekraft", created: "Jun 28", perms: "Full access", limit: "10,000 sats / day", spent: "2,350 sats", expiry: "Never" },
+  { name: "Alby Go", created: "Jul 8", perms: "Full access", limit: "Unlimited", spent: "612 sats", expiry: "Never" },
+];
+function appconnSub(a) {
+  return `${a.perms} · ${a.limit}${a.expiry !== "Never" ? " · expires " + a.expiry : ""}`;
+}
+function makeAppconnRow(a) {
+  const el = document.createElement("button");
+  el.className = "peer-row";
+  el.style.width = "100%"; el.style.textAlign = "left"; el.style.cursor = "pointer";
+  el.innerHTML = `<span class="p-dot"></span>
+    <div class="p-main"><div class="p-name">${a.name}</div><div class="p-addr">${appconnSub(a)}</div></div>
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#5c5c5c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>`;
+  el.addEventListener("click", () => openAppconnDetail(a));
+  return el;
+}
+function renderAppconns() {
+  const host = document.getElementById("appconn-list");
+  host.innerHTML = "";
+  for (const a of APPCONNS) host.appendChild(makeAppconnRow(a));
+  document.getElementById("appconns-val").textContent = APPCONNS.length + " apps";
+}
+renderAppconns();
+drawerNav("d-appconns", "appconns");
+
+let acdCurrent = null;
+function openAppconnDetail(a) {
+  acdCurrent = a;
+  document.getElementById("acd-title").textContent = a.name;
+  document.getElementById("acd-perms").textContent = a.perms;
+  document.getElementById("acd-limit").textContent = a.limit;
+  document.getElementById("acd-spent").textContent = a.perms === "Read only" ? "—" : a.spent;
+  document.getElementById("acd-created").textContent = a.created;
+  document.getElementById("acd-expiry").textContent = a.expiry;
+  show("appconn-detail");
+}
+document.getElementById("acd-revoke").addEventListener("click", () =>
+  openModal(
+    `Revoke ${acdCurrent?.name}?`,
+    "The app immediately loses access to this wallet. You can always pair it again with a new connection.",
+    "Revoke",
+    () => {
+      APPCONNS.splice(APPCONNS.indexOf(acdCurrent), 1);
+      renderAppconns(); back();
+    }
+  ));
+
+/* single-select chip groups */
+document.querySelectorAll(".chip-group").forEach(g =>
+  g.addEventListener("click", (e) => {
+    const c = e.target.closest(".chip");
+    if (!c) return;
+    g.querySelectorAll(".chip").forEach(x => x.classList.remove("on"));
+    c.classList.add("on");
+  }));
+const chipVal = (id) => document.querySelector(`#${id} .chip.on`).dataset.v;
+
+function openNewAppconn() {
+  document.getElementById("appconn-form").style.display = "";
+  document.getElementById("appconn-result").style.display = "none";
+  document.getElementById("appconn-name").value = "";
+  show("appconn-new");
+}
+document.getElementById("btn-appconn-new").addEventListener("click", openNewAppconn);
+document.getElementById("btn-appconn-add").addEventListener("click", openNewAppconn);
+document.getElementById("appconn-create").addEventListener("click", () => {
+  const name = document.getElementById("appconn-name").value.trim() || "New app";
+  const perms = chipVal("appconn-perms");
+  const limit = document.getElementById("appconn-limit").value.trim();
+  APPCONNS.push({
+    name, created: "today", perms,
+    limit: perms === "Read only" ? "—" : (limit ? `${limit} sats / ${chipVal("appconn-renew")}` : "Unlimited"),
+    spent: "0 sats",
+    expiry: chipVal("appconn-expiry"),
+  });
+  renderAppconns();
+  const qr = document.getElementById("qr3");
+  qr.innerHTML = "";
+  drawQrInto(qr, (name.length * 7919 + 13) % 0x7fffffff);
+  document.getElementById("appconn-form").style.display = "none";
+  document.getElementById("appconn-result").style.display = "";
+});
+document.getElementById("appconn-done").addEventListener("click", back);
+
+/* cloud backup */
+drawerNav("d-backup", "backup-screen");
+document.getElementById("backup-sync").addEventListener("click", (e) => {
+  document.getElementById("backup-last").textContent = "just now";
+  flash(e.currentTarget, "Synced ✓");
+});
+document.getElementById("backup-delete").addEventListener("click", () =>
+  openModal(
+    "Delete Drive backup?",
+    "This only removes the cloud copy — your wallet keeps running. Auto-sync will re-create it unless you disconnect Drive.",
+    "Delete",
+    () => { document.getElementById("backup-last").textContent = "—"; }
+  ));
+
+/* recovery */
+const FAKE_WORDS = ("ripple canyon velvet orbit lantern meadow copper drift " +
+  "summit ember willow harbor quartz timber falcon prairie " +
+  "cinder marble hollow beacon tundra saddle juniper vault").split(" ");
+let recHexBound = false;
+drawerNav("d-recovery", "recovery-screen", () => {
+  if (recHexBound) return;
+  recHexBound = true;
+  const hexEl = document.getElementById("rec-hex");
+  const hint = document.getElementById("rec-hex-hint");
+  const setM = (m) => {
+    hexEl.classList.toggle("masked", m);
+    hexEl.textContent = (m ? "•".repeat(64) : FAKE_SEED).match(/.{8}/g).join(" ");
+    hint.textContent = m ? "Tap to reveal" : "Tap to hide";
+  };
+  setM(true);
+  hexEl.addEventListener("click", () => setM(!hexEl.classList.contains("masked")));
+  document.getElementById("rec-hex-copy").addEventListener("click", async (e) => {
+    try { await navigator.clipboard.writeText(FAKE_SEED); } catch {}
+    flash(e.currentTarget, "Copied ✓");
+  });
+  const grid = document.getElementById("rec-words");
+  FAKE_WORDS.forEach((w, i) => {
+    const b = document.createElement("button");
+    b.className = "seed-word masked";
+    b.innerHTML = `<span class="idx">${i + 1}</span><span class="w">••••••</span>`;
+    b.addEventListener("click", () => {
+      const masked = b.classList.toggle("masked");
+      b.querySelector(".w").textContent = masked ? "••••••" : w;
+    });
+    grid.appendChild(b);
+  });
+  document.getElementById("rec-words-reveal").addEventListener("click", (e) => {
+    const anyMasked = grid.querySelector(".seed-word.masked");
+    grid.querySelectorAll(".seed-word").forEach((b, i) => {
+      b.classList.toggle("masked", !anyMasked);
+      b.querySelector(".w").textContent = anyMasked ? FAKE_WORDS[i] : "••••••";
+    });
+    e.currentTarget.textContent = anyMasked ? "Hide all" : "Reveal all";
+  });
+  document.getElementById("rec-words-copy").addEventListener("click", async (e) => {
+    try { await navigator.clipboard.writeText(FAKE_WORDS.join(" ")); } catch {}
+    flash(e.currentTarget, "Copied ✓");
+  });
+});
+
+/* recovery address + developer */
+drawerNav("d-sweep", "sweep-screen");
+document.getElementById("sweep-save").addEventListener("click", (e) => flash(e.currentTarget, "Saved ✓"));
+drawerNav("d-dev", "dev-screen");
+
+/* delete all wallet data */
+document.getElementById("d-delete").addEventListener("click", () =>
+  openModal(
+    "Delete all wallet data?",
+    "This wipes the wallet from this device. Without your seed or a backup, any funds are gone forever.",
+    "Delete everything",
+    () => {
+      try { localStorage.removeItem("libre_mockup_onboarded"); } catch {}
+      location.reload();
+    }
+  ));
+
+/* ───────────────────────── demo panel ───────────────────────── */
+const demoPanel = document.getElementById("demo-panel");
+document.getElementById("demo-fab").addEventListener("click", () => demoPanel.classList.toggle("open"));
+document.getElementById("demo-close").addEventListener("click", () => demoPanel.classList.remove("open"));
+document.getElementById("demo-onboarding").addEventListener("click", () => {
+  try { localStorage.removeItem("libre_mockup_onboarded"); } catch {}
+  demoPanel.classList.remove("open");
+  maybeShowOb(true);
+});
+</script>
+</body>
+</html>

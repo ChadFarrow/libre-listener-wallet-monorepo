@@ -7,7 +7,6 @@ import { defaultBridgeUrl, defaultRapidGossipSyncUrl, parsePeerString } from "..
 import { downloadBackupName } from "../core/backup-name";
 import { guardedClick } from "../core/ui-helpers";
 import {
-  LSPS1_REST_PROVIDERS,
   mempoolTxUrl,
   channelConfLabel,
   lsps1OrderStatus,
@@ -22,10 +21,7 @@ import {
   isLeaseOptionAvailable,
   clampLeaseSelectionValue,
 } from "../core/lsps1-provider-ui";
-import { withMockProvider } from "../core/lsps1-mock-provider";
-
-// Dev-only mock LSP (VITE_LSPS1_MOCK_URL in .env.local) — identical to LSPS1_REST_PROVIDERS in prod.
-const LSPS1_PROVIDERS = withMockProvider(LSPS1_REST_PROVIDERS, import.meta.env.VITE_LSPS1_MOCK_URL);
+import { LSPS1_PROVIDERS } from "../core/lsps1-mock-provider";
 import {
   googleClientId,
   setGoogleClientId,

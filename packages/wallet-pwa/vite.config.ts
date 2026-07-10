@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -49,10 +49,10 @@ function copyLdkWasmPlugin() {
 // chain, training bitcoind's estimator up to ~50 sat/vB; the wallet then demands ≥12500 sat/kw and
 // rejects lnd's 2500 sat/kw channel opens ("Peer's feerate much too low"). Runs before the
 // /regtest-esplora proxy, so only the fee-estimates route is overridden.
-function regtestFeeEstimatesPlugin() {
+function regtestFeeEstimatesPlugin(): Plugin {
   return {
     name: "regtest-fee-estimates",
-    configureServer(server: { middlewares: { use(path: string, fn: (req: unknown, res: { setHeader(k: string, v: string): void; end(s: string): void }) => void): void } }) {
+    configureServer(server) {
       server.middlewares.use("/regtest-esplora/fee-estimates", (_req, res) => {
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({ "1": 2.0, "6": 2.0, "144": 2.0, "1008": 2.0 }));

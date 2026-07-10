@@ -2,7 +2,7 @@
 // the deploy workflow), layer a "mock" provider over the real ones so the get-a-channel flow can be
 // clicked through against @libre/lsps1-mock-server — offline, no real LSP, no sats. Pure so it's
 // unit-testable; the views pass import.meta.env.VITE_LSPS1_MOCK_URL in.
-import type { Lsps1RestProvider } from "@libre/shared";
+import { LSPS1_REST_PROVIDERS, type Lsps1RestProvider } from "@libre/shared";
 
 export function withMockProvider(
   providers: Record<string, Lsps1RestProvider>,
@@ -32,3 +32,11 @@ export function quickChannelProvider(
 ): Lsps1RestProvider {
   return providers.mock ?? providers.megalith;
 }
+
+// The resolved provider map the app uses everywhere. This module owns the env read + layering
+// (like rgs-config/wallet-config own their resolved config) so views can't drift — one importing
+// the layered map while another forgets. Identical to LSPS1_REST_PROVIDERS in production.
+export const LSPS1_PROVIDERS = withMockProvider(
+  LSPS1_REST_PROVIDERS,
+  import.meta.env.VITE_LSPS1_MOCK_URL
+);

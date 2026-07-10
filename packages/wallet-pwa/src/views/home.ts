@@ -17,14 +17,10 @@ import {
   expiryFromDays,
   isChannelStateRegressionError,
   isNodeAlreadyRunningError,
-  LSPS1_REST_PROVIDERS,
   lsps1OrderStatus,
   type Lsps1RestOrderResponse,
 } from "@libre/shared";
-import { withMockProvider, quickChannelProvider } from "../core/lsps1-mock-provider";
-
-// Dev-only mock LSP (VITE_LSPS1_MOCK_URL in .env.local) — identical to LSPS1_REST_PROVIDERS in prod.
-const LSPS1_PROVIDERS = withMockProvider(LSPS1_REST_PROVIDERS, import.meta.env.VITE_LSPS1_MOCK_URL);
+import { LSPS1_PROVIDERS, quickChannelProvider } from "../core/lsps1-mock-provider";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (el: HTMLElement, on: boolean) => el.classList.toggle("hidden", !on);

@@ -2352,6 +2352,7 @@ export { VssMirror, deriveVssStoreId, VSS_STATE_BACKUP_KEY } from "./vss-mirror"
 export { VssDeviceLease, VSS_DEVICE_LEASE_KEY } from "./vss-device-lease";
 export { CrossDeviceLockError } from "./cross-device-lease-error";
 export { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
+export { resolveLnAddressInvoice, type ResolvedLnAddressInvoice } from "./lnurl-client";
 export {
   seedHexToMnemonic,
   mnemonicToSeedHex,

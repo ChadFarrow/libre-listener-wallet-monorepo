@@ -36,6 +36,34 @@ export function isUnrecoverableStatus(status: unknown): boolean {
   return status === ChannelMonitorUpdateStatus.LDKChannelMonitorUpdateStatus_UnrecoverableError;
 }
 
+// Compose the manager write into the durable batch. The channel_manager historically persisted
+// lazily (stop()/export only), so a page kill left disk with monitor N + manager N-k — which LDK
+// resolves on next load by FORCE-CLOSING the channel ("A ChannelManager is stale compared to the
+// current ChannelMonitor!"; reproduced live 2026-07-09). Enqueue the manager snapshot BEFORE the
+// flush so monitor + manager land in one durable batch; a failed manager write rejects without
+// flushing, so the ack never fires on a batch missing the manager (channel stays safely paused).
+//
+// NOTE for callers: persistManager must only SERIALIZE + ENQUEUE (KVStore write) — it runs in the
+// flush promise chain, safely outside any LDK callback stack, which is the only place
+// ChannelManager.write() may be called (inside a Persist callback LDK still holds its locks).
+export function composeDurableFlush(
+  persistManager: (() => Promise<void>) | undefined,
+  flush: () => Promise<void>,
+): () => Promise<void> {
+  if (!persistManager) return flush;
+  return async () => {
+    // Unwind the LDK callback stack FIRST. This composed flush is invoked synchronously inside
+    // Persist.persist_new_channel/update_persisted_channel, and an async body runs synchronously
+    // until its first await — so without this, persistManager()'s ChannelManager.write() executes
+    // inside LDK's Persist callback while LDK holds its locks (WASM BorrowMutError panic, the same
+    // re-entrancy class as the peer-disconnect trap). Microtasks only run once the whole
+    // JS→WASM→JS stack returns to the event loop, so after this await we are safely outside LDK.
+    await Promise.resolve();
+    await persistManager();
+    await flush();
+  };
+}
+
 // Schedule the durable acknowledgement: only ack (mark the monitor update complete to LDK) once the
 // write is durably committed; on a failed flush, do NOT ack — LDK stays paused on that channel,
 // which is the safe outcome. A synchronous throw inside `ack` is routed to onError too (never left
@@ -68,7 +96,11 @@ export function createDurablePersist(
   // can advance a persisted high-water mark exactly in step with durably-persisted state (never
   // ahead of it). Best-effort; a throw is swallowed so it can't break the ack path.
   onDurablePersisted?: (txidLe: Uint8Array, index: number, updateId: bigint) => void,
+  // Serializes + enqueues the channel_manager so it lands in the SAME durable batch as the
+  // monitor update (see composeDurableFlush — the OutdatedChannelManager force-close fix).
+  persistManager?: () => Promise<void>,
 ): Persist {
+  const durableFlush = composeDurableFlush(persistManager, flush);
   const ackDurable = (txidLe: Uint8Array, index: number, updateId: bigint): void => {
     const cm = getChainMonitor();
     if (!cm) {
@@ -110,7 +142,7 @@ export function createDurablePersist(
       const txidLe = txo.get_txid();
       const index = txo.get_index();
       const updateId = monitor.get_latest_update_id();
-      scheduleDurableAck(flush, () => ackDurable(txidLe, index, updateId), onFlushError);
+      scheduleDurableAck(durableFlush, () => ackDurable(txidLe, index, updateId), onFlushError);
       return ChannelMonitorUpdateStatus.LDKChannelMonitorUpdateStatus_InProgress;
     },
     update_persisted_channel(
@@ -127,7 +159,7 @@ export function createDurablePersist(
       const index = txo.get_index();
       const latest = monitor.get_latest_update_id();
       const updateId = pickUpdateId(update as any, latest);
-      scheduleDurableAck(flush, () => ackDurable(txidLe, index, updateId), onFlushError);
+      scheduleDurableAck(durableFlush, () => ackDurable(txidLe, index, updateId), onFlushError);
       return ChannelMonitorUpdateStatus.LDKChannelMonitorUpdateStatus_InProgress;
     },
     archive_persisted_channel(txo: OutPoint): void {

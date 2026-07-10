@@ -1,6 +1,62 @@
 import { describe, it, expect, vi } from "vitest";
-import { scheduleDurableAck, pickUpdateId, isUnrecoverableStatus } from "../../durable-persist";
+import { scheduleDurableAck, pickUpdateId, isUnrecoverableStatus, composeDurableFlush } from "../../durable-persist";
 import { ChannelMonitorUpdateStatus } from "lightningdevkit";
+
+// The OutdatedChannelManager fix: the channel_manager snapshot must land in the SAME durable
+// batch as the monitor update, BEFORE the ack — a page kill after a monitor flush but before the
+// manager's (previously lazy) persist left disk with monitor N + manager N-2, which LDK resolves
+// by force-closing the channel on next load ("A ChannelManager is stale compared to the current
+// ChannelMonitor!"; reproduced live 2026-07-09).
+describe("composeDurableFlush", () => {
+  it("without a manager persister it is the plain flush", async () => {
+    const flush = vi.fn(async () => {});
+    const composed = composeDurableFlush(undefined, flush);
+    await composed();
+    expect(flush).toHaveBeenCalledTimes(1);
+  });
+
+  it("NEVER runs the manager write synchronously — the composed flush is invoked inside LDK's Persist callback, where ChannelManager.write() panics", async () => {
+    const persistManager = vi.fn(async () => {});
+    const composed = composeDurableFlush(persistManager, async () => {});
+    const p = composed(); // invoked synchronously, as scheduleDurableAck does inside the LDK callback
+    expect(persistManager).not.toHaveBeenCalled(); // must wait for the stack to unwind
+    await p;
+    expect(persistManager).toHaveBeenCalledTimes(1);
+  });
+
+  it("enqueues the manager write BEFORE flushing, so both land in one durable batch", async () => {
+    const order: string[] = [];
+    const persistManager = vi.fn(async () => {
+      order.push("manager");
+    });
+    const flush = vi.fn(async () => {
+      order.push("flush");
+    });
+    await composeDurableFlush(persistManager, flush)();
+    expect(order).toEqual(["manager", "flush"]);
+  });
+
+  it("a failed manager write rejects WITHOUT flushing — the ack must not fire on a batch missing the manager", async () => {
+    const persistManager = vi.fn(async () => {
+      throw new Error("serialize failed");
+    });
+    const flush = vi.fn(async () => {});
+    await expect(composeDurableFlush(persistManager, flush)()).rejects.toThrow("serialize failed");
+    expect(flush).not.toHaveBeenCalled();
+  });
+
+  it("wired through scheduleDurableAck: manager failure leaves the channel paused (no ack)", async () => {
+    const persistManager = async () => {
+      throw new Error("degraded");
+    };
+    const ack = vi.fn();
+    const onErr = vi.fn();
+    scheduleDurableAck(composeDurableFlush(persistManager, async () => {}), ack, onErr);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ack).not.toHaveBeenCalled();
+    expect(onErr).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("scheduleDurableAck", () => {
   it("calls ack only after flush resolves", async () => {

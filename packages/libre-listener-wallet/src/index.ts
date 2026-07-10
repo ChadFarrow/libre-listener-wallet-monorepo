@@ -615,6 +615,13 @@ export class LibreListenerWallet {
           this.logger?.error(`[DurablePersist] process_events pump failed: ${e instanceof Error ? e.message : e}`);
         }
       },
+      // The OutdatedChannelManager fix: enqueue a channel_manager snapshot into the SAME durable
+      // batch as every monitor update, so a page kill can never leave disk with monitor N +
+      // manager N-k (which LDK resolves by force-closing the channel on next load — reproduced
+      // live 2026-07-09). Throws on failure so the ack is withheld and the channel stays paused.
+      // Runs in the flush promise chain, never inside an LDK callback (where ChannelManager.write()
+      // would re-enter LDK's locks).
+      () => this.writeChannelManagerForDurableBatch(),
     );
 
     this.chainMonitor = ChainMonitor.constructor_new(
@@ -1351,6 +1358,16 @@ export class LibreListenerWallet {
         this.logger?.error(`Failed to save state: ${err instanceof Error ? err.message : err}`);
       }
     }
+  }
+
+  // The durable-batch manager write (see createDurablePersist's persistManager): serialize the
+  // channel_manager and enqueue it so it commits WITH the monitor update it belongs to. Unlike
+  // persistChannelManagerState this THROWS on failure — the durable ack must be withheld when the
+  // manager can't land (an acked batch missing the manager is exactly the OutdatedChannelManager
+  // force-close on next load). A missing manager (teardown race) is a no-op, not an error.
+  private async writeChannelManagerForDurableBatch(): Promise<void> {
+    if (!this.channelManager) return;
+    await this.storage.setItem("channel_manager", bytesToHex(this.channelManager.write()));
   }
 
   // Flush ONLY the channel manager — the irreplaceable, backed-up state. Used before an export so

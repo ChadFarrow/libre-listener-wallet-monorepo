@@ -55,6 +55,19 @@ describe("paymentRecordsToNwcTransactions", () => {
     expect(tx.settled_at).toBe(1_700_000_000);
   });
 
+  it("emits the NIP-47 state field (Alby Go renders anything else as Failed)", () => {
+    // Alby Go's TransactionItem: state === "settled" → ✓, state === "pending" → spinner,
+    // ANYTHING else (including undefined) → red Failed ❌. Omitting state made every
+    // settled payment display as failed even though settled_at was present.
+    const [settled] = paymentRecordsToNwcTransactions([rec({ status: "settled" })]);
+    expect(settled.state).toBe("settled");
+    const [pending] = paymentRecordsToNwcTransactions(
+      [rec({ id: "p", status: "pending", settledAt: undefined })],
+      { unpaid: true }
+    );
+    expect(pending.state).toBe("pending");
+  });
+
   it("carries note→description and preimage when present", () => {
     const [tx] = paymentRecordsToNwcTransactions([rec({ note: "Podcast · Ep 1", preimage: "deadbeef" })]);
     expect(tx.description).toBe("Podcast · Ep 1");

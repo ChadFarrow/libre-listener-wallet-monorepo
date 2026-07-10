@@ -7,6 +7,13 @@ import type { PaymentRecord } from "./payment-record";
 // A NIP-47 transaction object. Amounts are in **millisats**; times in **unix seconds**.
 export interface NwcTransaction {
   type: "incoming" | "outgoing";
+  /**
+   * NIP-47 transaction state. Optional in the spec, but REQUIRED in practice:
+   * Alby Go renders state === "settled" as success, state === "pending" as
+   * in-flight, and ANYTHING else — including undefined — as a red "Failed".
+   * Omitting it made every settled payment display as failed (2026-07-10).
+   */
+  state: "settled" | "pending";
   invoice?: string;
   description?: string;
   description_hash?: string;
@@ -62,6 +69,8 @@ export function paymentRecordsToNwcTransactions(
   return page.map((r) => {
     const tx: NwcTransaction = {
       type: directionToType(r.direction),
+      // Failed records were filtered above, so only settled/pending reach here.
+      state: r.status === "settled" ? "settled" : "pending",
       payment_hash: r.id,
       amount: Math.max(0, Math.round(r.amountSats * 1000)),
       fees_paid: Math.max(0, Math.round((r.feeSats ?? 0) * 1000)),

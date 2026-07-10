@@ -364,6 +364,16 @@ export function initHome(ctx: AppContext): void {
     show($("create-panel"), true);
     show($("restore-panel"), false);
   });
+  $("copy-new-seed").addEventListener("click", async () => {
+    const seed = $("seed").textContent || "";
+    if (!seed) return;
+    try {
+      await navigator.clipboard.writeText(seed);
+      setMsg("create-msg", "Seed copied — store it somewhere safe and offline.", "ok");
+    } catch {
+      setMsg("create-msg", "Couldn't copy to the clipboard — select the seed and copy it manually.", "err");
+    }
+  });
   $("saved").addEventListener("change", (e) => {
     ($("create-confirm") as HTMLButtonElement).disabled = !(e.target as HTMLInputElement).checked;
   });

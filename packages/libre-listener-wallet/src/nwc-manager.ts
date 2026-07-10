@@ -909,7 +909,7 @@ export class NwcManager {
           // and a late settle still delivers the payment_sent notification.
         });
 
-        await this.sendResultResponse(event, "pay_keysend", { preimage: bytesToHex(keysendPreimage) }, relayUrl, rpcReq.id);
+        await this.sendResultResponse(event, "pay_keysend", { preimage: bytesToHex(keysendPreimage), fees_paid: 0 }, relayUrl, rpcReq.id);
 
       } else if (request.method === "list_transactions") {
         // Read-only history (Alby Go et al.). No spending-limit/budget checks. The wallet's
@@ -961,12 +961,19 @@ export class NwcManager {
     const relay = this.relays.get(relayUrl);
     if (!relay) return;
 
+    // NIP-47 requires the `error` field on EVERY response — null on success. A strict client can
+    // reject a response that omits it (was omitted here). `jsonrpc`/`id` aren't part of NIP-47 but
+    // are harmless extras that clients ignore.
     const plaintext = JSON.stringify({
       jsonrpc: "2.0",
       id: id || null,
       result_type: resultType,
+      error: null,
       result,
     });
+    // Diagnostic: log the exact response we publish so a "shows failed in the client" report can be
+    // resolved from the wire bytes instead of guesswork.
+    this.logger?.info(`[NWC] response → ${resultType}: ${plaintext}`);
 
     const encrypted = await nip04.encrypt(this.walletPrivKeyHex!, requestEvent.pubkey, plaintext);
 
@@ -1002,6 +1009,9 @@ export class NwcManager {
         message,
       },
     });
+    // Diagnostic: an error response is what makes a client show "failed" — log it so a report can
+    // be traced to the code/message we actually sent.
+    this.logger?.info(`[NWC] error response → ${code}: ${message}`);
 
     const encrypted = await nip04.encrypt(this.walletPrivKeyHex!, requestEvent.pubkey, plaintext);
 

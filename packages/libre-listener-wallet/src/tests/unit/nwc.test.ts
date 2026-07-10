@@ -550,7 +550,8 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       const resp = JSON.parse(await nip04.decrypt(clientSecretHex, walletPubkeyHex, respCall.content));
       expect(resp.result_type).toBe("pay_keysend");
       expect(resp.result.preimage).toBe(preimageHex);
-      expect(resp.error).toBeUndefined();
+      // NIP-47: `error` MUST be present on every response, null on success (not omitted).
+      expect(resp.error).toBeNull();
     });
   });
 
@@ -810,7 +811,7 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       const { send } = await setup({ expiresAt: Date.now() + 60_000 });
       const resp = await send("exp-2", "get_info", {});
       expect(resp.result).toBeDefined();
-      expect(resp.error).toBeUndefined();
+      expect(resp.error).toBeNull(); // NIP-47: error present, null on success
     });
 
     it("blocks a method absent from the allowlist with RESTRICTED", async () => {
@@ -842,7 +843,7 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
         { id: "in1", direction: "received", status: "settled", amountSats: 500, timestamp: 1_700_000_100_000 },
       ]);
       const resp = await send("lt-1", "list_transactions", {});
-      expect(resp.error).toBeUndefined();
+      expect(resp.error).toBeNull(); // NIP-47: error present, null on success
       expect(resp.result_type).toBe("list_transactions");
       const txs = resp.result.transactions;
       // newest first

@@ -6,7 +6,8 @@ import { AUTO_START_KEY } from "./core/auto-start";
 import { registerServiceWorker, wireInstallPrompt } from "./register-sw";
 import { downloadBackupName } from "./core/backup-name";
 import { isMobileUa, shouldAutoDownload } from "./core/backup-policy";
-import { driveConnected, driveConfigured, driveBackupNow } from "./drive-integration";
+import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail } from "./drive-integration";
+import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { initHome } from "./views/home";
 import { initSettings } from "./views/settings";
 
@@ -81,6 +82,34 @@ onControllerEvent((event) => {
     void driveBackupNow(controller).catch((e) => console.warn("[DriveSync] auto-backup failed:", (e as Error)?.message || e));
   }, 5000);
 });
+
+// ---- Drive silent reconnect on first interaction ----
+// The Drive token is in-memory only, so every reload starts disconnected. GIS token requests
+// need a user gesture (a page-load attempt dies with popup_failed_to_open), so when we have a
+// remembered account but no live token, retry a SILENT reconnect on the user's first
+// pointer/key gesture — no popup, no dedicated Reconnect click; the next state change then
+// auto-syncs. (This wiring was missing: the drive-ui helper existed but nothing called it, so
+// every reload required a manual Reconnect.)
+function armDriveGestureReconnect(): void {
+  if (!shouldArmGestureReconnect(driveConnected(), rememberedEmail())) return;
+  const onFirstGesture = () => {
+    window.removeEventListener("pointerdown", onFirstGesture);
+    window.removeEventListener("keydown", onFirstGesture);
+    if (driveConnected()) return;
+    void (async () => {
+      try {
+        await ensureDriveConnected({ silent: true });
+        console.log("[Drive] silently reconnected on first interaction");
+        emitControllerEvent("state-changed");
+      } catch (e) {
+        console.warn("[Drive] silent reconnect failed (use Settings → Reconnect):", (e as Error)?.message || e);
+      }
+    })();
+  };
+  window.addEventListener("pointerdown", onFirstGesture);
+  window.addEventListener("keydown", onFirstGesture);
+}
+armDriveGestureReconnect();
 
 // ---- boot ----
 registerServiceWorker();

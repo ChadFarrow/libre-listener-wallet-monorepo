@@ -6,6 +6,7 @@ import { channelCountLabel } from "../core/stat-format";
 import { parseNwcLimit } from "../core/nwc-limit";
 import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
 import { computeChecklist, getSeedBackedUp, setSeedBackedUp } from "../core/onboarding";
+import { firstTopUpHint } from "../core/reserve-hint";
 import { resolveSeedInput } from "../core/seed-input";
 import { guardedClick } from "../core/ui-helpers";
 import { formatOpeningFee } from "../core/lsps1-provider-ui";
@@ -122,6 +123,7 @@ export function initHome(ctx: AppContext): void {
         // but never while we're forcing the restore panel there.
         show($("create-complete"), !checklist.visible && !needsRestore);
         show($("receive-hint"), running && (s.balance?.receivableSat ?? 0) === 0);
+        void refreshReserveHint(running, s.balance?.spendableSat ?? 0);
       } else {
         show($("onboarding-checklist"), false);
         show($("create-complete"), false);
@@ -129,6 +131,36 @@ export function initHome(ctx: AppContext): void {
     } catch (e) {
       setMsg("msg", (e as Error).message, "err");
     }
+  }
+
+  // First-top-up reserve guidance (core/reserve-hint.ts): while spendable is 0 with a usable
+  // channel, warn that the first ~1% fills the channel reserve and nudge the default amount up
+  // so the first payment visibly lands. Only overrides the amount field while it still holds the
+  // shipped default — never a value the user typed.
+  async function refreshReserveHint(running: boolean, spendableSat: number): Promise<void> {
+    const el = $("reserve-hint");
+    if (!running) {
+      show(el, false);
+      return;
+    }
+    let hint;
+    try {
+      const chans = await controller.getChannels();
+      hint = firstTopUpHint({
+        spendableSat,
+        usableChannelCapacitiesSat: chans.filter((c) => c.isUsable).map((c) => c.capacitySat),
+      });
+    } catch {
+      hint = undefined;
+    }
+    show(el, !!hint);
+    if (!hint) return;
+    el.textContent =
+      `Heads up: your channel keeps ~${hint.reserveSat.toLocaleString()} sats as an unspendable reserve ` +
+      `(a one-time security deposit, returned when the channel closes). Make your first top-up at least ` +
+      `${hint.recommendedSat.toLocaleString()} sats so it shows up as spendable balance.`;
+    const amountEl = $<HTMLInputElement>("invoice-amount");
+    if (amountEl.value === "1000") amountEl.value = String(hint.recommendedSat);
   }
 
   function renderChecklist(cl: ReturnType<typeof computeChecklist>): void {

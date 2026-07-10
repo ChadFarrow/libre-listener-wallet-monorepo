@@ -93,6 +93,8 @@ import {
   TwoTuple_u64CVec_u8ZZ,
   Result_ThirtyTwoBytesRetryableSendFailureZ_OK,
   Result_RecipientOnionFieldsNoneZ_OK,
+  Bolt11Invoice,
+  Result_C3Tuple_ThirtyTwoBytesRecipientOnionFieldsRouteParametersZNoneZ_OK,
 } from "lightningdevkit";
 import { StorageCache, bytesToHex, hexToBytes, parseSeedHex } from "./storage-cache";
 import { createDurablePersist } from "./durable-persist";
@@ -124,6 +126,8 @@ import {
 export { ChannelStateRegressionError } from "./state-highwater";
 import { NodeAlreadyRunningError } from "./node-lock-error";
 export { NodeAlreadyRunningError } from "./node-lock-error";
+import { PaymentTimeoutError } from "./payment-timeout-error";
+export { PaymentTimeoutError } from "./payment-timeout-error";
 
 export { IndexedDBStorageProvider };
 
@@ -399,6 +403,14 @@ export class LibreListenerWallet {
   public nwc: NwcManager;
   // Forward-only payment history (source of truth for getPayments + NWC list_transactions).
   private paymentLog: PaymentLogger;
+
+  // In-flight payBolt11 settlement waiters, resolved/rejected by the SAME payment-log demux
+  // listener (never a second LDK event listener — a duplicate would double-process every
+  // payment). Keyed by payment-hash hex; entries are removed on settle/fail/timeout.
+  private settlementWaiters = new Map<
+    string,
+    { resolve: (preimageHex: string) => void; reject: (e: Error) => void }
+  >();
   // Optional VSS durable-replica mirror (built in start() only when config.vssUrl is set). Best-effort
   // off-device backup of the encrypted state envelope; never gates LDK. See vss-mirror.ts.
   private vssMirror?: VssMirror;
@@ -1037,14 +1049,15 @@ export class LibreListenerWallet {
         try {
           if (event instanceof Event_PaymentSent) {
             const feeMsat = event.fee_paid_msat instanceof Option_u64Z_Some ? Number(event.fee_paid_msat.some) : 0;
-            this.paymentLog.recordSent(
-              bytesToHex(event.payment_hash),
-              feeMsat / 1000,
-              bytesToHex(event.payment_preimage)
-            );
+            const sentHashHex = bytesToHex(event.payment_hash);
+            const preimageHex = bytesToHex(event.payment_preimage);
+            this.paymentLog.recordSent(sentHashHex, feeMsat / 1000, preimageHex);
+            this.settlementWaiters.get(sentHashHex)?.resolve(preimageHex);
           } else if (event instanceof Event_PaymentFailed) {
             if (event.payment_hash instanceof Option_ThirtyTwoBytesZ_Some) {
-              this.paymentLog.recordFailed(bytesToHex(event.payment_hash.some));
+              const failedHashHex = bytesToHex(event.payment_hash.some);
+              this.paymentLog.recordFailed(failedHashHex);
+              this.settlementWaiters.get(failedHashHex)?.reject(new Error("Payment failed"));
             }
           } else if (event instanceof Event_PaymentClaimed) {
             this.paymentLog.recordReceived(bytesToHex(event.payment_hash), Number(event.amount_msat) / 1000);
@@ -1927,6 +1940,12 @@ export class LibreListenerWallet {
     }
   }
 
+  // The persisted peer address book (pubkey → last-known {host, port}). Read-only view for UIs
+  // (e.g. a peers screen); works with the node stopped — it reads storage, not live state.
+  async getPeerAddresses(): Promise<Record<string, PeerAddress>> {
+    return parsePeerAddressBook(await this.storage.getItem(PEER_ADDRESS_BOOK_KEY));
+  }
+
   // On start, redial the peers we hold channels with, using their last-known addresses. This is
   // what keeps a funded channel alive across a reload — LDK stores no peer addresses, and the
   // in-memory desiredPeers list is empty on a fresh start. Gated by autoReconnectPeers; fully
@@ -2336,6 +2355,81 @@ export class LibreListenerWallet {
         ok: false,
         error: errMsg,
       };
+    }
+  }
+
+  // Pay an amount-carrying BOLT11 invoice. Mirrors the NWC pay_invoice LDK plumbing with a
+  // public, typed surface. Fund-safety rules encoded here:
+  //  - all validation happens BEFORE any side effect (no stranded pending records);
+  //  - a send_payment error is a definitive failure → the pending record is finalized failed;
+  //  - once send_payment succeeds the payment is in flight: a settlement-wait timeout throws
+  //    PaymentTimeoutError (pending — check history), NEVER a plain failure, so callers can't
+  //    blind-retry into a double-pay.
+  async payBolt11(bolt11: string): Promise<{ preimage: string; amountSats: number }> {
+    const mgr = this.channelManager;
+    if (!mgr) throw new Error("Wallet not started");
+
+    const invoiceRes = Bolt11Invoice.constructor_from_str(bolt11.trim());
+    if (!invoiceRes.is_ok()) throw new Error("Invalid BOLT11 invoice");
+    const invoice = (invoiceRes as any).res as Bolt11Invoice;
+
+    const amtOpt = invoice.amount_milli_satoshis();
+    if (!(amtOpt instanceof Option_u64Z_Some) || amtOpt.some <= 0n) {
+      throw new Error("Zero-amount invoices are not supported");
+    }
+    const amountSats = Number(amtOpt.some / 1000n);
+
+    const paramRes = UtilMethods.constructor_payment_parameters_from_invoice(invoice);
+    if (!paramRes.is_ok()) throw new Error("Failed to construct payment parameters from invoice");
+    const tuple = (paramRes as Result_C3Tuple_ThirtyTwoBytesRecipientOnionFieldsRouteParametersZNoneZ_OK).res;
+    const paymentHash = tuple.get_a();
+    const onionFields = tuple.get_b();
+    const routeParams = tuple.get_c();
+    const hashHex = bytesToHex(paymentHash);
+
+    // Register the settlement waiter BEFORE send_payment so a fast Event_PaymentSent can't race it.
+    const settled = new Promise<string>((resolve, reject) => {
+      this.settlementWaiters.set(hashHex, { resolve, reject });
+    });
+
+    // Record the outbound intent for the payment history (finalized by the event demux).
+    this.paymentLog.notePending({
+      id: hashHex,
+      direction: "sent",
+      status: "pending",
+      amountSats,
+      timestamp: Date.now(),
+      type: "bolt11",
+    });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const paymentId = new Uint8Array(32);
+      crypto.getRandomValues(paymentId);
+      const sendRes = mgr.send_payment(paymentHash, onionFields, paymentId, routeParams, Retry.constructor_attempts(10));
+      if (!sendRes.is_ok()) {
+        // Nothing left the node — a definitive failure. Finalize the record so it never
+        // strands as pending, and surface a plain error (safe to retry).
+        this.paymentLog.recordFailed(hashHex);
+        const errStr = (sendRes as any).err?.toString() || "route not found";
+        this.logger?.error(`[Pay] send_payment failed to initiate: ${errStr}`);
+        throw new Error(`Payment failed to initiate: ${errStr}`);
+      }
+
+      this.logger?.info(`[Pay] BOLT11 payment initiated, hash: ${hashHex}, ${amountSats} sats`);
+      const preimage = await Promise.race([
+        settled,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new PaymentTimeoutError(hashHex)), 90_000);
+        }),
+      ]);
+      return { preimage, amountSats };
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      this.settlementWaiters.delete(hashHex);
+      // The waiter promise may reject after we've already left (timeout path) — detach it so
+      // a late Event_PaymentFailed never surfaces as an unhandled rejection.
+      void settled.catch(() => {});
     }
   }
 

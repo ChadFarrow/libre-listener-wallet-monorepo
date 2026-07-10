@@ -22,23 +22,25 @@ describe("computeChecklist", () => {
   it("fresh wallet: five steps, create done, backup active", () => {
     const r = computeChecklist(base);
     expect(r.visible).toBe(true);
-    expect(r.items.map((i) => i.key)).toEqual(["create", "backup", "cloudBackup", "start", "channel"]);
+    expect(r.items.map((i) => i.key)).toEqual(["create", "backup", "start", "cloudBackup", "channel"]);
     expect(item(r, "create").done).toBe(true);
     expect(item(r, "backup").active).toBe(true);
     expect(item(r, "cloudBackup").active).toBe(false);
   });
 
-  it("phrase backed up but no cloud backup: cloud backup is the active step", () => {
+  it("phrase backed up, node stopped: start is the active step (comes before cloud backup)", () => {
     const r = computeChecklist({ ...base, backedUp: true });
     expect(item(r, "backup").done).toBe(true);
-    expect(item(r, "cloudBackup").active).toBe(true);
-    expect(item(r, "start").active).toBe(false);
+    expect(item(r, "start").active).toBe(true);
+    expect(item(r, "cloudBackup").active).toBe(false);
+    // Channel note follows the step order: with both start + cloud backup missing, start comes first.
+    expect(item(r, "channel").note).toBe("Start the node first.");
   });
 
-  it("both backups done, node stopped: start is the active step", () => {
-    const r = computeChecklist({ ...base, backedUp: true, cloudBackup: true });
-    expect(item(r, "cloudBackup").done).toBe(true);
-    expect(item(r, "start").active).toBe(true);
+  it("phrase backed up + running (the post-create state): cloud backup is the active step", () => {
+    const r = computeChecklist({ ...base, backedUp: true, running: true });
+    expect(item(r, "start").done).toBe(true);
+    expect(item(r, "cloudBackup").active).toBe(true);
     expect(item(r, "channel").active).toBe(false);
   });
 

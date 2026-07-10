@@ -54,7 +54,11 @@ export interface Checklist {
   visible: boolean;
 }
 
-// Order matters: create → back up → start → get a channel. The first incomplete step is "active".
+// Order matters: create → back up → start → cloud backup → get a channel. The first incomplete step
+// is "active". Start sits ABOVE cloud backup because createWallet auto-starts the node — with cloud
+// backup third, every fresh wallet showed a checked "Start the node" below an unchecked cloud-backup
+// step, so the list never ticked top-to-bottom. This order also puts cloud backup directly above the
+// channel step it gates.
 export function computeChecklist(i: ChecklistInputs): Checklist {
   const hasChannel = i.channels > 0;
 
@@ -102,13 +106,13 @@ export function computeChecklist(i: ChecklistInputs): Checklist {
   };
   if (hasChannel && i.usableChannels === 0) {
     channel.note = "Channel opening — this can take a bit.";
-  } else if (!i.cloudBackup) {
-    channel.note = "Turn on cloud backup first.";
   } else if (!i.running) {
     channel.note = "Start the node first.";
+  } else if (!i.cloudBackup) {
+    channel.note = "Turn on cloud backup first.";
   }
 
-  const items = [create, backup, cloudBackup, start, channel];
+  const items = [create, backup, start, cloudBackup, channel];
 
   // The active step is the first incomplete one (create is done whenever the card shows).
   const firstIncomplete = items.find((it) => !it.done);

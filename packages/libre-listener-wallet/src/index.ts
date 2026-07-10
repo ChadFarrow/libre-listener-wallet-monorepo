@@ -1105,7 +1105,19 @@ export class LibreListenerWallet {
 
   private async doSyncGossip(): Promise<void> {
     if (!this.config.rapidGossipSyncUrl || !this.networkGraph || !this.ldkLogger) return;
-    const lastTs = parseInt((await this.storage.getItem("rgs_timestamp")) || "0", 10) || 0;
+    // The fetch timestamp comes from the GRAPH ITSELF (LDK serializes its last-RGS timestamp
+    // inside the graph blob), never a separate storage key. The graph historically persisted
+    // only on a clean stop() — which a tab close/reload never calls — so a reload loaded a
+    // FRESH graph while the old standalone rgs_timestamp key survived: the sync then applied a
+    // delta to emptiness and the router saw "0 nodes and 0 channels" (every multi-hop boost
+    // failed RouteNotFound; hit live on mainnet 2026-07-09). Deriving from the graph makes the
+    // split-brain impossible, and an empty graph always fetches the FULL snapshot (/0).
+    const tsOpt = this.networkGraph.get_last_rapid_gossip_sync_timestamp();
+    let lastTs = tsOpt instanceof Option_u32Z_Some ? tsOpt.some : 0;
+    const roPre = this.networkGraph.read_only();
+    const preChannels = roPre.list_channels().length;
+    roPre.free(); // ReadOnlyNetworkGraph holds a read lock that must be freed.
+    if (preChannels === 0) lastTs = 0;
     const base = this.config.rapidGossipSyncUrl.replace(/\/$/, "");
     const url = `${base}/${lastTs}`;
     this.logger?.info(`[RGS] Fetching gossip snapshot from ${url}...`);
@@ -1120,11 +1132,19 @@ export class LibreListenerWallet {
       throw new Error(`RGS apply failed: ${err}`);
     }
     const newTs = (updateRes as Result_u32GraphSyncErrorZ_OK).res;
-    await this.storage.setItem("rgs_timestamp", String(newTs));
     const readOnly = this.networkGraph.read_only();
     const channelCount = readOnly.list_channels().length;
     readOnly.free(); // ReadOnlyNetworkGraph holds a read lock that must be freed.
     this.logger?.info(`[RGS] Gossip synced (ts=${newTs}); graph now has ${channelCount} channels.`);
+    // Persist the graph NOW, not only on stop() (which a tab close/reload never calls) — so the
+    // next load starts from this graph + its embedded timestamp and fetches only a delta instead
+    // of routing against an empty graph until the next full sync. Best-effort: a failed write
+    // just means the next start re-downloads the full snapshot.
+    try {
+      await this.storage.setItem("network_graph", bytesToHex(this.networkGraph.write()));
+    } catch (err) {
+      this.logger?.error(`[RGS] Failed to persist network graph: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   getNetworkGraph(): NetworkGraph | undefined {

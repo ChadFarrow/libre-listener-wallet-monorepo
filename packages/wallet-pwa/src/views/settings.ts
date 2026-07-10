@@ -22,6 +22,10 @@ import {
   isLeaseOptionAvailable,
   clampLeaseSelectionValue,
 } from "../core/lsps1-provider-ui";
+import { withMockProvider } from "../core/lsps1-mock-provider";
+
+// Dev-only mock LSP (VITE_LSPS1_MOCK_URL in .env.local) — identical to LSPS1_REST_PROVIDERS in prod.
+const LSPS1_PROVIDERS = withMockProvider(LSPS1_REST_PROVIDERS, import.meta.env.VITE_LSPS1_MOCK_URL);
 import {
   googleClientId,
   setGoogleClientId,
@@ -106,7 +110,7 @@ export function initSettings(ctx: AppContext): void {
   }
   function refreshLsps1Provider() {
     const providerKey = $<HTMLSelectElement>("lsps1-provider").value;
-    const provider = LSPS1_REST_PROVIDERS[providerKey] ?? LSPS1_REST_PROVIDERS.megalith;
+    const provider = LSPS1_PROVIDERS[providerKey] ?? LSPS1_PROVIDERS.megalith;
     $("lsps1-provider-summary").textContent = providerSummary(provider);
 
     const amountEl = $<HTMLInputElement>("lsps1-amount");
@@ -136,6 +140,15 @@ export function initSettings(ctx: AppContext): void {
     }
     lsps1Valid = check.ok;
     updateLsps1OrderBtn();
+  }
+  // Dev-only: surface the mock LSP in the picker (and default to it) when VITE_LSPS1_MOCK_URL is set.
+  if (LSPS1_PROVIDERS.mock) {
+    const sel = $<HTMLSelectElement>("lsps1-provider");
+    const opt = document.createElement("option");
+    opt.value = "mock";
+    opt.textContent = "Local mock LSP (dev)";
+    sel.prepend(opt);
+    sel.value = "mock";
   }
   $("lsps1-provider").addEventListener("change", refreshLsps1Provider);
   $("lsps1-amount").addEventListener("input", refreshLsps1Provider);
@@ -180,7 +193,7 @@ export function initSettings(ctx: AppContext): void {
 
   $("lsps1-order").addEventListener("click", async () => {
     const providerKey = $<HTMLSelectElement>("lsps1-provider").value;
-    const provider = LSPS1_REST_PROVIDERS[providerKey] ?? LSPS1_REST_PROVIDERS.megalith;
+    const provider = LSPS1_PROVIDERS[providerKey] ?? LSPS1_PROVIDERS.megalith;
     const amountSats = parseInt(val("lsps1-amount"), 10);
     const check = validateAmountForProvider(amountSats, provider);
     if (!check.ok) {

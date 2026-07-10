@@ -56,6 +56,12 @@ export default defineConfig({
     // Bind loopback only. `host: true` exposes the dev server (which sits next to
     // a wallet origin) to the LAN and to drive-by websites via known Vite/esbuild
     // dev-server advisories. Use `vite --host` explicitly if LAN access is needed.
-    host: "127.0.0.1"
+    host: "127.0.0.1",
+    // Dev-only: the page CSP allows connect-src 'self' https: wss:, so a plaintext
+    // http://127.0.0.1:9098 fetch to the local mock LSPS1 server is blocked. Proxy it
+    // same-origin instead (VITE_LSPS1_MOCK_URL=/mock-lsps1/v1 → this proxy → :9098).
+    proxy: {
+      "/mock-lsps1": "http://127.0.0.1:9098"
+    }
   }
 });

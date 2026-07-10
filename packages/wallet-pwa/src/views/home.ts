@@ -21,6 +21,10 @@ import {
   lsps1OrderStatus,
   type Lsps1RestOrderResponse,
 } from "@libre/shared";
+import { withMockProvider, quickChannelProvider } from "../core/lsps1-mock-provider";
+
+// Dev-only mock LSP (VITE_LSPS1_MOCK_URL in .env.local) — identical to LSPS1_REST_PROVIDERS in prod.
+const LSPS1_PROVIDERS = withMockProvider(LSPS1_REST_PROVIDERS, import.meta.env.VITE_LSPS1_MOCK_URL);
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (el: HTMLElement, on: boolean) => el.classList.toggle("hidden", !on);
@@ -592,7 +596,7 @@ export function initHome(ctx: AppContext): void {
       setMsg("quick-channel-msg", "Turn on cloud backup (Google Drive) first — a channel can't be recovered without a backup.", "err");
       return;
     }
-    const provider = LSPS1_REST_PROVIDERS.megalith;
+    const provider = quickChannelProvider(LSPS1_PROVIDERS);
     quickChannelBusy = true;
     show($("quick-channel"), true);
     show($("quick-channel-qr"), false);

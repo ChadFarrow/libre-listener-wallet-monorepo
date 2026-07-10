@@ -5,7 +5,8 @@ import { emitControllerEvent, onControllerEvent } from "./core/events";
 import { AUTO_START_KEY } from "./core/auto-start";
 import { registerServiceWorker, wireInstallPrompt } from "./register-sw";
 import { downloadBackupName } from "./core/backup-name";
-import { driveConnected, driveBackupNow } from "./drive-integration";
+import { isMobileUa, shouldAutoDownload } from "./core/backup-policy";
+import { driveConnected, driveConfigured, driveBackupNow } from "./drive-integration";
 import { initHome } from "./views/home";
 import { initSettings } from "./views/settings";
 
@@ -29,11 +30,20 @@ for (const el of Array.from(document.querySelectorAll<HTMLElement>(".tab"))) {
 (window as unknown as { showTab: (t: string) => void }).showTab = showTab;
 
 // ---- local auto-backup file (settings toggle libre_auto_download) ----
+// Desktop-only fallback: once Google Drive is configured it takes over entirely, and mobile
+// never auto-downloads (see core/backup-policy.ts).
 const AUTO_DOWNLOAD_KEY = "libre_auto_download";
 let autoDlTimer: ReturnType<typeof setTimeout> | undefined;
 onControllerEvent((event) => {
   if (event !== "state-changed") return;
-  if (localStorage.getItem(AUTO_DOWNLOAD_KEY) !== "1") return;
+  if (
+    !shouldAutoDownload({
+      toggleOn: localStorage.getItem(AUTO_DOWNLOAD_KEY) === "1",
+      driveConfigured: driveConfigured(),
+      mobile: isMobileUa(navigator.userAgent),
+    })
+  )
+    return;
   if (!controller.isRunning()) return;
   clearTimeout(autoDlTimer);
   autoDlTimer = setTimeout(() => {

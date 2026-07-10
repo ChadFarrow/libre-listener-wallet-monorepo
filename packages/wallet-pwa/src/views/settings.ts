@@ -26,11 +26,13 @@ import {
   googleClientId,
   setGoogleClientId,
   driveConnected,
+  driveConfigured,
   rememberedEmail,
   ensureDriveConnected,
   driveBackupNow,
   driveDeleteBackups,
 } from "../drive-integration";
+import { isMobileUa } from "../core/backup-policy";
 import { enablePush, disablePush, isPushEnabled, pushSupported } from "../web-push";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -327,6 +329,21 @@ export function initSettings(ctx: AppContext): void {
       "ok"
     );
   });
+  // Drive replaces the local auto-download once configured, and mobile never auto-downloads —
+  // reflect the policy (core/backup-policy.ts) in the toggle so it can't promise what won't run.
+  function refreshAutoDownloadToggle() {
+    const label = $("auto-download").closest("label") as HTMLElement | null;
+    if (isMobileUa(navigator.userAgent)) {
+      label?.classList.add("hidden");
+      return;
+    }
+    const driveOn = driveConfigured();
+    ($("auto-download") as HTMLInputElement).disabled = driveOn;
+    if (label) {
+      label.style.opacity = driveOn ? "0.5" : "";
+      label.title = driveOn ? "Google Drive backup is on — it replaces the local auto-download." : "";
+    }
+  }
 
   function refreshDriveStatus() {
     const connected = driveConnected();
@@ -337,6 +354,7 @@ export function initSettings(ctx: AppContext): void {
         ? `Google Drive: reconnect ${email}`
         : "Google Drive: not connected";
     ($("drive-connect") as HTMLButtonElement).textContent = connected ? "Reconnect" : "Connect Drive";
+    refreshAutoDownloadToggle();
   }
   $("drive-connect").addEventListener("click", async () => {
     setMsg("backup-msg", "Opening Google sign-in…");

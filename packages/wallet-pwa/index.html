@@ -277,18 +277,6 @@
         </div>
 
         <div class="card">
-          <h2>Offline wake-ups (Web Push)</h2>
-          <p class="hint">Let the gateway wake this app to answer NWC requests while it's closed. On iOS, install to the home screen first.</p>
-          <input id="push-gateway-url" class="input" placeholder="push gateway URL" value="https://nwc-push-gateway-production.up.railway.app" />
-          <input id="push-relay-url" class="input" placeholder="NWC relay URL (wss://…)" value="wss://relay.getalby.com/v1" />
-          <div class="row">
-            <button id="push-enable" class="btn primary">Enable offline wake</button>
-            <button id="push-disable" class="btn ghost" disabled>Disable</button>
-          </div>
-          <p class="msg" id="push-msg"></p>
-        </div>
-
-        <div class="card">
           <h2>Your channels</h2>
           <div id="channels-list" class="hint">Start the node to see your channels.</div>
         </div>
@@ -310,6 +298,16 @@
           <input id="rgs" class="input" placeholder="RGS snapshot base" />
           <button id="save-config" class="btn ghost small">Save connection settings</button>
           <p class="msg" id="config-msg"></p>
+
+          <h2>Offline wake-ups (Web Push)</h2>
+          <p class="hint">Let the gateway wake this app to answer NWC requests while it's closed. On iOS, install to the home screen first.</p>
+          <input id="push-gateway-url" class="input" placeholder="push gateway URL" value="https://nwc-push-gateway-production.up.railway.app" />
+          <input id="push-relay-url" class="input" placeholder="NWC relay URL (wss://…)" value="wss://relay.getalby.com/v1" />
+          <div class="row">
+            <button id="push-enable" class="btn primary">Enable offline wake</button>
+            <button id="push-disable" class="btn ghost" disabled>Disable</button>
+          </div>
+          <p class="msg" id="push-msg"></p>
         </details>
 
         <div class="card danger-zone">

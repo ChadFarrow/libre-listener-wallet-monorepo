@@ -209,6 +209,7 @@ textarea.masked { color: var(--muted); letter-spacing: 3px; user-select: none; }
 .advanced summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--muted); }
 .advanced[open] summary { margin-bottom: 12px; }
 .advanced .k { display: block; font-size: 12px; color: var(--muted); margin: 4px 0; }
+.advanced h2 { margin-top: 18px; }
 .danger-zone { border-color: #4a2530; }
 
 .hidden { display: none !important; }

@@ -44,18 +44,20 @@ export function relativeTime(timestampMs: number, now: number): string {
   return new Date(timestampMs).toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
-export interface PaymentDayGroup {
+export interface DayGroup<T> {
   label: string; // "Today" | "Yesterday" | "YYYY-MM-DD"
-  records: PaymentRecord[];
+  records: T[];
 }
+export type PaymentDayGroup = DayGroup<PaymentRecord>;
 
 const DAY_MS = 86_400_000;
 
-// Group an already-sorted (newest-first) record list under day separators. UTC day
-// boundaries keep the labels deterministic across machines/timezones.
-export function groupPaymentsByDay(records: PaymentRecord[], now: number): PaymentDayGroup[] {
+// Group an already-sorted (newest-first) list under day separators. UTC day boundaries
+// keep the labels deterministic across machines/timezones. Generic: payments and channel
+// events share the sheet, so they share the grouping.
+export function groupByDay<T extends { timestamp: number }>(records: T[], now: number): DayGroup<T>[] {
   const todayDay = Math.floor(now / DAY_MS);
-  const groups: PaymentDayGroup[] = [];
+  const groups: DayGroup<T>[] = [];
   for (const rec of records) {
     const day = Math.floor(rec.timestamp / DAY_MS);
     const label =
@@ -69,4 +71,18 @@ export function groupPaymentsByDay(records: PaymentRecord[], now: number): Payme
     else groups.push({ label, records: [rec] });
   }
   return groups;
+}
+
+export const groupPaymentsByDay = groupByDay<PaymentRecord>;
+
+// A channel lifecycle event rendered in the same sheet as payments.
+export interface ChannelEventRecord {
+  kind: "channel-close" | "sweep";
+  timestamp: number;
+  sat?: number; // sweep: recovered amount (0/undefined when unknown)
+  reason?: string; // close: stable ChannelCloseReason label
+}
+
+export function channelEventLabel(rec: ChannelEventRecord): string {
+  return rec.kind === "channel-close" ? "Channel closed" : "Funds recovered on-chain";
 }

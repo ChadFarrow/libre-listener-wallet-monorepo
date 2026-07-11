@@ -5,7 +5,7 @@ import { isDemoMode, demoState } from "../core/demo-mode";
 import { driveConnected, driveConfigured, driveSyncPending } from "../drive-integration";
 import { drawerBackupStatus } from "../core/drive-ui";
 import { confirmModal } from "../ui/confirm-modal";
-import { showScreenFromDrawer } from "../ui/nav";
+import { showScreenFromDrawer, resetToHome } from "../ui/nav";
 import { $, setMsg } from "./util";
 
 // Drawer wiring: header status, per-item navigation, and the destructive delete-all flow.
@@ -45,6 +45,10 @@ export function initDrawer(ctx: AppContext): void {
       showScreenFromDrawer(screenId);
     });
   }
+
+  // Straight back to the main wallet page, however deep the screen stack is — on desktop the
+  // sidebar is permanent and stacked settings screens otherwise need one ← click each.
+  $("d-home").addEventListener("click", () => resetToHome());
 
   navItem("d-node", "screen-node");
   navItem("d-channels", "screen-channels");

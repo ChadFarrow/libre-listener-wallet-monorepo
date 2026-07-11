@@ -61,4 +61,50 @@ describe("drawer → screen navigation", () => {
     expect(node.classList.contains("current")).toBe(true);
     expect(drawer.classList.contains("open")).toBe(false);
   });
+
+  // On desktop the drawer is a permanent sidebar and each item push()es a screen, so after
+  // browsing several settings the ← button needed several clicks to get back. The Wallet item
+  // jumps straight home, however deep the stack is.
+  it("the Wallet item returns to home in one click after stacking several screens", async () => {
+    const controller = {
+      getState: vi.fn().mockResolvedValue({
+        network: "mainnet",
+        running: true,
+        hasSeed: true,
+        hasChannelState: true,
+        createdNew: false,
+        channels: 1,
+        usableChannels: 1,
+        peers: 1,
+      }),
+      getPayments: vi.fn().mockResolvedValue([]),
+      listPeers: vi.fn().mockResolvedValue([]),
+      getBalance: vi.fn().mockResolvedValue({ spendableSat: 0, receivableSat: 0 }),
+      getChannels: vi.fn().mockResolvedValue([]),
+      getConfig: vi.fn().mockResolvedValue({ network: "mainnet" }),
+    } as unknown as WalletController;
+    const ctx: AppContext = { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, isActive: () => false } };
+
+    initScreens(ctx);
+    await flush();
+
+    // Browse a few settings screens the way the desktop sidebar does.
+    openDrawer();
+    document.getElementById("d-node")!.dispatchEvent(new Event("click"));
+    await flush();
+    openDrawer();
+    document.getElementById("d-channels")!.dispatchEvent(new Event("click"));
+    await flush();
+    openDrawer();
+    document.getElementById("d-peers")!.dispatchEvent(new Event("click"));
+    await flush();
+
+    document.getElementById("d-home")!.dispatchEvent(new Event("click"));
+    await flush();
+    await flush();
+
+    expect(document.getElementById("screen-home")!.classList.contains("current")).toBe(true);
+    expect(document.getElementById("screen-peers")!.classList.contains("current")).toBe(false);
+    expect(document.getElementById("drawer")!.classList.contains("open")).toBe(false);
+  });
 });

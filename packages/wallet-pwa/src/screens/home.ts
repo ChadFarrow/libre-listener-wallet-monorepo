@@ -4,6 +4,7 @@ import { statusPill, type StatusPillTarget } from "../core/status-pill";
 import { getSeedBackedUp } from "../core/onboarding";
 import { driveConfigured } from "../drive-integration";
 import { isDemoMode, demoState } from "../core/demo-mode";
+import { getUsdRate, satsToUsd } from "../core/fiat-rate";
 import { registerScreen, showScreen, currentScreen, openDrawer } from "../ui/nav";
 import { $, show, fmtSats } from "./util";
 
@@ -24,6 +25,15 @@ export function initHomeScreen(ctx: AppContext): void {
     try {
       const s = await controller.getState();
       $("balance-sats").textContent = s.balance ? fmtSats(s.balance.spendableSat) : "—";
+      // Fiat line: best-effort, hidden whenever no rate is available (offline, API down).
+      const fiatEl = $("balance-fiat");
+      if (s.balance) {
+        const rate = await getUsdRate();
+        show(fiatEl, rate != null);
+        if (rate != null) fiatEl.textContent = `$${satsToUsd(s.balance.spendableSat, rate).toFixed(2)}`;
+      } else {
+        show(fiatEl, false);
+      }
 
       const pill = statusPill({
         hasWallet: s.hasSeed || s.createdNew || s.hasChannelState,

@@ -14,6 +14,8 @@ import { initCloudBackupScreen } from "./cloud-backup";
 import { initRecoveryScreen } from "./recovery";
 import { initRecoveryAddressScreen } from "./recovery-address";
 import { initDeveloperScreen } from "./developer";
+import { initSendScreen } from "./send";
+import { initTransactionsSheet } from "./transactions-sheet";
 import { initOnboarding } from "./onboarding";
 
 // Wire the whole screen system against the static index.html shell. Order matters only in
@@ -34,5 +36,7 @@ export function initScreens(ctx: AppContext): void {
   initRecoveryScreen(ctx);
   initRecoveryAddressScreen(ctx);
   initDeveloperScreen(ctx);
+  initSendScreen(ctx);
+  initTransactionsSheet(ctx);
   initOnboarding(ctx);
 }

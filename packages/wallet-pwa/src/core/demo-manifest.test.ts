@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { resolveManifestHref, urlHasDemo } from "./demo-mode";
+import { describe, it, expect, beforeEach } from "vitest";
+import { resolveManifestHref, urlHasDemo, enterDemoFromUrl, isDemoMode } from "./demo-mode";
 
 describe("urlHasDemo (query + iOS-preserved hash)", () => {
   it("detects the ?demo query", () => {
@@ -19,6 +19,31 @@ describe("urlHasDemo (query + iOS-preserved hash)", () => {
     expect(urlHasDemo("", "")).toBe(false);
     expect(urlHasDemo("?foo=bar", "#home")).toBe(false);
     expect(urlHasDemo("?demonstrate=1", "#demoish")).toBe(false);
+  });
+});
+
+describe("enterDemoFromUrl (the per-tab demo latch)", () => {
+  beforeEach(() => sessionStorage.clear());
+
+  it("enters demo when the URL carries the marker", () => {
+    enterDemoFromUrl("?demo", "");
+    expect(isDemoMode()).toBe(true);
+  });
+
+  it("stays in demo across a reload that keeps the marker in the URL", () => {
+    enterDemoFromUrl("?demo", "");
+    enterDemoFromUrl("?demo", "");
+    expect(isDemoMode()).toBe(true);
+  });
+
+  it("clears a stale latch when the URL has no marker — the plain URL must boot the REAL app", () => {
+    // A tab that once visited ?demo latched sessionStorage; navigating to the bare URL in the
+    // same tab (or a session-restored/duplicated tab) must NOT keep booting demo — this hid the
+    // real app and blocked Google Drive on the live site (desktop, 2026-07-11).
+    enterDemoFromUrl("?demo", "");
+    expect(isDemoMode()).toBe(true);
+    enterDemoFromUrl("", "");
+    expect(isDemoMode()).toBe(false);
   });
 });
 

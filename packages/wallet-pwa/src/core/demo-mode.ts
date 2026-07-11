@@ -19,9 +19,15 @@ export function urlHasDemo(search: string, hash = ""): boolean {
   return hash.replace(/^#/, "").split(/[&/]/).includes("demo");
 }
 
+// The URL is authoritative on every boot: a demo marker enters demo, and its absence CLEARS the
+// per-tab latch. Without the clear, a tab that ever visited ?demo stayed demo forever — the plain
+// URL kept booting demo (and blocking Drive) after a same-tab navigation, a session-restored tab,
+// or a duplicated tab, all of which carry sessionStorage. Reloads keep ?demo in the URL (in-app
+// navigation pushState never rewrites it), so legit demo sessions still survive reload.
 export function enterDemoFromUrl(search: string, hash = ""): void {
   try {
     if (urlHasDemo(search, hash)) sessionStorage.setItem(DEMO_KEY, "1");
+    else sessionStorage.removeItem(DEMO_KEY);
   } catch {
     /* sessionStorage unavailable — demo simply won't engage */
   }

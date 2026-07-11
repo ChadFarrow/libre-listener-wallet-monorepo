@@ -44,6 +44,15 @@ describe("DiagBuffer", () => {
     expect(b.flushDue(T0 + 2000)).toBe(true);
   });
 
+  it("batchMs anchor follows eviction — measures from the oldest SURVIVING unflushed entry", () => {
+    const b = new DiagBuffer({ ...DEFAULT_DIAG_POLICY, cap: 2 });
+    b.add("log", "a", T0);        // will be evicted
+    b.add("log", "b", T0 + 100);
+    b.add("log", "c", T0 + 200);  // evicts a@T0; oldest survivor is b@T0+100
+    expect(b.flushDue(T0 + 2000)).toBe(false); // 2000 - 100 = 1900 < batchMs → NOT due (old bug fired here)
+    expect(b.flushDue(T0 + 2100)).toBe(true);  // b's window elapsed
+  });
+
   it("drainUnflushed empties the pending batch and resets the timer window", () => {
     const b = new DiagBuffer();
     b.add("log", "a", T0);

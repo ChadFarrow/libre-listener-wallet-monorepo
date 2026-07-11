@@ -31,7 +31,6 @@ export class DiagBuffer {
   private policy: DiagPolicy;
   private entries: DiagEntry[] = [];
   private unflushedFrom = 0; // index of the first unflushed entry
-  private firstUnflushedAt: number | undefined;
 
   constructor(policy: DiagPolicy = DEFAULT_DIAG_POLICY) {
     this.policy = policy;
@@ -46,7 +45,6 @@ export class DiagBuffer {
       text = `${text.slice(0, this.policy.maxLine)}…[+${over} chars]`;
     }
     this.entries.push({ at: now, level, msg: text });
-    if (this.firstUnflushedAt === undefined) this.firstUnflushedAt = now;
     if (this.entries.length > this.policy.cap) {
       const drop = this.entries.length - this.policy.cap;
       this.entries.splice(0, drop);
@@ -59,14 +57,14 @@ export class DiagBuffer {
     const unflushed = this.entries.length - this.unflushedFrom;
     if (unflushed <= 0) return false;
     if (unflushed >= this.policy.batchCount) return true;
-    return this.firstUnflushedAt !== undefined && now - this.firstUnflushedAt >= this.policy.batchMs;
+    const firstUnflushedAt = this.entries[this.unflushedFrom]?.at;
+    return firstUnflushedAt !== undefined && now - firstUnflushedAt >= this.policy.batchMs;
   }
 
   /** Hand over the pending batch (for the store) and reset the batch window. */
   drainUnflushed(): DiagEntry[] {
     const batch = this.entries.slice(this.unflushedFrom);
     this.unflushedFrom = this.entries.length;
-    this.firstUnflushedAt = undefined;
     return batch;
   }
 
@@ -78,7 +76,6 @@ export class DiagBuffer {
   clear(): void {
     this.entries = [];
     this.unflushedFrom = 0;
-    this.firstUnflushedAt = undefined;
   }
 
   count(): number {

@@ -164,4 +164,39 @@ describe("export/import v2 (passphrase + seed)", () => {
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/wrong secret or corrupt/);
   });
+
+  // Payment history (`tx_*`) rides along so a restore carries the transaction list onto a fresh
+  // device (it used to reset — the log is device-local and not in the backup). Needs a provider
+  // that can enumerate keys, like IndexedDB does.
+  const withKeys = (db: Map<string, string>): SecureStorageProvider => ({
+    getItem: async (k) => db.get(k) ?? null,
+    setItem: async (k, v) => { db.set(k, v); },
+    removeItem: async (k) => { db.delete(k); },
+    keys: async () => [...db.keys()],
+  });
+  const mkK = (db: Map<string, string>) =>
+    new LibreListenerWallet({ config, storage: withKeys(db), socketProvider: noSocket });
+
+  it("backs up and restores payment-history (tx_*) records", async () => {
+    const db = seeded();
+    db.set("tx_aa", '{"paymentHash":"aa","amountSat":100,"state":"settled"}');
+    db.set("tx_bb", '{"paymentHash":"bb","amountSat":250,"state":"settled"}');
+    const env = await mkK(db).exportState({ passphrase });
+    const dbB = new Map<string, string>();
+    await mkK(dbB).importState(env, passphrase);
+    expect(dbB.get("tx_aa")).toBe(db.get("tx_aa"));
+    expect(dbB.get("tx_bb")).toBe(db.get("tx_bb"));
+    // Fund-critical entries still restore alongside the history.
+    expect(dbB.get("channel_manager")).toBe("cafebabe");
+  });
+
+  it("still exports (fund-critical keys) when the provider can't enumerate keys — history just absent", async () => {
+    // makeStorage() has no keys() — the tx enumeration is skipped, export must not throw.
+    const env = await mk(seeded()).exportState({ passphrase });
+    const probe = new Map<string, string>();
+    const res = await mk(probe).verifyBackup(env, passphrase);
+    expect(res.ok).toBe(true);
+    expect(res.entryKeys).toContain("channel_manager");
+    expect(res.entryKeys.some((k) => k.startsWith("tx_"))).toBe(false);
+  });
 });

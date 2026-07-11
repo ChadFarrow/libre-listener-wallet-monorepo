@@ -113,7 +113,7 @@ import { VssDeviceLease } from "./vss-device-lease";
 import { CrossDeviceLockError } from "./cross-device-lease-error";
 import { reconnectDelayMs, shouldRedialNow } from "./peer-reconnect";
 import { normalizeBackupSecret } from "./seed-phrase";
-import { PaymentLogger, boostNoteFromCustomRecords } from "./payment-log";
+import { PaymentLogger, boostNoteFromCustomRecords, TX_KEY_PREFIX } from "./payment-log";
 import type { PaymentRecord } from "@libre/shared";
 import {
   parseHighwater,
@@ -1542,6 +1542,23 @@ export class LibreListenerWallet {
       for (const k of keyList) {
         const v = await this.storage.getItem(k);
         if (v !== null) entries[k] = v;
+      }
+    }
+    // Payment-history records (`tx_*`, one per payment). Additive + NOT fund-critical: these are
+    // enumerated from storage (dynamic, unbounded keys — not a fixed BACKUP_DIRECT_KEY) so a
+    // restore carries the transaction list onto a fresh device instead of starting the ledger
+    // empty. Best-effort — a history-enumeration failure must never fail the fund-critical export
+    // above; providers that can't enumerate keys (no `keys()`) simply back up no history. On
+    // import the generic entry loop writes them back, and start()'s PaymentLogger rehydrates them.
+    if (typeof this.storage.keys === "function") {
+      try {
+        for (const k of await this.storage.keys()) {
+          if (!k.startsWith(TX_KEY_PREFIX)) continue;
+          const v = await this.storage.getItem(k);
+          if (v !== null) entries[k] = v;
+        }
+      } catch (e) {
+        this.logger?.warn(`[Export] payment-history enumeration skipped (non-fatal): ${e instanceof Error ? e.message : e}`);
       }
     }
 

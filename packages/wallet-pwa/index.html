@@ -197,6 +197,261 @@
         </div>
       </section>
 
+      <!-- ══════════ CHANNELS ══════════ -->
+      <section class="screen" id="screen-channels">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">Channels</div>
+          <span class="topbar-spacer"></span>
+        </div>
+        <div class="sub-body">
+          <div id="channels-list"></div>
+          <div class="gap-10"></div>
+          <button class="btn-ghost" id="channels-get-another">Get another channel</button>
+          <p class="center-note">The reserve is ~1% of channel capacity that stays locked while the channel is open — it comes back when it closes.</p>
+        </div>
+      </section>
+
+      <!-- ══════════ PEERS ══════════ -->
+      <section class="screen" id="screen-peers">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">Peers</div>
+          <button class="iconbtn" id="btn-peer-add" aria-label="Connect a peer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+        <div class="sub-body">
+          <div id="peer-list"></div>
+          <div class="gap-10"></div>
+          <button class="btn-primary" id="btn-peer-connect">Connect a peer</button>
+          <p class="center-note">Peers are nodes your wallet talks to directly. Your channel lives with a peer — it reconnects automatically.</p>
+        </div>
+      </section>
+
+      <!-- ══════════ CONNECT PEER ══════════ -->
+      <section class="screen" id="screen-peer-connect">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">Connect a peer</div>
+          <span class="topbar-spacer"></span>
+        </div>
+        <div class="sub-body">
+          <div class="field-label">Node address</div>
+          <textarea class="field mono" id="peer-conn" rows="3" placeholder="pubkey@host:port"></textarea>
+          <p class="center-note" style="text-align:left;padding:8px 2px">Paste the node's <b>pubkey@host:port</b>. Once connected, that node can open a channel to your wallet.</p>
+          <div class="gap-10"></div>
+          <button class="btn-primary" id="connect-peer">Connect</button>
+          <p class="msg" id="peer-msg"></p>
+        </div>
+      </section>
+
+      <!-- ══════════ APP CONNECTIONS ══════════ -->
+      <section class="screen" id="screen-appconns">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">App connections</div>
+          <button class="iconbtn" id="btn-appconn-add" aria-label="New connection"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+        <div class="sub-body">
+          <div id="appconn-list"></div>
+          <div class="gap-10"></div>
+          <button class="btn-primary" id="btn-appconn-new">Create connection</button>
+          <p class="center-note">Apps connect over Nostr Wallet Connect to pay from this wallet — up to 10 connections.</p>
+          <p class="msg" id="appconn-list-msg"></p>
+        </div>
+      </section>
+
+      <!-- ══════════ NEW APP CONNECTION ══════════ -->
+      <section class="screen" id="screen-appconn-new">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">New connection</div>
+          <span class="topbar-spacer"></span>
+        </div>
+        <div class="sub-body">
+          <div id="appconn-form">
+            <div class="field-label">App name</div>
+            <input class="field" id="appconn-name" placeholder="e.g. stablekraft" />
+            <div class="field-label">Permissions</div>
+            <div class="chip-row chip-group" id="appconn-perms">
+              <button class="chip on" data-v="full">Full access</button>
+              <button class="chip" data-v="pay">Pay only</button>
+              <button class="chip" data-v="readonly">Read only</button>
+            </div>
+            <div id="appconn-limit-block">
+              <div class="field-label">Spending limit (sats, 0 = unlimited)</div>
+              <input class="field" id="appconn-limit" inputmode="numeric" value="10000" />
+              <div class="field-label">Limit renews</div>
+              <div class="chip-row chip-group" id="appconn-renew">
+                <button class="chip on" data-v="daily">Daily</button>
+                <button class="chip" data-v="weekly">Weekly</button>
+                <button class="chip" data-v="monthly">Monthly</button>
+                <button class="chip" data-v="never">Never</button>
+              </div>
+            </div>
+            <div class="field-label">Connection expires</div>
+            <div class="chip-row chip-group" id="appconn-expiry">
+              <button class="chip" data-v="7">1 week</button>
+              <button class="chip" data-v="30">1 month</button>
+              <button class="chip" data-v="365">1 year</button>
+              <button class="chip on" data-v="0">Never</button>
+            </div>
+            <div class="gap-18"></div>
+            <button class="btn-primary" id="appconn-create">Create</button>
+            <p class="center-note">Read only can't spend — it only sees balance and history.</p>
+          </div>
+          <div id="appconn-result" class="hidden">
+            <p class="center-note">Scan this from the app, or copy the pairing string.</p>
+            <div class="qr-wrap"><img id="appconn-qr" class="qr hidden" alt="Pairing QR" /></div>
+            <textarea id="appconn-uri" class="field mono" readonly rows="3"></textarea>
+            <div class="gap-10"></div>
+            <button class="btn-ghost" id="appconn-copy">Copy pairing string</button>
+            <p class="center-note" style="color:#ffd479">Anyone with this string can spend up to your limit — treat it like cash. It can't be shown again.</p>
+            <div class="gap-10"></div>
+            <button class="btn-primary" id="appconn-done">Done</button>
+          </div>
+          <p class="msg" id="appconn-msg"></p>
+        </div>
+      </section>
+
+      <!-- ══════════ APP CONNECTION DETAIL ══════════ -->
+      <section class="screen" id="screen-appconn-detail">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title" id="acd-title">Connection</div>
+          <span class="topbar-spacer"></span>
+        </div>
+        <div class="sub-body">
+          <div class="order-card">
+            <div class="order-row"><span>Permissions</span><b id="acd-perms">—</b></div>
+            <div class="order-row"><span>Spending limit</span><b id="acd-limit">—</b></div>
+            <div class="order-row"><span>Spent this period</span><b id="acd-spent">—</b></div>
+            <div class="order-row"><span>Created</span><b id="acd-created">—</b></div>
+            <div class="order-row"><span>Expires</span><b id="acd-expiry">—</b></div>
+          </div>
+          <p class="center-note">The pairing secret can't be shown again — if the app lost it, revoke this connection and create a new one.</p>
+          <div class="gap-10"></div>
+          <button class="btn-primary btn-danger" id="acd-revoke">Revoke connection</button>
+          <p class="msg" id="acd-msg"></p>
+        </div>
+      </section>
+
+      <!-- ══════════ CLOUD BACKUP ══════════ -->
+      <section class="screen" id="screen-backup">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">Cloud backup</div>
+          <span class="topbar-spacer"></span>
+        </div>
+        <div class="sub-body">
+          <div class="order-card">
+            <div class="order-row"><span>Google Drive</span><b id="backup-drive-state">—</b></div>
+            <div class="order-row"><span>Account</span><b id="backup-account">—</b></div>
+          </div>
+          <p class="center-note">Backups are encrypted with your wallet seed before they leave this device — Google can't read them. They sync automatically while the node runs.</p>
+          <div class="gap-10"></div>
+          <button class="btn-primary" id="drive-connect">Connect Drive</button>
+          <div class="gap-10"></div>
+          <button class="btn-ghost" id="drive-backup-now">Back up now</button>
+          <div class="gap-10"></div>
+          <button class="btn-ghost" id="export">Download backup file</button>
+          <label class="toggle-row" id="auto-download-row"><input type="checkbox" id="auto-download" /> Auto-download a backup file when the wallet changes (desktop)</label>
+          <details class="adv">
+            <summary>Delete cloud backup</summary>
+            <p class="center-note" style="text-align:left">Removes the encrypted backup from Google Drive. Requires the node stopped so auto-sync can't re-create it.</p>
+            <button class="btn-ghost" id="drive-delete">Delete Drive backup</button>
+          </details>
+          <p class="msg" id="backup-msg"></p>
+        </div>
+      </section>
+
+      <!-- ══════════ RECOVERY (seed + phrase) ══════════ -->
+      <section class="screen" id="screen-recovery">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">Recovery</div>
+          <span class="topbar-spacer"></span>
+        </div>
+        <div class="sub-body">
+          <div class="field-label">Wallet seed · hex (copy/paste format)</div>
+          <button class="seed-hex masked" id="rec-hex"></button>
+          <div class="seed-hint" id="rec-hex-hint">Tap to reveal</div>
+          <div class="seed-actions"><button class="btn-ghost" id="rec-hex-copy">Copy seed</button></div>
+          <div class="field-label" style="margin-top:26px">Recovery phrase · 24 words (pen &amp; paper)</div>
+          <div class="seed-grid" id="rec-words"></div>
+          <div class="seed-hint">Tap a word to reveal it</div>
+          <div class="seed-actions">
+            <button class="btn-ghost" id="rec-words-reveal">Reveal all</button>
+            <button class="btn-ghost" id="rec-words-copy">Copy phrase</button>
+          </div>
+          <p class="center-note" style="margin-top:14px">Either form restores <b>this wallet only</b> — other wallet apps derive different keys from the same words.</p>
+          <p class="msg" id="phrase-msg"></p>
+        </div>
+      </section>
+
+      <!-- ══════════ RECOVERY ADDRESS (sweep) ══════════ -->
+      <section class="screen" id="screen-sweep">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">Recovery address</div>
+          <span class="topbar-spacer"></span>
+        </div>
+        <div class="sub-body">
+          <p class="center-note" style="text-align:left;padding:4px 2px">If a channel ever force-closes, your funds return on-chain. They're swept automatically to this Bitcoin address — set it once and forget it.</p>
+          <div class="field-label">Bitcoin address</div>
+          <input class="field mono" id="sweep-address" autocomplete="off" placeholder="bc1q…" />
+          <div class="gap-18"></div>
+          <button class="btn-primary" id="save-sweep">Save</button>
+          <p class="msg" id="sweep-msg"></p>
+        </div>
+      </section>
+
+      <!-- ══════════ DEVELOPER SETTINGS ══════════ -->
+      <section class="screen" id="screen-dev">
+        <div class="topbar">
+          <button class="iconbtn back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div class="title">Developer settings</div>
+          <span class="topbar-spacer"></span>
+        </div>
+        <div class="sub-body">
+          <p class="center-note">Defaults ship with the app — only change these if you run your own infrastructure. The node must be stopped to save.</p>
+          <div class="field-label">Network</div>
+          <select class="field" id="network">
+            <option value="mainnet">mainnet</option>
+            <option value="signet">signet</option>
+            <option value="testnet">testnet</option>
+            <option value="regtest">regtest</option>
+          </select>
+          <div class="field-label">Esplora URL</div>
+          <input class="field mono" id="esplora" placeholder="https://mempool.space/api" />
+          <div class="field-label">Bridge URL</div>
+          <input class="field mono" id="bridge" placeholder="wss://…" />
+          <div class="field-label">Gossip (RGS) URL</div>
+          <input class="field mono" id="rgs" placeholder="https://…" />
+          <div class="gap-10"></div>
+          <button class="btn-ghost" id="save-config">Save connection settings</button>
+          <p class="msg" id="config-msg"></p>
+          <details class="adv">
+            <summary>Google Drive OAuth client</summary>
+            <input class="field mono" id="google-client-id" placeholder="Google OAuth client id" />
+            <div class="gap-10"></div>
+            <button class="btn-ghost" id="save-drive">Save client id</button>
+            <p class="msg" id="drive-msg"></p>
+          </details>
+          <details class="adv">
+            <summary>Web Push (offline wake)</summary>
+            <div class="field-label">Push gateway URL</div>
+            <input class="field mono" id="push-gateway-url" value="https://nwc-push-gateway-production.up.railway.app" />
+            <div class="field-label">NWC relay URL</div>
+            <input class="field mono" id="push-relay-url" value="wss://relay.getalby.com/v1" />
+            <div class="gap-10"></div>
+            <button class="btn-ghost" id="push-enable">Enable offline wake</button>
+            <div class="gap-10"></div>
+            <button class="btn-ghost" id="push-disable">Disable</button>
+            <p class="msg" id="push-msg"></p>
+          </details>
+        </div>
+      </section>
+
       <!-- ══════════ settings drawer ══════════ -->
       <div id="scrim"></div>
       <aside id="drawer">
@@ -214,12 +469,12 @@
             <span class="grow">Lightning node</span>
             <span class="val" id="d-node-val">—</span>
           </button>
-          <button class="d-item hidden" id="d-channels">
+          <button class="d-item" id="d-channels">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3L4 14h6l-1 7 9-11h-6l1-7z"/></svg>
             <span class="grow">Channels</span>
             <span class="val" id="d-channels-val"></span>
           </button>
-          <button class="d-item hidden" id="d-peers">
+          <button class="d-item" id="d-peers">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.6"/><circle cx="18" cy="6" r="2.6"/><circle cx="12" cy="18" r="2.6"/><path d="M7.8 7.8l2.8 7.4M16.2 7.8l-2.8 7.4M8.6 6h6.8"/></svg>
             <span class="grow">Peers</span>
             <span class="val" id="d-peers-val"></span>
@@ -230,24 +485,24 @@
             <span class="val">LSP</span>
           </button>
 
-          <div class="d-section hidden" id="d-section-apps">Apps</div>
-          <button class="d-item hidden" id="d-appconns">
+          <div class="d-section" id="d-section-apps">Apps</div>
+          <button class="d-item" id="d-appconns">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a3 3 0 106 0 3 3 0 00-6 0zM3 12h3m12 0h3"/></svg>
             <span class="grow">App connections</span>
             <span class="val" id="d-appconns-val"></span>
           </button>
 
           <div class="d-section">Backup &amp; security</div>
-          <button class="d-item hidden" id="d-backup">
+          <button class="d-item" id="d-backup">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 19a4 4 0 01-.5-7.97A6 6 0 0117.4 9.6 4.5 4.5 0 0117.5 19H6z"/></svg>
             <span class="grow">Cloud backup</span>
             <span class="val" id="d-backup-val"></span>
           </button>
-          <button class="d-item hidden" id="d-recovery">
+          <button class="d-item" id="d-recovery">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 118 0v3"/></svg>
             <span class="grow">Recovery phrase</span>
           </button>
-          <button class="d-item hidden" id="d-sweep">
+          <button class="d-item" id="d-sweep">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l5-5m0 0V9a5 5 0 015-5h6v6a5 5 0 01-5 5H9z"/></svg>
             <span class="grow">Recovery address</span>
           </button>
@@ -257,7 +512,7 @@
           </button>
 
           <div class="d-section">Advanced</div>
-          <button class="d-item hidden" id="d-dev">
+          <button class="d-item" id="d-dev">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4h4l.6 2.6a7 7 0 012 1.2L19 7l2 3.4-2 1.7a7.2 7.2 0 010 2.3l2 1.7-2 3.4-2.4-.8a7 7 0 01-2 1.2L14 22h-4l-.6-2.6a7 7 0 01-2-1.2L5 19l-2-3.4 2-1.7a7.2 7.2 0 010-2.3L3 9.9 5 6.5l2.4.8a7 7 0 012-1.2L10 4z"/><circle cx="12" cy="13" r="3"/></svg>
             <span class="grow">Developer settings</span>
           </button>

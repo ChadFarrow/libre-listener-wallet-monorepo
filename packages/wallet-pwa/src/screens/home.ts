@@ -7,14 +7,13 @@ import { isDemoMode, demoState } from "../core/demo-mode";
 import { registerScreen, showScreen, currentScreen, openDrawer } from "../ui/nav";
 import { $, show, fmtSats } from "./util";
 
-// Where each pill target lives. channels/cloud-backup/recovery get real screens in a later
-// step — until then they land on the closest useful surface.
+// Where each pill target lives — tapping the pill deep-links to the fixing screen.
 const PILL_SCREEN: Record<StatusPillTarget, string | "drawer"> = {
   node: "screen-node",
   "get-channel": "screen-get-channel",
-  channels: "screen-node",
-  "cloud-backup": "drawer",
-  recovery: "drawer",
+  channels: "screen-channels",
+  "cloud-backup": "screen-backup",
+  recovery: "screen-recovery",
 };
 
 export function initHomeScreen(ctx: AppContext): void {

@@ -18,6 +18,9 @@ export function initDrawer(ctx: AppContext): void {
       const val = $("d-node-val");
       val.textContent = s.running ? "Running" : "Stopped";
       val.className = `val ${s.running ? "ok" : "warn"}`;
+      $("d-channels-val").textContent =
+        s.channels != null ? `${s.usableChannels ?? 0}/${s.channels}` : "";
+      $("d-peers-val").textContent = s.peers != null ? String(s.peers) : "";
     } catch {
       /* drawer header is cosmetic — never break on a state read */
     }
@@ -31,8 +34,15 @@ export function initDrawer(ctx: AppContext): void {
   }
 
   navItem("d-node", "screen-node");
+  navItem("d-channels", "screen-channels");
+  navItem("d-peers", "screen-peers");
   navItem("d-getchannel", "screen-get-channel");
+  navItem("d-appconns", "screen-appconns");
+  navItem("d-backup", "screen-backup");
+  navItem("d-recovery", "screen-recovery");
+  navItem("d-sweep", "screen-sweep");
   navItem("d-restore", "screen-restore");
+  navItem("d-dev", "screen-dev");
 
   $("d-delete").addEventListener("click", () => {
     void (async () => {

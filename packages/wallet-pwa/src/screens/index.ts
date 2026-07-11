@@ -7,6 +7,13 @@ import { initRestoreScreen } from "./restore";
 import { initReceiveScreen } from "./receive";
 import { initGetChannelScreen } from "./get-channel";
 import { initChanSuccessScreen } from "./chan-success";
+import { initChannelsScreen } from "./channels";
+import { initPeersScreen } from "./peers";
+import { initAppConnectionsScreen } from "./app-connections";
+import { initCloudBackupScreen } from "./cloud-backup";
+import { initRecoveryScreen } from "./recovery";
+import { initRecoveryAddressScreen } from "./recovery-address";
+import { initDeveloperScreen } from "./developer";
 import { initOnboarding } from "./onboarding";
 
 // Wire the whole screen system against the static index.html shell. Order matters only in
@@ -20,5 +27,12 @@ export function initScreens(ctx: AppContext): void {
   initReceiveScreen(ctx);
   initGetChannelScreen(ctx);
   initChanSuccessScreen();
+  initChannelsScreen(ctx);
+  initPeersScreen(ctx);
+  initAppConnectionsScreen(ctx);
+  initCloudBackupScreen(ctx);
+  initRecoveryScreen(ctx);
+  initRecoveryAddressScreen(ctx);
+  initDeveloperScreen(ctx);
   initOnboarding(ctx);
 }

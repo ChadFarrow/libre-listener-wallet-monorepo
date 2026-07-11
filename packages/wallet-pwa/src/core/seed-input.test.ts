@@ -17,6 +17,19 @@ describe("resolveSeedInput", () => {
     expect(resolveSeedInput(`  ${PHRASE.toUpperCase()}  `)).toBe(SEED_HEX);
   });
 
+  it("tolerates the on-screen spaced hex (highlighted display instead of the Copy button)", () => {
+    // How the seed renders: groups of 8 separated by spaces.
+    const spaced = SEED_HEX.replace(/(.{8})/g, "$1 ").trim();
+    expect(resolveSeedInput(spaced)).toBe(SEED_HEX);
+    // Newlines / doubled spaces from a copy shouldn't matter either.
+    expect(resolveSeedInput(`${SEED_HEX.slice(0, 32)}\n${SEED_HEX.slice(32)}`)).toBe(SEED_HEX);
+  });
+
+  it("resolves a recovery phrase even with newlines / extra spaces between words", () => {
+    expect(resolveSeedInput(PHRASE.replace(/ /g, "  "))).toBe(SEED_HEX);
+    expect(resolveSeedInput(PHRASE.replace(/ /g, "\n"))).toBe(SEED_HEX);
+  });
+
   it("returns null for garbage / partial / wrong-length input", () => {
     expect(resolveSeedInput("")).toBeNull();
     expect(resolveSeedInput("not a seed")).toBeNull();

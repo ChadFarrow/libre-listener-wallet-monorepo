@@ -69,7 +69,7 @@ export function initOnboarding(ctx: AppContext): void {
 
   function wipeSeed(): void {
     const el = document.getElementById("ob-seed-hex");
-    if (el) el.textContent = "•".repeat(64).replace(/(.{8})/g, "$1 ").trim();
+    if (el) el.textContent = "•".repeat(64);
   }
 
   function renderProgress(step: OnboardingStep): void {
@@ -166,7 +166,7 @@ export function initOnboarding(ctx: AppContext): void {
           try {
             revealed = !revealed;
             hexEl.classList.toggle("masked", !revealed);
-            hexEl.textContent = revealed ? (await loadSeed()).replace(/(.{8})/g, "$1 ").trim() : "";
+            hexEl.textContent = revealed ? await loadSeed() : "";
             if (!revealed) wipeSeed();
             $("ob-seed-hint").textContent = revealed ? "Tap to hide" : "Tap to reveal";
           } catch (e) {

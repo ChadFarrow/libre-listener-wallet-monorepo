@@ -7,7 +7,7 @@ import { $, setMsg, copyText } from "./util";
 // Seed + 24-word phrase reveal. Secrets enter the DOM only on an explicit tap and are wiped
 // when this screen is left (onHide) — never rendered at init or on state changes.
 
-const MASK_HEX = "•".repeat(64).replace(/(.{8})/g, "$1 ").trim();
+const MASK_HEX = "•".repeat(64);
 const MASK_WORD = "••••••";
 
 export function initRecoveryScreen(ctx: AppContext): void {
@@ -86,7 +86,7 @@ export function initRecoveryScreen(ctx: AppContext): void {
           setMsg("phrase-msg", (e as Error).message, "err");
           return;
         }
-        hexEl.textContent = seedHex.replace(/(.{8})/g, "$1 ").trim();
+        hexEl.textContent = seedHex;
         hexEl.classList.remove("masked");
         $("rec-hex-hint").textContent = "Tap to hide";
         void markBackedUp();

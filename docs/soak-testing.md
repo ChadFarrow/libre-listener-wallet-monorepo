@@ -8,6 +8,46 @@ does — asserting the channel survives. Every anomaly (force-close event, regre
 non-monotonic state, lost channel, lnd force-close) is collected and reported at the end, so a long
 run surfaces intermittent gotchas instead of bailing on the first.
 
+## Quick start (macOS)
+
+You need Docker Desktop running. From the repo root:
+
+```bash
+# one-time setup
+pnpm install
+pnpm build                 # @libre/shared + the SDK must be built before the soaks resolve
+docker compose up -d       # regtest stack: bitcoind, electrs, lnd (+ lnd-payer), all on 127.0.0.1
+sleep 10                   # give lnd a moment to sync before the first run
+```
+
+Then run the two soaks most relevant to a "did a pending payment close my channel?" question:
+
+```bash
+# 1) Hard-kill the node MID-PAYMENT, then reload on the same storage — must NOT force-close.
+#    This is the single-node version of the browser-tab-killed-mid-boost scenario.
+pnpm --filter @libre/listener-wallet exec vitest run \
+  src/tests/integration/soak-hardkill-reload.test.ts
+
+# 2) The real NWC/Nostr flow (pay_keysend + make_invoice) with a restart each cycle —
+#    the closest reproduction of an NWC session under load.
+NWC_CYCLES=20 pnpm --filter @libre/listener-wallet exec vitest run \
+  src/tests/integration/soak-nwc-e2e.test.ts
+```
+
+**Green on both = the single-node path is safe under exactly that scenario** (which is the
+"pending shouldn't close a channel" concern). The other soaks below crank specific workloads
+(boost fan-out, streaming latency, storage-loss → VSS re-hydrate). When you're done:
+
+```bash
+docker compose down
+```
+
+> **What these soaks CANNOT catch:** they reload/hard-kill a single Node process on regtest — they
+> never background a real browser, freeze a page, or leave a half-open ("zombie") WebSocket. So they
+> validate the channel-state-safety core, but the iOS-specific bugs (background/resume peer
+> reconnect, storage eviction, the single-node lock under a frozen page) only reproduce on a real
+> device, not here.
+
 ## Prerequisites (once)
 
 ```bash

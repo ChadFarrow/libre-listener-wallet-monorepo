@@ -128,8 +128,17 @@ describe("storage contract: backup envelope is forward-restorable", () => {
 // produces an incomplete, unrestorable backup. network_graph/scorer are intentionally
 // NOT here — they're re-derivable (RGS re-sync) and bundling the ~20MB graph made
 // backups huge; older backups that contain them still restore (see the golden tests).
+// peer_addresses IS here (added 2026-07-11) so a restore auto-reconnects every channel
+// peer; it's additive + not fund-critical, and older backups without it still restore
+// (the frozen golden envelopes below have no peer_addresses and must keep decrypting).
 describe("storage contract: backup direct-key set", () => {
   it("includes the seed + every piece of irreplaceable channel state (and not the re-derivable graph/scorer)", () => {
-    expect([...BACKUP_DIRECT_KEYS]).toEqual(["ldk_seed", "channel_manager", "ldk_keys_index", "state_version"]);
+    expect([...BACKUP_DIRECT_KEYS]).toEqual([
+      "ldk_seed",
+      "channel_manager",
+      "ldk_keys_index",
+      "state_version",
+      "peer_addresses",
+    ]);
   });
 });

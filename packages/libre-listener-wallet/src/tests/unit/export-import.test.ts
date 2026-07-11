@@ -112,6 +112,7 @@ describe("export/import v2 (passphrase + seed)", () => {
   const passphrase = "a-strong-passphrase-123";
   const config = { network: "regtest" as const, esploraUrl };
 
+  const peerBook = JSON.stringify({ ["02" + "cd".repeat(32)]: { host: "lsp.example", port: 9735 } });
   function seeded(): Map<string, string> {
     const db = new Map<string, string>();
     db.set("ldk_seed", seedHex);
@@ -119,6 +120,7 @@ describe("export/import v2 (passphrase + seed)", () => {
     db.set("ldk_keys_index", JSON.stringify(["mon/abc"]));
     db.set("mon/abc", "0011");
     db.set("state_version", "5");
+    db.set("peer_addresses", peerBook); // channel-peer address book — restored so redial can reconnect
     return db;
   }
   const mk = (db: Map<string, string>) =>
@@ -133,6 +135,8 @@ describe("export/import v2 (passphrase + seed)", () => {
     expect(dbB.get("channel_manager")).toBe("cafebabe");
     expect(dbB.get("mon/abc")).toBe("0011");
     expect(dbB.get("state_version")).toBe("5");
+    // The peer address book rides along so a restore can auto-reconnect the channel peer.
+    expect(dbB.get("peer_addresses")).toBe(peerBook);
   });
 
   it("restores when importing with the seed", async () => {

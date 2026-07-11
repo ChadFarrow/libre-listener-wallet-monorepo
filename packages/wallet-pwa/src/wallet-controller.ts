@@ -447,9 +447,9 @@ export class WalletController {
       await this.applySweepAddress();
       await this.persistActiveNetwork(targetNetwork);
       void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
-      // A backup carries channel state but NOT the peer address book, so start()'s redial can't reach
-      // the channel peer — dial the saved/default peer (best-effort) so the channel can come online
-      // without a manual reconnect.
+      // Newer backups carry the peer address book, so start()'s redialChannelPeers() reconnects
+      // every channel peer on its own. This dial of the saved/default peer is a best-effort fallback
+      // for OLDER backups (made before peer_addresses was in the backup), whose book is empty.
       void this.connectSavedOrDefaultPeer(targetNetwork).catch((e) =>
         console.warn("[Peer] post-restore connect failed:", (e as Error)?.message || e),
       );

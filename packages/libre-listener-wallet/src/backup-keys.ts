@@ -10,9 +10,17 @@
 // absent and `start()` creates fresh ones (it already handles a first-ever start with no
 // graph). Backward-compatible: older backups that DO contain them still restore fine (the
 // entries are just written back). No migration needed because their absence isn't fund-loss.
+//
+// `peer_addresses` (pubkey→{host,port}) is included — NOT for fund-safety (its absence never
+// loses funds) but so a restore onto a fresh device can auto-reconnect EVERY channel peer.
+// LDK stores no peer addresses, so start()'s `redialChannelPeers()` has nothing to dial after
+// a restore unless the address book comes along; without it a channel opened to a non-default
+// peer (e.g. an LSP) stays offline until a manual reconnect. It's tiny (a few entries) and
+// additive: older backups simply lack the key (restore falls back to the configured peer).
 export const BACKUP_DIRECT_KEYS = [
   "ldk_seed",
   "channel_manager",
   "ldk_keys_index",
   "state_version",
+  "peer_addresses",
 ] as const;

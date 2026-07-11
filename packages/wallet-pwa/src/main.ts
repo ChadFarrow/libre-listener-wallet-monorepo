@@ -10,6 +10,7 @@ import { downloadBackupName } from "./core/backup-name";
 import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync } from "./core/backup-policy";
 import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail } from "./drive-integration";
 import { shouldArmGestureReconnect } from "./core/drive-ui";
+import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { initScreens } from "./screens";
 
 // Demo mode (?demo): a fake in-memory controller — no real node, storage, or network — so the
@@ -30,6 +31,21 @@ if (isDemoMode()) {
   const exitBtn = document.getElementById("d-exit-demo");
   exitBtn?.classList.remove("hidden");
   exitBtn?.addEventListener("click", () => exitDemo());
+}
+
+// ---- Foreground-resume peer refresh (iOS zombie-socket fix) ----
+// iOS freezes a backgrounded PWA and can kill the bridge socket without an onclose, leaving a
+// half-open "zombie" connection: on return the wallet looks connected (balance/pill fine) but a
+// send stalls for ~10-20s until LDK's ping-timeout heals it. On becoming visible we proactively
+// drop + redial peers to collapse that window, and refresh the UI. Skipped in demo (no real peers).
+if (!isDemoMode()) {
+  document.addEventListener("visibilitychange", () => {
+    if (!shouldRefreshOnVisible(document.visibilityState, controller.isRunning())) return;
+    void controller
+      .refreshPeerConnections()
+      .catch((e) => console.warn("[Resume] peer refresh failed:", (e as Error)?.message || e));
+    emitControllerEvent("state-changed");
+  });
 }
 
 // ---- local auto-backup file (developer-settings toggle libre_auto_download) ----

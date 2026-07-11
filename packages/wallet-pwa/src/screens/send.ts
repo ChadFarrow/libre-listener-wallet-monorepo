@@ -1,5 +1,6 @@
 import type { AppContext } from "../core/app-context";
 import { classifySendInput } from "../core/send-input";
+import { isDemoMode } from "../core/demo-mode";
 import { guardedClick } from "../core/ui-helpers";
 import { registerScreen } from "../ui/nav";
 import { $, show, setMsg, fmtSats } from "./util";
@@ -18,6 +19,12 @@ export function initSendScreen(ctx: AppContext): void {
   const amountRow = $("send-amount-row");
 
   function syncInputKind(): void {
+    // Demo accepts anything — no real invoice/address required; the amount field always shows.
+    if (isDemoMode()) {
+      show(amountRow, true);
+      setMsg("send-msg", "");
+      return;
+    }
     const kind = classifySendInput(input.value).kind;
     // A Lightning Address needs an amount; a BOLT11 invoice carries its own.
     show(amountRow, kind === "lnaddress");
@@ -30,6 +37,19 @@ export function initSendScreen(ctx: AppContext): void {
   input.addEventListener("input", syncInputKind);
 
   guardedClick($<HTMLButtonElement>("send-pay"), async () => {
+    if (isDemoMode()) {
+      const raw = input.value.trim();
+      if (!raw) {
+        setMsg("send-msg", "Type anything — demo payments always go through.", "err");
+        return;
+      }
+      const amt = parseInt($<HTMLInputElement>("send-amount").value.replace(/\D/g, "") || "0", 10) || 100;
+      setMsg("send-msg", "Sending…");
+      const res = await controller.payLightning(raw, { amountSats: amt });
+      setMsg("send-msg", `Paid ${fmtSats(res.amountSats)} sats ✓ (demo)`, "ok");
+      input.value = "";
+      return;
+    }
     const classified = classifySendInput(input.value);
     if (classified.kind === "invalid") {
       setMsg("send-msg", "Enter a BOLT11 invoice (lnbc…) or Lightning Address (name@domain).", "err");

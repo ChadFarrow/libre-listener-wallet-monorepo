@@ -1,5 +1,6 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
+import { isDemoMode } from "../core/demo-mode";
 import { parsePeerString } from "../core/wallet-config";
 import { guardedClick } from "../core/ui-helpers";
 import { registerScreen, currentScreen, showScreen, goBack } from "../ui/nav";
@@ -59,8 +60,14 @@ export function initPeersScreen(ctx: AppContext): void {
     try {
       peer = parsePeerString($<HTMLTextAreaElement>("peer-conn").value.trim());
     } catch (e) {
-      setMsg("peer-msg", (e as Error).message, "err");
-      return;
+      if (isDemoMode()) {
+        // Demo requires no real info: any input becomes a fake peer.
+        const raw = $<HTMLTextAreaElement>("peer-conn").value.trim();
+        peer = { pubkey: "03" + "ab".repeat(32), host: raw || "demo.peer", port: 9735 };
+      } else {
+        setMsg("peer-msg", (e as Error).message, "err");
+        return;
+      }
     }
     setMsg("peer-msg", "Connecting…");
     try {

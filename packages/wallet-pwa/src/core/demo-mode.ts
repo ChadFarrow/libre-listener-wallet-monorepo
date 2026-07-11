@@ -31,6 +31,29 @@ export function exitDemo(): void {
   location.href = location.pathname; // strip ?demo and reboot into the real app
 }
 
+// Point the live manifest <link> at the demo manifest so an "Add to Home Screen" from the demo
+// captures its start_url (./?demo). iOS launches an installed PWA at the manifest's start_url, and
+// the real manifest's "." strips the ?demo query — so without this a home-screen install boots as
+// the REAL app (real Google sign-in in onboarding). The real app never runs this, so its manifest
+// is untouched. Pure resolver split out for tests.
+const DEMO_MANIFEST = "manifest-demo.webmanifest";
+
+export function resolveManifestHref(currentHref: string | null | undefined, demoManifest = DEMO_MANIFEST): string {
+  // Preserve the existing href's directory (Vite base) and swap only the filename.
+  const base = (currentHref || "manifest.webmanifest").replace(/[^/]*$/, "");
+  return `${base}${demoManifest}`;
+}
+
+export function applyDemoManifest(): void {
+  try {
+    const link = document.querySelector('link[rel="manifest"]') as HTMLLinkElement | null;
+    if (!link) return;
+    link.href = resolveManifestHref(link.getAttribute("href"));
+  } catch {
+    /* no DOM / no manifest link — demo still works, just can't fix the install launch URL */
+  }
+}
+
 // In-memory stand-ins for the app-layer markers the onboarding gate + status pill read from
 // localStorage in the real app (getSeedBackedUp / driveConfigured).
 export const demoState = {

@@ -42,6 +42,7 @@ export function initOnboarding(ctx: AppContext): void {
         // While stopped we can't count channels; existing channel state means this wallet
         // completed onboarding before — the status pill owns any post-onboarding gaps.
         channels: s.running ? (s.channels ?? 0) : s.hasChannelState ? 1 : 0,
+        everHadChannel: (s.closes?.count ?? 0) > 0 || s.hasChannelState,
       });
       if (step === "done") {
         done = true;
@@ -255,7 +256,9 @@ export function initOnboarding(ctx: AppContext): void {
     );
   }
 
-  onControllerEvent(() => void evaluate());
+  onControllerEvent(() => {
+    if (!done) void evaluate();
+  });
   // Poll while incomplete: leaving a sub-screen (restore, get-channel) emits no wallet event,
   // and the gate must re-assert itself on home. Stops permanently once done.
   pollTimer = setInterval(() => {

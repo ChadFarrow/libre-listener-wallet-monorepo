@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { initHome } from "./home";
+import { initScreens } from "./index";
+import { showScreen } from "../ui/nav";
 import { emitControllerEvent } from "../core/events";
 import type { AppContext } from "../core/app-context";
 import type { WalletController } from "../wallet-controller";
@@ -10,8 +11,8 @@ import type { WalletController } from "../wallet-controller";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Load the REAL markup (not a hand-rolled stub) so the test exercises the actual ids/structure
-// home.ts wires against, rather than a fixture that could drift from index.html.
-function loadHomeMarkup(): void {
+// the screens wire against, rather than a fixture that could drift from index.html.
+function loadMarkup(): void {
   const html = fs.readFileSync(path.resolve(__dirname, "../../index.html"), "utf-8");
   const body = html.match(/<body>([\s\S]*)<\/body>/)?.[1] ?? "";
   document.body.innerHTML = body;
@@ -30,20 +31,20 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function hidden(id: string): boolean {
-  return document.getElementById(id)!.classList.contains("hidden");
+function isCurrent(screenId: string): boolean {
+  return document.getElementById(screenId)!.classList.contains("current");
 }
 
-describe("home view: start() channel-state regression", () => {
+describe("start() channel-state regression → forced restore screen", () => {
   beforeEach(() => {
-    loadHomeMarkup();
+    loadMarkup();
     localStorage.clear();
   });
 
-  it("shows the restore panel with a clear message, and the latch survives a later refresh()", async () => {
+  it("lands on the restore screen with a clear message, and the latch survives refreshes", async () => {
     const controller = {
-      // A funded wallet exists (this is the scenario a regression fires in) — a naive refresh()
-      // would hide setup-view/restore-panel for this state.
+      // A funded wallet exists (the scenario a regression fires in) — a naive refresh would
+      // route this state straight to home.
       getState: vi.fn().mockResolvedValue({
         network: "mainnet",
         running: false,
@@ -52,38 +53,31 @@ describe("home view: start() channel-state regression", () => {
         createdNew: false,
       }),
       startNode: vi.fn().mockRejectedValue(new RegressionError()),
+      getPayments: vi.fn().mockResolvedValue([]),
     } as unknown as WalletController;
-
     const ctx: AppContext = { controller, isRunning: () => false };
 
-    initHome(ctx);
+    initScreens(ctx);
     await flush();
     await flush();
 
-    // Sanity: before the failed start, the known-funded wallet state hides setup-view.
-    expect(hidden("setup-view")).toBe(true);
-
-    document.getElementById("start")!.dispatchEvent(new Event("click"));
+    showScreen("screen-node");
+    document.getElementById("node-toggle")!.dispatchEvent(new Event("click"));
     await flush();
     await flush();
 
     expect(controller.startNode).toHaveBeenCalled();
-    expect(hidden("setup-view")).toBe(false);
-    expect(hidden("restore-panel")).toBe(false);
-    expect(hidden("create-panel")).toBe(true);
-    expect(hidden("wallet-view")).toBe(true);
+    expect(isCurrent("screen-restore")).toBe(true);
     expect(document.getElementById("restore-msg")!.textContent).toMatch(/force-close/i);
-    // The generic error box must NOT show the raw SDK message for this case.
-    expect(document.getElementById("msg")!.textContent).not.toMatch(/CHANNEL_STATE_REGRESSION/);
+    // The raw SDK error code must never leak into user-facing text.
+    expect(document.getElementById("restore-msg")!.textContent).not.toMatch(/CHANNEL_STATE_REGRESSION/);
+    expect(document.getElementById("node-msg")!.textContent).not.toMatch(/CHANNEL_STATE_REGRESSION/);
 
-    // Prove the `needsRestore` latch: an independent refresh (the same path the controller's
-    // state-changed event drives in the real app) must not re-hide the restore panel just because
-    // getState() still reports a wallet exists.
+    // Prove the latch: a state-changed refresh (the same path the controller's events drive in
+    // the real app) must not route away from the restore screen just because a wallet exists.
     emitControllerEvent("state-changed");
     await flush();
     await flush();
-
-    expect(hidden("setup-view")).toBe(false);
-    expect(hidden("restore-panel")).toBe(false);
+    expect(isCurrent("screen-restore")).toBe(true);
   });
 });

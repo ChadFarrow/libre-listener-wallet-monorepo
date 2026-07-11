@@ -1,0 +1,87 @@
+import type { AppContext } from "../core/app-context";
+import { onControllerEvent } from "../core/events";
+import { isChannelStateRegressionError, isNodeAlreadyRunningError } from "@libre/shared";
+import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
+import { registerScreen, currentScreen } from "../ui/nav";
+import { forceRestoreScreen, clearRestoreLatch } from "./restore";
+import { $, setMsg, copyText } from "./util";
+
+export function initNodeScreen(ctx: AppContext): void {
+  const controller = ctx.controller;
+  let running = false;
+
+  async function refresh(): Promise<void> {
+    try {
+      const s = await controller.getState();
+      running = s.running;
+      const st = $("node-status");
+      st.textContent = s.running ? "Running" : "Stopped";
+      st.style.color = s.running ? "var(--accent)" : "var(--warn)";
+      $("node-network").textContent = s.network;
+      $("node-peers").textContent = s.peers != null ? `${s.peers} connected` : "—";
+      $("node-id").textContent = s.nodeId
+        ? s.nodeId.match(/.{1,8}/g)!.join(" ")
+        : "(start the node to load)";
+      $("node-toggle").textContent = s.running ? "Stop node" : "Start node";
+    } catch (e) {
+      setMsg("node-msg", (e as Error).message, "err");
+    }
+  }
+
+  async function startNode(): Promise<void> {
+    setMsg("node-msg", "Starting node…");
+    try {
+      await controller.startNode();
+      clearRestoreLatch();
+      setMsg("node-msg", "Node started", "ok");
+    } catch (e) {
+      if (isChannelStateRegressionError(e)) {
+        setMsg("node-msg", "");
+        forceRestoreScreen();
+        return;
+      }
+      if (isNodeAlreadyRunningError(e)) {
+        setMsg("node-msg", "This wallet is already running in another tab or window — close it and try again.", "err");
+        return;
+      }
+      setMsg("node-msg", (e as Error).message, "err");
+    }
+    void refresh();
+  }
+
+  $("node-toggle").addEventListener("click", () => {
+    if (running) {
+      void controller
+        .stopNode()
+        .catch((e) => setMsg("node-msg", (e as Error).message, "err"))
+        .then(() => refresh());
+    } else {
+      void startNode();
+    }
+  });
+
+  $("copy-node-id").addEventListener("click", () => {
+    void (async () => {
+      // Only report success for a REAL node id (running node) that actually copied — the display
+      // text can be a placeholder, and clipboard writes can reject.
+      const s = await controller.getState().catch(() => null);
+      if (!s?.nodeId) {
+        setMsg("node-msg", "Start the node first — there's no Node ID to copy yet.", "err");
+        return;
+      }
+      if (await copyText(s.nodeId)) setMsg("node-msg", "Node ID copied", "ok");
+      else setMsg("node-msg", "Couldn't copy — select the Node ID and copy it manually.", "err");
+    })();
+  });
+
+  const autoStart = $<HTMLInputElement>("auto-start");
+  autoStart.checked = isAutoStartEnabled(localStorage.getItem(AUTO_START_KEY));
+  autoStart.addEventListener("change", () => {
+    localStorage.setItem(AUTO_START_KEY, autoStart.checked ? "1" : "0");
+  });
+
+  registerScreen("screen-node", { onShow: () => void refresh() });
+  onControllerEvent(() => {
+    if (currentScreen() === "screen-node") void refresh();
+  });
+}

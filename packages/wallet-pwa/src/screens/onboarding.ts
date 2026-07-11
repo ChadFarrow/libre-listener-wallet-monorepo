@@ -3,6 +3,7 @@ import { onControllerEvent } from "../core/events";
 import { currentOnboardingStep, type OnboardingStep } from "../core/onboarding-flow";
 import { getSeedBackedUp, setSeedBackedUp } from "../core/onboarding";
 import { driveConfigured, ensureDriveConnected, driveBackupNow } from "../drive-integration";
+import { isDriveForeignBackupError } from "../drive-backup";
 import { isDemoMode, demoState } from "../core/demo-mode";
 import { currentScreen, showScreen } from "../ui/nav";
 import { $, show, setMsg } from "./util";
@@ -216,15 +217,26 @@ export function initOnboarding(ctx: AppContext): void {
           try {
             await ensureDriveConnected();
             if (controller.isRunning()) {
-              void driveBackupNow(controller).catch((e) =>
-                console.warn("[DriveSync] initial backup failed:", (e as Error)?.message || e),
-              );
+              // Awaited (not fire-and-forget) so the iOS-eviction guard can steer to Restore: if
+              // this Google account already holds a backup for a DIFFERENT wallet (the one this
+              // device had before iOS evicted its storage), driveBackupNow throws instead of
+              // overwriting it — and we send the user to restore that wallet rather than the fresh
+              // seed they just created.
+              await driveBackupNow(controller);
             }
             setMsg("ob-msg", "Cloud backup on ✓", "ok");
+            await evaluate();
           } catch (e) {
+            if (isDriveForeignBackupError(e)) {
+              setMsg("ob-msg", (e as Error).message, "err");
+              hideOverlay();
+              renderedStep = "";
+              showScreen("screen-restore");
+              return;
+            }
             setMsg("ob-msg", `Couldn't connect Google Drive: ${(e as Error).message}`, "err");
+            await evaluate();
           }
-          await evaluate();
         }),
       );
       return;

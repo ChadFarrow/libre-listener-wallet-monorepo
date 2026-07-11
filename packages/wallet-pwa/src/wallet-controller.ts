@@ -465,6 +465,23 @@ export class WalletController {
     return this.wallet!.exportState();
   }
 
+  // Fund-safety (iOS-eviction guard): does this encrypted backup envelope belong to THIS wallet —
+  // i.e. does it decrypt with our current seed? Used to REFUSE overwriting a Google Drive backup
+  // that belongs to a DIFFERENT wallet (after iOS evicts local storage the user can create a fresh
+  // seed, and an auto-sync would otherwise clobber the old funded wallet's only cloud copy). Uses
+  // the live wallet's verifyBackup (decrypt-only, no writes); returns false if it can't decrypt
+  // with our seed, or if we have no running wallet to check against.
+  async backupIsOurs(envelope: string): Promise<boolean> {
+    if (!this.wallet) return false;
+    try {
+      const { seedHex } = await this.getSeed();
+      const v = await this.wallet.verifyBackup(envelope, seedHex);
+      return v.ok === true;
+    } catch {
+      return false;
+    }
+  }
+
   // ---- Force-close recovery: on-chain sweep address ----
 
   async getSweepAddress(): Promise<{ address: string }> {

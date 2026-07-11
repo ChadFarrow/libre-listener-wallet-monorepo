@@ -10,6 +10,7 @@ import {
   listBackupNetworks,
   pickRestoreNetwork,
   deleteAllBackups,
+  DriveForeignBackupError,
 } from "./drive-backup";
 import type { WalletController } from "./wallet-controller";
 import { isDemoMode } from "./core/demo-mode";
@@ -60,12 +61,30 @@ export async function driveDeleteBackups(): Promise<string[]> {
   return deleteAllBackups();
 }
 
+// In-memory "this network's Drive backup is confirmed ours (this seed)" cache, so the ownership
+// check below (a Drive download + decrypt) runs once per wallet per session instead of on every
+// 5s-debounced auto-sync. Keyed by seed so a restore to a different wallet re-checks. Never
+// persisted or logged.
+const confirmedOwnBackup = new Map<string /*network*/, string /*seedHex*/>();
+
 export async function driveBackupNow(controller: WalletController): Promise<{ network: string }> {
   await ensureDriveConnected();
   const envelope = await controller.exportBackup();
   const { network } = await controller.getState();
-  await uploadBackup(envelope, network || "mainnet");
-  return { network: network || "mainnet" };
+  const net = network || "mainnet";
+  // FUND-SAFETY (iOS-eviction guard): never PATCH-overwrite a Drive backup that belongs to a
+  // DIFFERENT wallet. If Drive already holds a backup for this network that does NOT decrypt with
+  // our current seed, refuse and let the caller offer Restore instead of destroying it.
+  const { seedHex } = await controller.getSeed();
+  if (confirmedOwnBackup.get(net) !== seedHex) {
+    const existing = await downloadBackup(net);
+    if (existing && !(await controller.backupIsOurs(existing))) {
+      throw new DriveForeignBackupError(net);
+    }
+    confirmedOwnBackup.set(net, seedHex);
+  }
+  await uploadBackup(envelope, net);
+  return { network: net };
 }
 
 // Fetch the backup from Drive (auto-detecting the network) and restore it with the given secret.

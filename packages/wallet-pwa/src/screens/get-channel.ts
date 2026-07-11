@@ -109,7 +109,16 @@ export function initGetChannelScreen(ctx: AppContext): void {
   });
 
   registerScreen("screen-get-channel", {
-    onShow: () => void placeOrder(),
+    onShow: () => {
+      void (async () => {
+        // Honest framing for a returning user: after a close this is a REPLACEMENT channel.
+        try {
+          const s = await controller.getState();
+          $("gc-title").textContent = (s.closes?.count ?? 0) > 0 ? "Get a new channel" : "Get a channel";
+        } catch { /* keep the static title */ }
+        await placeOrder();
+      })();
+    },
     onHide: () => stopPolling(),
   });
 }

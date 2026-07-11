@@ -11,6 +11,8 @@ import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync } from "./core/back
 import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail } from "./drive-integration";
 import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
+import { createKeepAlive } from "./core/keep-alive-audio";
+import { shouldKeepAlive, keepAliveEnabled } from "./core/keep-alive";
 import { initScreens } from "./screens";
 
 // Demo mode (?demo): a fake in-memory controller — no real node, storage, or network — so the
@@ -21,7 +23,19 @@ enterDemoFromUrl(location.search, location.hash);
 const controller = isDemoMode()
   ? (new DemoController((event, payload) => emitControllerEvent(event, payload)) as unknown as WalletController)
   : new WalletController((event, payload) => emitControllerEvent(event, payload));
-const ctx: AppContext = { controller, isRunning: () => controller.isRunning() };
+const keepAlive = createKeepAlive();
+const ctx: AppContext = { controller, isRunning: () => controller.isRunning(), keepAlive };
+
+// ---- Background keep-alive (silent audio) ----
+// When enabled (developer toggle, default off) keep the node's page alive in the background so NWC
+// boosts settle in real time. Driven off run-state: start while running+enabled, stop otherwise.
+// Skipped in demo (no real node). play() may need a gesture — the manager arms a first-gesture retry.
+if (!isDemoMode()) {
+  onControllerEvent(() => {
+    if (shouldKeepAlive({ enabled: keepAliveEnabled(), running: controller.isRunning(), demo: false })) keepAlive.start();
+    else keepAlive.stop();
+  });
+}
 
 if (isDemoMode()) {
   // Swap the manifest so an "Add to Home Screen" from here installs a demo PWA that relaunches

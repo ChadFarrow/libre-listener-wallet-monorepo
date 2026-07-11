@@ -46,7 +46,7 @@ describe("drawer → screen navigation", () => {
       getBalance: vi.fn().mockResolvedValue({ spendableSat: 0, receivableSat: 0 }),
       getChannels: vi.fn().mockResolvedValue([]),
     } as unknown as WalletController;
-    const ctx: AppContext = { controller, isRunning: () => true };
+    const ctx: AppContext = { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, isActive: () => false } };
 
     initScreens(ctx);
     await flush();

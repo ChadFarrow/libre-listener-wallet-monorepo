@@ -1,4 +1,5 @@
 import type { WalletController } from "../wallet-controller";
+import type { KeepAlive } from "./keep-alive-audio";
 
 // Live accessors handed to each feature module's init() so handlers always see the
 // current controller / run state without a global reference. In the PWA the single
@@ -7,4 +8,6 @@ import type { WalletController } from "../wallet-controller";
 export interface AppContext {
   controller: WalletController;
   isRunning: () => boolean;
+  // Background keep-alive (silent audio) so the developer toggle can start it within a user gesture.
+  keepAlive: KeepAlive;
 }

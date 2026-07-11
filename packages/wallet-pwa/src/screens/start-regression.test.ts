@@ -55,7 +55,7 @@ describe("start() channel-state regression → forced restore screen", () => {
       startNode: vi.fn().mockRejectedValue(new RegressionError()),
       getPayments: vi.fn().mockResolvedValue([]),
     } as unknown as WalletController;
-    const ctx: AppContext = { controller, isRunning: () => false };
+    const ctx: AppContext = { controller, isRunning: () => false, keepAlive: { start() {}, stop() {}, isActive: () => false } };
 
     initScreens(ctx);
     await flush();

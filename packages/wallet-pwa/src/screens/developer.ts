@@ -2,6 +2,7 @@ import type { AppContext } from "../core/app-context";
 import { defaultBridgeUrl, defaultRapidGossipSyncUrl } from "../core/wallet-config";
 import { googleClientId, setGoogleClientId } from "../drive-integration";
 import { enablePush, disablePush, isPushEnabled, pushSupported } from "../web-push";
+import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
 import { registerScreen } from "../ui/nav";
 import { $, setMsg } from "./util";
 
@@ -83,5 +84,24 @@ export function initDeveloperScreen(ctx: AppContext): void {
     })();
   });
 
-  registerScreen("screen-dev", { onShow: () => void load() });
+  // ---- Background keep-alive (silent audio) ----
+  // The change event is a user gesture, so starting the audio here satisfies the autoplay policy.
+  $("keepalive-toggle").addEventListener("change", (e) => {
+    const on = (e.target as HTMLInputElement).checked;
+    setKeepAliveEnabled(on);
+    if (on && ctx.isRunning()) {
+      ctx.keepAlive.start();
+      setMsg("keepalive-msg", "Keeping the node alive in the background. Uses more battery; best-effort on iOS/Android.", "ok");
+    } else {
+      ctx.keepAlive.stop();
+      setMsg("keepalive-msg", on ? "On — starts when the node is running." : "Off.", on ? "ok" : "");
+    }
+  });
+
+  registerScreen("screen-dev", {
+    onShow: () => {
+      void load();
+      $<HTMLInputElement>("keepalive-toggle").checked = keepAliveEnabled();
+    },
+  });
 }

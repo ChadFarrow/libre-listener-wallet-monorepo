@@ -3,6 +3,7 @@ import { onControllerEvent } from "../core/events";
 import { statusPill, type StatusPillTarget } from "../core/status-pill";
 import { getSeedBackedUp } from "../core/onboarding";
 import { driveConfigured } from "../drive-integration";
+import { isDemoMode, demoState } from "../core/demo-mode";
 import { registerScreen, showScreen, currentScreen, openDrawer } from "../ui/nav";
 import { $, show, fmtSats } from "./util";
 
@@ -31,8 +32,8 @@ export function initHomeScreen(ctx: AppContext): void {
         startError: s.startError,
         channels: s.channels ?? 0,
         usableChannels: s.usableChannels ?? 0,
-        driveConfigured: driveConfigured(),
-        backedUp: getSeedBackedUp(s.network),
+        driveConfigured: isDemoMode() ? demoState.driveConfigured : driveConfigured(),
+        backedUp: isDemoMode() ? demoState.seedBackedUp : getSeedBackedUp(s.network),
       });
       const pillEl = $("status-pill");
       show(pillEl, !!pill);

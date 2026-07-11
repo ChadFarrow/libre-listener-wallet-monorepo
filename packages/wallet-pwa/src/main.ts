@@ -1,5 +1,7 @@
 import "./style.css";
 import { WalletController } from "./wallet-controller";
+import { DemoController } from "./core/demo-controller";
+import { enterDemoFromUrl, isDemoMode, exitDemo } from "./core/demo-mode";
 import type { AppContext } from "./core/app-context";
 import { emitControllerEvent, onControllerEvent } from "./core/events";
 import { AUTO_START_KEY } from "./core/auto-start";
@@ -10,9 +12,22 @@ import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, 
 import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { initScreens } from "./screens";
 
-// The single LDK node owner. Its emit callback fans out to any subscribed screen.
-const controller = new WalletController((event, payload) => emitControllerEvent(event, payload));
+// Demo mode (?demo): a fake in-memory controller — no real node, storage, or network — so the
+// UI can be exercised end-to-end with zero setup. The badge + drawer exit make it unmistakable.
+enterDemoFromUrl(location.search);
+
+// The single LDK node owner (or its demo stand-in). Its emit callback fans out to any screen.
+const controller = isDemoMode()
+  ? (new DemoController((event, payload) => emitControllerEvent(event, payload)) as unknown as WalletController)
+  : new WalletController((event, payload) => emitControllerEvent(event, payload));
 const ctx: AppContext = { controller, isRunning: () => controller.isRunning() };
+
+if (isDemoMode()) {
+  document.getElementById("demo-badge")?.classList.remove("hidden");
+  const exitBtn = document.getElementById("d-exit-demo");
+  exitBtn?.classList.remove("hidden");
+  exitBtn?.addEventListener("click", () => exitDemo());
+}
 
 // ---- local auto-backup file (developer-settings toggle libre_auto_download) ----
 // Desktop-only fallback: once Google Drive is configured it takes over entirely, and mobile

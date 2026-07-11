@@ -7,6 +7,7 @@ import { initRestoreScreen } from "./restore";
 import { initReceiveScreen } from "./receive";
 import { initGetChannelScreen } from "./get-channel";
 import { initChanSuccessScreen } from "./chan-success";
+import { initOnboarding } from "./onboarding";
 
 // Wire the whole screen system against the static index.html shell. Order matters only in
 // that initNav() must run first (it owns the stack + gesture/history wiring).
@@ -19,4 +20,5 @@ export function initScreens(ctx: AppContext): void {
   initReceiveScreen(ctx);
   initGetChannelScreen(ctx);
   initChanSuccessScreen();
+  initOnboarding(ctx);
 }

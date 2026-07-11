@@ -2,6 +2,7 @@ import type { AppContext } from "../core/app-context";
 import { formatOpeningFee } from "../core/lsps1-provider-ui";
 import { LSPS1_PROVIDERS, quickChannelProvider } from "../core/lsps1-mock-provider";
 import { driveConfigured } from "../drive-integration";
+import { isDemoMode, demoState } from "../core/demo-mode";
 import { lsps1OrderStatus, type Lsps1RestOrderResponse } from "@libre/shared";
 import { registerScreen, showScreen } from "../ui/nav";
 import { renderQr } from "../ui/qr";
@@ -57,7 +58,7 @@ export function initGetChannelScreen(ctx: AppContext): void {
     // MANDATORY cloud backup: never let funds land in a channel before there's an off-device
     // backup destination. Onboarding gates this too — this in-function re-check is the
     // belt-and-suspenders half of the double-gate.
-    if (!driveConfigured()) {
+    if (!(isDemoMode() ? demoState.driveConfigured : driveConfigured())) {
       setMsg(
         "quick-channel-msg",
         "Turn on cloud backup (Google Drive) first — a channel can't be recovered without a backup.",

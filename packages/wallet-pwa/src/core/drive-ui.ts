@@ -8,6 +8,22 @@ export function driveButtonView(connected: boolean): { label: string; className:
     : { label: "Connect Drive", className: "btn btn-secondary" };
 }
 
+// Which button is the PRIMARY (green) action on the Cloud-backup screen, and the connect button's
+// label. When already connected the primary action is "Back up now" — a big green "Reconnect" read
+// as "something's wrong" (it isn't; the token just refreshes), so the connect button drops to a
+// quiet secondary labelled "Switch Google account". When disconnected the connect button is the
+// primary: "Reconnect" if we remember the account (token dropped), else "Connect Drive". Pure so
+// the label/priority logic is unit-tested; the screen maps `primary` → btn-primary else btn-ghost.
+export function cloudBackupButtons(
+  connected: boolean,
+  hasRememberedAccount: boolean,
+): { connect: { label: string; primary: boolean }; backupNowPrimary: boolean } {
+  if (connected) {
+    return { connect: { label: "Switch Google account", primary: false }, backupNowPrimary: true };
+  }
+  return { connect: { label: hasRememberedAccount ? "Reconnect" : "Connect Drive", primary: true }, backupNowPrimary: false };
+}
+
 /**
  * Whether to retry a silent Drive reconnect on the user's first interaction. GIS's
  * OAuth token model needs a user gesture (a page-load attempt fails with

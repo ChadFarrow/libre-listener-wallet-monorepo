@@ -312,6 +312,15 @@ export function shouldZeroConfAccept(trusted: boolean, openerRequestsZeroConf: b
 // them on reload otherwise, stranding funded channels until a manual reconnect).
 export type PeerAddress = { host: string; port: number };
 
+// UI-facing view of force-close fund recovery (see getSweepStatus). Interfaces can't be
+// declared inside a class, so this lives at module scope.
+export interface SweepStatus {
+  needsAddress: boolean;
+  pendingCount: number;
+  pendingSat: number;
+  lastSweep?: { txid: string; sat: number; at: number };
+}
+
 // Storage key for the persisted peer address book. Non-critical cache (re-discoverable), so it's
 // deliberately NOT part of the backup key set — a restore simply relearns addresses on reconnect.
 const PEER_ADDRESS_BOOK_KEY = "peer_addresses";
@@ -324,6 +333,8 @@ const MONITOR_HIGHWATER_KEY = "monitor_update_highwater";
 // a JSON array of tx-hex, so a transient broadcast failure or a restart can't strand recoverable
 // funds — retried on every sync tick until the node accepts each one. See broadcastPendingSweeps.
 const SWEEP_PENDING_KEY = "sweep_pending_txs";
+
+export const SWEEP_LAST_KEY = "sweep_last"; // non-critical: last completed force-close sweep (display only)
 
 /** Safely parse the stored address-book JSON, dropping any malformed entries. Never throws. */
 export function parsePeerAddressBook(raw: string | null | undefined): Record<string, PeerAddress> {
@@ -422,6 +433,10 @@ export class LibreListenerWallet {
   // Whether we've already warned about claimable outputs with no sweep address — avoids
   // spamming the log every ~1s while the event replays. Reset when the destination changes.
   private sweepWarningShown = false;
+  // Observability for the UI (SweepStatus) — display state only, never gates sweeping.
+  private sweepNeedsAddress = false;
+  private pendingSweepSats: Map<string, number> = new Map(); // txHex → best-effort sat value
+  private lastSweep?: { txid: string; sat: number; at: number };
   private registryCache?: LspProvider[];
   private eventListeners: ((event: Event) => void)[] = [];
   // The SDK's own payment-log demux listener. Registered ONCE (a stop→start cycle must not
@@ -1804,10 +1819,26 @@ export class LibreListenerWallet {
     }
   }
 
+  /** UI-facing view of force-close fund recovery. Display only — never gates the sweep itself. */
+  getSweepStatus(): SweepStatus {
+    let pendingSat = 0;
+    for (const v of this.pendingSweepSats.values()) pendingSat += v;
+    return {
+      needsAddress: this.sweepNeedsAddress,
+      pendingCount: this.pendingSweeps.size,
+      pendingSat,
+      ...(this.lastSweep ? { lastSweep: this.lastSweep } : {}),
+    };
+  }
+
   /** Set the on-chain scriptPubKey to sweep force-closed funds to. Pass undefined to clear. */
   setSweepDestination(scriptPubKey?: Uint8Array): void {
     this.sweepDestinationScript = scriptPubKey && scriptPubKey.length > 0 ? scriptPubKey : undefined;
     this.sweepWarningShown = false; // a destination change is worth a fresh warning if still unset
+    if (this.sweepDestinationScript && this.sweepNeedsAddress) {
+      this.sweepNeedsAddress = false;
+      this.notifyStateChanged();
+    }
   }
 
   /**
@@ -1823,6 +1854,10 @@ export class LibreListenerWallet {
       if (!this.sweepWarningShown) {
         this.logger?.warn(`[Sweep] ${descriptors.length} claimable output(s) from a channel close — set a sweep address to recover them (will retry).`);
         this.sweepWarningShown = true; // suppress the ~1s replay spam until the destination changes
+      }
+      if (!this.sweepNeedsAddress) {
+        this.sweepNeedsAddress = true;
+        this.notifyStateChanged(); // surface "set a recovery address" in the UI
       }
       return false;
     }
@@ -1854,6 +1889,16 @@ export class LibreListenerWallet {
     // funds: the tx is retried on every sync tick until the node accepts it. The event is safely
     // consumed (return true) because the recovery guarantee now lives in the persisted queue.
     const key = bytesToHex(txBytes);
+    // Best-effort display value: sum the descriptors' output values (bigint sats).
+    let outSat = 0;
+    try {
+      for (const d of descriptors) {
+        const v = (d as any)?.output?.value;
+        if (typeof v === "bigint") outSat += Number(v);
+        else if (typeof v === "number") outSat += v;
+      }
+    } catch { /* display-only — never block the sweep */ }
+    this.pendingSweepSats.set(key, outSat);
     this.pendingSweeps.set(key, txBytes);
     void this.persistPendingSweeps();
     void this.broadcastPendingSweeps();
@@ -1873,12 +1918,22 @@ export class LibreListenerWallet {
   private async loadPendingSweeps(): Promise<void> {
     try {
       const raw = await this.storage.getItem(SWEEP_PENDING_KEY);
-      if (!raw) return;
-      const hexes = JSON.parse(raw) as unknown;
-      if (!Array.isArray(hexes)) return;
-      for (const h of hexes) {
-        if (typeof h === "string" && h.length > 0 && h.length % 2 === 0 && /^[0-9a-f]+$/i.test(h)) {
-          this.pendingSweeps.set(h, hexToBytes(h));
+      if (raw) {
+        const hexes = JSON.parse(raw) as unknown;
+        if (Array.isArray(hexes)) {
+          for (const h of hexes) {
+            if (typeof h === "string" && h.length > 0 && h.length % 2 === 0 && /^[0-9a-f]+$/i.test(h)) {
+              this.pendingSweeps.set(h, hexToBytes(h));
+            }
+          }
+        }
+      }
+      for (const k of this.pendingSweeps.keys()) if (!this.pendingSweepSats.has(k)) this.pendingSweepSats.set(k, 0);
+      const lastRaw = await this.storage.getItem(SWEEP_LAST_KEY);
+      if (lastRaw) {
+        const parsed = JSON.parse(lastRaw) as { txid?: unknown; sat?: unknown; at?: unknown };
+        if (typeof parsed.txid === "string" && typeof parsed.sat === "number" && typeof parsed.at === "number") {
+          this.lastSweep = { txid: parsed.txid, sat: parsed.sat, at: parsed.at };
         }
       }
     } catch (e) {
@@ -1898,6 +1953,17 @@ export class LibreListenerWallet {
         await this.syncClient.broadcastTransaction(txBytes);
         this.pendingSweeps.delete(key);
         await this.persistPendingSweeps();
+        const sat = this.pendingSweepSats.get(key) ?? 0;
+        this.pendingSweepSats.delete(key);
+        try {
+          const h1 = await crypto.subtle.digest("SHA-256", txBytes as unknown as ArrayBuffer);
+          const txid = bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", h1)).reverse());
+          this.lastSweep = { txid, sat, at: Date.now() };
+          await this.storage.setItem(SWEEP_LAST_KEY, JSON.stringify(this.lastSweep));
+        } catch (e) {
+          this.logger?.warn(`[Sweep] could not record last-sweep metadata: ${e instanceof Error ? e.message : e}`);
+        }
+        this.notifyStateChanged();
         this.logger?.info("[Sweep] Broadcast a force-close sweep to your address.");
       } catch (e) {
         this.logger?.warn(`[Sweep] Broadcast failed (will retry next sync): ${e instanceof Error ? e.message : e}`);

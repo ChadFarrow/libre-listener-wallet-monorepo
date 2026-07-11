@@ -462,6 +462,12 @@
             <button class="btn-ghost" id="push-disable">Disable</button>
             <p class="msg" id="push-msg"></p>
           </details>
+          <details class="adv">
+            <summary>Keep node running in background (experimental)</summary>
+            <p class="center-note">Plays a silent audio track so the OS keeps this wallet's node awake while the app is in the background — so boosts from other apps (NWC) can settle in real time instead of only when you reopen the wallet. Uses more battery, and it's best-effort: iOS and Android can still suspend it. On iOS, install to the Home Screen first; on Android, exempt this app from battery optimization.</p>
+            <label class="toggle-row"><input type="checkbox" id="keepalive-toggle" /> Keep the node alive in the background</label>
+            <p class="msg" id="keepalive-msg"></p>
+          </details>
         </div>
       </section>
 

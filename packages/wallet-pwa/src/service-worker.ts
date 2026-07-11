@@ -1,15 +1,7 @@
-import { LibreListenerWallet, IndexedDBStorageProvider } from "@libre/listener-wallet";
-import {
-  bridgeTargetUrl,
-  isChannelStateRegressionError,
-  isNodeAlreadyRunningError,
-  acquireWebNodeLock,
-  nodeLockName,
-} from "@libre/shared";
-import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
-import { resolveActiveNetwork, resolvePushConfig } from "./core/sw-config";
+// NOTE: the service worker no longer bundles the Lightning SDK. Offline wake is notification-only
+// (see handlePushEvent) — it never boots a node — so the whole LDK/config/lock surface is gone from
+// this bundle, which also removes the "SW must bundle every dependency" hazard and shrinks it.
 import { cleanRedirect } from "./core/sw-redirect";
-import { offlineWakeNotification, type OfflineWakeOutcome } from "./core/offline-wake-notify";
 
 declare const self: any;
 
@@ -112,168 +104,30 @@ self.addEventListener("push", (event: any) => {
   );
 });
 
-async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string; eventId: string }) {
-  // 1. Check if there are any active client windows open
+async function handlePushEvent(_payload: { walletPubkey: string; relayUrl: string; eventId: string }) {
+  // NOTIFICATION-ONLY WAKE. We deliberately DO NOT boot a Lightning node in the service worker.
+  //
+  // The old path booted a second LDK node here to pay silently in the background. On iOS the SW
+  // gets only a few seconds and is killed mid-operation — which could leave channel state behind
+  // what the peer saw, and on the next reconnect the peer force-closes the channel (this cost a
+  // real channel on mainnet). The "reliability" it bought was marginal anyway: iOS rarely gives a
+  // background node enough time to route + settle a payment.
+  //
+  // Instead we just nudge the user to OPEN the app, where the stable foreground node connects to
+  // the relay and completes the still-pending request (NWC requests are valid for 300s). Opening
+  // the app is the safe, node-in-foreground path the user already relies on. iOS also REQUIRES a
+  // visible notification for every push, so a single notification here also keeps the subscription
+  // alive. If a window is already open, the foreground node is handling it live — say nothing.
   const clientsList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   if (clientsList.length > 0) {
-    console.log("[SW] Active PWA window detected. Skipping offline background processing.");
+    console.log("[SW] Active PWA window — the foreground node handles the request. No notification.");
     return;
   }
 
-  console.log("[SW] Offline state. Booting LDK Node in background Service Worker...");
-
-  // 2. Fetch configurations from storage — read the active network from the meta DB
-  // so we open the correct network-scoped DB (e.g. libre-wallet-mainnet). Default to
-  // mainnet (matching the controller) so a default-config install doesn't open the
-  // wrong empty DB.
-  const metaStore = new IndexedDBStorageProvider(META_DB_NAME);
-  const activeNetwork = resolveActiveNetwork(await metaStore.getItem(ACTIVE_NETWORK_KEY));
-  const storage = new IndexedDBStorageProvider(dbNameForNetwork(activeNetwork));
-
-  // Read config the main app persisted (the SW has no DOM), layered over the network's
-  // public defaults — so a wallet created on defaults (which only resolves esplora/bridge
-  // in-memory) still boots here instead of silently aborting.
-  const config = resolvePushConfig(await storage.getItem("ldk_config"), activeNetwork);
-  if (!config.esploraUrl) {
-    console.error("[SW] Cannot resolve an esplora endpoint for the offline node — showing a tap-to-open notification.");
-    await self.registration.showNotification("Libre Listener Wallet", {
-      body: "Pending offline NWC payment request. Tap to open and authorize.",
-      tag: "nwc-payment-pending",
-      data: { url: self.registration.scope },
-    });
-    return;
-  }
-
-  // Create a minimal WebSocket connection provider that uses browser WebSockets inside SW
-  const socketProvider = {
-    connect: async (host: string, port: number) => {
-      const wsUrl = config.bridgeUrl;
-      if (!wsUrl) {
-        throw new Error("[SW] No bridgeUrl in ldk_config — cannot connect to peer on push.");
-      }
-      console.log(`[SW] SW Connecting WebSocket bridge to ${wsUrl}...`);
-      const socket = new WebSocket(bridgeTargetUrl(wsUrl, host, port));
-      socket.binaryType = "arraybuffer";
-
-      const conn = {
-        send: (data: Uint8Array) => {
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(data);
-          }
-        },
-        close: () => {
-          socket.close();
-        },
-        onmessage: undefined as any,
-        onerror: undefined as any,
-        onclose: undefined as any,
-      };
-
-      socket.onmessage = (event) => {
-        conn.onmessage?.(new Uint8Array(event.data));
-      };
-
-      socket.onerror = (err) => {
-        conn.onerror?.(new Error("WebSocket error"));
-      };
-
-      socket.onclose = () => {
-        conn.onclose?.();
-      };
-
-      return new Promise<any>((resolve, reject) => {
-        socket.onopen = () => {
-          console.log("[SW] SW WebSocket bridge connected!");
-          resolve(conn);
-        };
-        socket.onerror = () => {
-          reject(new Error("SW WebSocket failed"));
-        };
-      });
-    }
-  };
-
-  const wallet = new LibreListenerWallet({
-    config: {
-      network: config.network as "mainnet" | "testnet" | "regtest" | "signet",
-      esploraUrl: config.esploraUrl,
-    },
-    storage,
-    socketProvider,
-    wasmUrl: "./liblightningjs.wasm",
-    logger: {
-      info: (msg, ...args) => console.log("[SW LDK INFO]", msg, ...args),
-      warn: (msg, ...args) => console.warn("[SW LDK WARN]", msg, ...args),
-      error: (msg, ...args) => console.error("[SW LDK ERROR]", msg, ...args),
-    },
-    // Per-origin single-node lock: if the page's tab holds the node, the SW must not build a second
-    // node over the same storage — it should quietly skip offline processing instead.
-    acquireRunLock: () => acquireWebNodeLock(nodeLockName(dbNameForNetwork(activeNetwork))),
-  });
-
-  // Capture the actual outcome (settled vs failed) — not just "resolved" — so the notification we
-  // are REQUIRED to show (see below) is honest, and a route-not-found reads as failed, not sent.
-  // A holder object (not a bare `let`) so TS keeps the union type at the read site after the closure.
-  const outcomeBox: { result: { success: boolean; method: string; error?: string } | null } = { result: null };
-
-  const processPromise = new Promise<void>((resolve) => {
-    wallet.nwc.onRequestProcessed((res) => {
-      console.log("[SW] NWC Request processed event:", res);
-      if (res.eventId === payload.eventId) {
-        outcomeBox.result = { success: res.success, method: res.method, error: res.error };
-        resolve();
-      }
-    });
-  });
-
-  try {
-    await wallet.start();
-    console.log("[SW] Wallet started in background. Waiting for NWC payment to resolve...");
-
-    // Wait for resolution or timeout (10 seconds)
-    await Promise.race([
-      processPromise,
-      new Promise((resolve) => setTimeout(resolve, 10000))
-    ]);
-
-  } catch (err: any) {
-    if (isNodeAlreadyRunningError(err)) {
-      console.log("[SW] App is open (holds the node lock) — skipping offline processing.");
-      return; // page owns the node; do NOT show a fallback notification
-    }
-    console.error("[SW] Error during offline payment processing:", err.message || err);
-    if (isChannelStateRegressionError(err)) {
-      await self.registration.showNotification("Libre Listener Wallet", {
-        body: "This wallet's channel state is behind what it durably reached — open the app and restore from backup before starting the node.",
-        tag: "nwc-restore-needed",
-        data: {
-          url: self.registration.scope
-        }
-      });
-      return;
-    }
-  } finally {
-    console.log("[SW] Stopping background wallet node...");
-    try {
-      await wallet.stop();
-    } catch (e) {}
-  }
-
-  // 3. ALWAYS show exactly one notification. On iOS/WebKit a push handled with NO visible
-  // notification (and no visible window — we're in the offline branch) is a violation: a few of
-  // them and the browser REVOKES the push subscription, silently killing offline wake. So every
-  // outcome — settled, failed, or timed out — ends in a notification (offline-wake-notify.ts).
-  const res = outcomeBox.result;
-  const outcome: OfflineWakeOutcome = res
-    ? res.success
-      ? { kind: "settled", method: res.method }
-      : { kind: "failed", method: res.method, error: res.error }
-    : { kind: "timeout" };
-  const note = offlineWakeNotification(outcome);
-  console.log(`[SW] Offline wake outcome: ${outcome.kind}`);
-  await self.registration.showNotification(note.title, {
-    body: note.body,
-    tag: note.tag,
+  console.log("[SW] Offline push — showing tap-to-open notification (no background node).");
+  await self.registration.showNotification("Payment request", {
+    body: "A Lightning payment is waiting. Tap to open your wallet and complete it.",
+    tag: "nwc-payment-pending",
     data: { url: self.registration.scope },
   });
 }

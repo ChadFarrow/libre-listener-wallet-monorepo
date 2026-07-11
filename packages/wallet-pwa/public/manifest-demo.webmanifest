@@ -2,7 +2,7 @@
   "name": "Libre Wallet Demo",
   "short_name": "Libre Demo",
   "description": "A guided demo of the Libre Listener Wallet — no real funds, node, or Google sign-in.",
-  "start_url": "./?demo",
+  "start_url": "./?demo#demo",
   "scope": ".",
   "display": "standalone",
   "orientation": "portrait",

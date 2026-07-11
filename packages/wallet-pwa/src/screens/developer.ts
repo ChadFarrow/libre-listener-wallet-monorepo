@@ -103,7 +103,7 @@ export function initDeveloperScreen(ctx: AppContext): void {
   async function refreshDiagStats(): Promise<void> {
     try {
       const s = await diagStats();
-      $("diag-stats").textContent = `${s.count} entries · ~${Math.max(1, Math.round(s.bytes / 1024))} KB`;
+      $("diag-stats").textContent = s.count === 0 ? "0 entries" : `${s.count} entries · ~${Math.max(1, Math.round(s.bytes / 1024))} KB`;
     } catch {
       $("diag-stats").textContent = "";
     }
@@ -118,7 +118,8 @@ export function initDeveloperScreen(ctx: AppContext): void {
           return;
         }
         const { network } = await controller.getState();
-        const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+        const iso = new Date().toISOString();
+        const stamp = `${iso.slice(0, 10)}-${iso.slice(11, 13)}${iso.slice(14, 16)}`;
         const name = `libre-diag-${network || "mainnet"}-${stamp}.txt`;
         const file = new File([text], name, { type: "text/plain" });
         const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean };

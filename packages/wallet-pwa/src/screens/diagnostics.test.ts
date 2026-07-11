@@ -98,4 +98,34 @@ describe("diagnostics card", () => {
 
     expect(document.getElementById("diag-stats")!.textContent).toMatch(/0 entries/);
   });
+
+  it("export filename stamp is YYYY-MM-DD-HHmm (no dash inside the time)", async () => {
+    console.log("[DiagTest] filename check");
+    await diagFlushNow();
+
+    let capturedFilename = "";
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => "blob:diag"),
+      revokeObjectURL: vi.fn(),
+    });
+    // Mock anchor click to capture download attribute
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      capturedFilename = this.getAttribute("download") || "";
+    });
+
+    initScreens(makeCtx());
+    await flushDom();
+    showScreen("screen-dev");
+    await flushDom();
+
+    document.getElementById("diag-export")!.dispatchEvent(new Event("click"));
+    await flushDom();
+    await flushDom();
+
+    clickSpy.mockRestore();
+    vi.unstubAllGlobals();
+
+    expect(capturedFilename).toMatch(/^libre-diag-mainnet-\d{4}-\d{2}-\d{2}-\d{4}\.txt$/);
+  });
 });

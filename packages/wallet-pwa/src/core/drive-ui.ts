@@ -17,11 +17,16 @@ export function driveButtonView(connected: boolean): { label: string; className:
 export function cloudBackupButtons(
   connected: boolean,
   hasRememberedAccount: boolean,
-): { connect: { label: string; primary: boolean }; backupNowPrimary: boolean } {
+): { connect: { label: string; primary: boolean; show: boolean }; backupNowPrimary: boolean } {
   if (connected) {
-    return { connect: { label: "Switch Google account", primary: false }, backupNowPrimary: true };
+    // Already connected: the connect/"switch account" button is just clutter — hide it. "Back up
+    // now" is the primary action; the account is shown in the status card above.
+    return { connect: { label: "", primary: false, show: false }, backupNowPrimary: true };
   }
-  return { connect: { label: hasRememberedAccount ? "Reconnect" : "Connect Drive", primary: true }, backupNowPrimary: false };
+  return {
+    connect: { label: hasRememberedAccount ? "Reconnect" : "Connect Drive", primary: true, show: true },
+    backupNowPrimary: false,
+  };
 }
 
 // The little status chip next to "Cloud backup" in the drawer, so the connected/syncing state is
@@ -35,8 +40,10 @@ export function drawerBackupStatus(opts: {
 }): { label: string; cls: string } {
   if (opts.demo) return { label: opts.configured ? "Demo" : "", cls: "" };
   if (!opts.configured) return { label: "Off", cls: "warn" };
-  if (opts.connected && opts.running) return { label: "Syncing ✓", cls: "ok" };
-  return { label: "Connected", cls: "ok" };
+  if (opts.connected) return opts.running ? { label: "Syncing ✓", cls: "ok" } : { label: "Connected", cls: "ok" };
+  // Set up, but the in-memory token isn't live yet — match the Cloud-backup screen's "Reconnect
+  // needed" rather than claiming a green "Connected" the screen would contradict.
+  return { label: "Reconnect", cls: "warn" };
 }
 
 /**

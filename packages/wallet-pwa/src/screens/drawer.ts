@@ -1,7 +1,7 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
 import { confirmModal } from "../ui/confirm-modal";
-import { showScreen, closeDrawer } from "../ui/nav";
+import { showScreenFromDrawer } from "../ui/nav";
 import { $, setMsg } from "./util";
 
 // Drawer wiring: header status, per-item navigation, and the destructive delete-all flow.
@@ -28,8 +28,7 @@ export function initDrawer(ctx: AppContext): void {
 
   function navItem(itemId: string, screenId: string): void {
     $(itemId).addEventListener("click", () => {
-      closeDrawer();
-      showScreen(screenId);
+      showScreenFromDrawer(screenId);
     });
   }
 

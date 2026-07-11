@@ -178,6 +178,25 @@ async function findBackupFileId(network: string): Promise<string | null> {
   return data.files && data.files.length > 0 ? data.files[0].id : null;
 }
 
+// Thrown when a Drive upload would OVERWRITE a backup that belongs to a DIFFERENT wallet (a
+// different seed). This is the iOS-eviction fund-loss guard: after iOS evicts local storage the
+// user can land on "Create wallet", generate a fresh seed, and an auto-sync would otherwise
+// PATCH-overwrite the old funded wallet's only cloud copy (the filename is fixed per network).
+// The caller must NOT overwrite — the user should Restore the existing backup instead.
+export class DriveForeignBackupError extends Error {
+  readonly code = "DRIVE_FOREIGN_BACKUP";
+  constructor(readonly network: string) {
+    super(
+      `Google Drive already has a backup for a different ${network} wallet. Restore it instead of ` +
+        `creating a new wallet — otherwise you'd overwrite (and lose) that wallet's only cloud copy.`,
+    );
+    this.name = "DriveForeignBackupError";
+  }
+}
+export function isDriveForeignBackupError(e: unknown): boolean {
+  return (e as { code?: string })?.code === "DRIVE_FOREIGN_BACKUP";
+}
+
 export async function uploadBackup(contents: string, network: string): Promise<void> {
   const existingId = await findBackupFileId(network);
   if (existingId) {

@@ -3,6 +3,7 @@ import { defaultBridgeUrl, defaultRapidGossipSyncUrl } from "../core/wallet-conf
 import { googleClientId, setGoogleClientId } from "../drive-integration";
 import { enablePush, disablePush, isPushEnabled, pushSupported } from "../web-push";
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
+import { diagExportText, diagStats, diagClear } from "../core/diag-tap";
 import { registerScreen } from "../ui/nav";
 import { $, setMsg } from "./util";
 
@@ -98,10 +99,64 @@ export function initDeveloperScreen(ctx: AppContext): void {
     }
   });
 
+  // ---- Diagnostics (local rolling log; spec 2026-07-11-diag-log-design.md) ----
+  async function refreshDiagStats(): Promise<void> {
+    try {
+      const s = await diagStats();
+      $("diag-stats").textContent = `${s.count} entries · ~${Math.max(1, Math.round(s.bytes / 1024))} KB`;
+    } catch {
+      $("diag-stats").textContent = "";
+    }
+  }
+
+  $("diag-export").addEventListener("click", () => {
+    void (async () => {
+      try {
+        const text = await diagExportText();
+        if (!text) {
+          setMsg("diag-msg", "Nothing recorded yet.");
+          return;
+        }
+        const { network } = await controller.getState();
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+        const name = `libre-diag-${network || "mainnet"}-${stamp}.txt`;
+        const file = new File([text], name, { type: "text/plain" });
+        const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean };
+        if (nav.share && nav.canShare?.({ files: [file] })) {
+          await nav.share({ files: [file], title: name });
+          setMsg("diag-msg", "Shared.", "ok");
+        } else {
+          const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 2000);
+          setMsg("diag-msg", `Downloaded ${name}.`, "ok");
+        }
+      } catch (e) {
+        // iOS share sheet cancel throws AbortError — that's the user changing their mind, not an error.
+        if ((e as Error)?.name === "AbortError") return;
+        setMsg("diag-msg", (e as Error).message, "err");
+      }
+    })();
+  });
+
+  $("diag-clear").addEventListener("click", () => {
+    void (async () => {
+      await diagClear();
+      await refreshDiagStats();
+      setMsg("diag-msg", "Diagnostics cleared.", "ok");
+    })();
+  });
+
   registerScreen("screen-dev", {
     onShow: () => {
       void load();
       $<HTMLInputElement>("keepalive-toggle").checked = keepAliveEnabled();
+      void refreshDiagStats();
     },
   });
 }

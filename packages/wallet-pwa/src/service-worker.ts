@@ -9,6 +9,7 @@ import {
 import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/storage-namespace";
 import { resolveActiveNetwork, resolvePushConfig } from "./core/sw-config";
 import { cleanRedirect } from "./core/sw-redirect";
+import { offlineWakeNotification, type OfflineWakeOutcome } from "./core/offline-wake-notify";
 
 declare const self: any;
 
@@ -210,13 +211,16 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
     acquireRunLock: () => acquireWebNodeLock(nodeLockName(dbNameForNetwork(activeNetwork))),
   });
 
-  let processed = false;
+  // Capture the actual outcome (settled vs failed) — not just "resolved" — so the notification we
+  // are REQUIRED to show (see below) is honest, and a route-not-found reads as failed, not sent.
+  // A holder object (not a bare `let`) so TS keeps the union type at the read site after the closure.
+  const outcomeBox: { result: { success: boolean; method: string; error?: string } | null } = { result: null };
 
   const processPromise = new Promise<void>((resolve) => {
     wallet.nwc.onRequestProcessed((res) => {
       console.log("[SW] NWC Request processed event:", res);
       if (res.eventId === payload.eventId) {
-        processed = true;
+        outcomeBox.result = { success: res.success, method: res.method, error: res.error };
         resolve();
       }
     });
@@ -255,20 +259,23 @@ async function handlePushEvent(payload: { walletPubkey: string; relayUrl: string
     } catch (e) {}
   }
 
-  // 3. Fallback notification
-  if (!processed) {
-    console.log("[SW] Background payment execution timed out or failed. Displaying fallback push notification.");
-
-    await self.registration.showNotification("Libre Listener Wallet", {
-      body: "Pending offline NWC payment request. Tap to open and authorize.",
-      tag: "nwc-payment-pending",
-      data: {
-        url: self.registration.scope
-      }
-    });
-  } else {
-    console.log("[SW] Offline background payment successfully processed & settled!");
-  }
+  // 3. ALWAYS show exactly one notification. On iOS/WebKit a push handled with NO visible
+  // notification (and no visible window — we're in the offline branch) is a violation: a few of
+  // them and the browser REVOKES the push subscription, silently killing offline wake. So every
+  // outcome — settled, failed, or timed out — ends in a notification (offline-wake-notify.ts).
+  const res = outcomeBox.result;
+  const outcome: OfflineWakeOutcome = res
+    ? res.success
+      ? { kind: "settled", method: res.method }
+      : { kind: "failed", method: res.method, error: res.error }
+    : { kind: "timeout" };
+  const note = offlineWakeNotification(outcome);
+  console.log(`[SW] Offline wake outcome: ${outcome.kind}`);
+  await self.registration.showNotification(note.title, {
+    body: note.body,
+    tag: note.tag,
+    data: { url: self.registration.scope },
+  });
 }
 
 self.addEventListener("notificationclick", (event: any) => {

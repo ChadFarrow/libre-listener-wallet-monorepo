@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { driveButtonView, cloudBackupButtons, shouldArmGestureReconnect, backupMsgOnStateChange, NODE_STOPPED_BACKUP_MSG } from "./drive-ui";
+import { driveButtonView, cloudBackupButtons, drawerBackupStatus, shouldArmGestureReconnect, backupMsgOnStateChange, NODE_STOPPED_BACKUP_MSG } from "./drive-ui";
 
 describe("driveButtonView", () => {
   it("shows a success-styled 'Connected' button when connected", () => {
@@ -37,6 +37,22 @@ describe("cloudBackupButtons", () => {
     expect(v.connect.primary).toBe(true);
     expect(v.connect.label).toBe("Connect Drive");
     expect(v.backupNowPrimary).toBe(false);
+  });
+});
+
+describe("drawerBackupStatus", () => {
+  it("shows 'Syncing ✓' when connected with the node running", () => {
+    expect(drawerBackupStatus({ demo: false, configured: true, connected: true, running: true })).toEqual({ label: "Syncing ✓", cls: "ok" });
+  });
+  it("shows 'Connected' when set up but the node is stopped (or token not live yet)", () => {
+    expect(drawerBackupStatus({ demo: false, configured: true, connected: true, running: false })).toEqual({ label: "Connected", cls: "ok" });
+    expect(drawerBackupStatus({ demo: false, configured: true, connected: false, running: true })).toEqual({ label: "Connected", cls: "ok" });
+  });
+  it("shows 'Off' when Drive isn't set up", () => {
+    expect(drawerBackupStatus({ demo: false, configured: false, connected: false, running: true })).toEqual({ label: "Off", cls: "warn" });
+  });
+  it("shows a demo marker in demo, never a real status", () => {
+    expect(drawerBackupStatus({ demo: true, configured: true, connected: false, running: true })).toEqual({ label: "Demo", cls: "" });
   });
 });
 

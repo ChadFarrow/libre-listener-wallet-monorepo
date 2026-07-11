@@ -1,6 +1,7 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
 import { statusPill, type StatusPillTarget } from "../core/status-pill";
+import { balanceDisplay } from "../core/balance-display";
 import { getSeedBackedUp } from "../core/onboarding";
 import { driveConfigured } from "../drive-integration";
 import { isDemoMode, demoState } from "../core/demo-mode";
@@ -20,17 +21,27 @@ const PILL_SCREEN: Record<StatusPillTarget, string | "drawer"> = {
 export function initHomeScreen(ctx: AppContext): void {
   const controller = ctx.controller;
   let pillTarget: StatusPillTarget | null = null;
+  // Last confirmed spendable, held across a background→resume so the balance doesn't flash 0 while
+  // the peer reconnects (see core/balance-display.ts). Survives backgrounding as a closure var.
+  let lastShownSats: number | null = null;
 
   async function refresh(): Promise<void> {
     try {
       const s = await controller.getState();
-      $("balance-sats").textContent = s.balance ? fmtSats(s.balance.spendableSat) : "—";
+      const bal = balanceDisplay({
+        balance: s.balance,
+        channels: s.channels ?? 0,
+        usableChannels: s.usableChannels ?? 0,
+        lastShownSats,
+      });
+      if (bal.sats != null && !bal.stale) lastShownSats = bal.sats; // remember only fresh readings
+      $("balance-sats").textContent = bal.sats != null ? fmtSats(bal.sats) : "—";
       // Fiat line: best-effort, hidden whenever no rate is available (offline, API down).
       const fiatEl = $("balance-fiat");
-      if (s.balance) {
+      if (bal.sats != null) {
         const rate = await getUsdRate();
         show(fiatEl, rate != null);
-        if (rate != null) fiatEl.textContent = `$${satsToUsd(s.balance.spendableSat, rate).toFixed(2)}`;
+        if (rate != null) fiatEl.textContent = `$${satsToUsd(bal.sats, rate).toFixed(2)}`;
       } else {
         show(fiatEl, false);
       }

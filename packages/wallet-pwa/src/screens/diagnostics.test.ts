@@ -75,10 +75,8 @@ describe("diagnostics card", () => {
     await flushDom();
 
     document.getElementById("diag-export")!.dispatchEvent(new Event("click"));
-    await flushDom();
-    await flushDom();
+    await vi.waitFor(() => expect(urls).toHaveLength(1));
 
-    expect(urls).toHaveLength(1);
     expect(await readBlobText(urls[0])).toContain("[DiagTest] marker line");
     clickSpy.mockRestore();
     vi.unstubAllGlobals();
@@ -93,10 +91,8 @@ describe("diagnostics card", () => {
     await flushDom();
 
     document.getElementById("diag-clear")!.dispatchEvent(new Event("click"));
-    await flushDom();
-    await flushDom();
 
-    expect(document.getElementById("diag-stats")!.textContent).toMatch(/0 entries/);
+    await vi.waitFor(() => expect(document.getElementById("diag-stats")!.textContent).toMatch(/0 entries/));
   });
 
   it("export filename stamp is YYYY-MM-DD-HHmm (no dash inside the time)", async () => {
@@ -120,8 +116,7 @@ describe("diagnostics card", () => {
     await flushDom();
 
     document.getElementById("diag-export")!.dispatchEvent(new Event("click"));
-    await flushDom();
-    await flushDom();
+    await vi.waitFor(() => expect(capturedFilename).not.toBe(""));
 
     clickSpy.mockRestore();
     vi.unstubAllGlobals();

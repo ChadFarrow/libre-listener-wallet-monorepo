@@ -9,7 +9,8 @@ import {
   type SecureStorageProvider,
   type ChannelInfo,
 } from "@libre/listener-wallet";
-import { zeroConfTrustedPubkeys, acquireWebNodeLock, nodeLockName } from "@libre/shared";
+import { zeroConfTrustedPubkeys, acquireWebNodeLock, nodeLockName, isNodeAlreadyRunningError } from "@libre/shared";
+import { nodeLockRetryPlan } from "./core/start-retry";
 import type { BudgetRenewal, NwcMethod, PaymentRecord } from "@libre/shared";
 import { classifySendInput } from "./core/send-input";
 import { sanitizeConnection, type NwcConnectionView } from "./core/nwc-connection-view";
@@ -224,6 +225,10 @@ export class WalletController {
   // Last node-start failure, captured at the source so the UI can show WHY the node isn't running —
   // otherwise an auto-start failure is a silent console log and looks like "it just didn't start".
   private lastStartError?: string;
+  // Auto-retry state for a NODE_ALREADY_RUNNING start (a stale single-node lock held by a
+  // bfcache-frozen sibling page — see core/start-retry.ts).
+  private nodeLockRetryTimer?: ReturnType<typeof setTimeout>;
+  private nodeLockRetryAttempt = 0;
 
   async startNode(): Promise<{ nodeId: string; network: string }> {
     if (this.startingPromise) return this.startingPromise;
@@ -231,16 +236,56 @@ export class WalletController {
     this.startingPromise = this.doStartNode()
       .then((node) => {
         this.lastStartError = undefined; // cleared on any successful start
+        this.clearNodeLockRetry();
         return node;
       })
       .catch((e) => {
         this.lastStartError = (e as Error)?.message || String(e);
+        // A stale single-node lock (frozen sibling page) frees within seconds once iOS reaps it —
+        // auto-retry a bounded number of times so it self-heals instead of latching a dead pill.
+        // Any other failure stops the retry chain (it's not a transient lock contention).
+        if (isNodeAlreadyRunningError(e)) this.scheduleNodeLockRetry();
+        else this.clearNodeLockRetry();
         throw e;
       })
       .finally(() => {
         this.startingPromise = undefined;
       });
     return this.startingPromise;
+  }
+
+  private clearNodeLockRetry(): void {
+    if (this.nodeLockRetryTimer) clearTimeout(this.nodeLockRetryTimer);
+    this.nodeLockRetryTimer = undefined;
+    this.nodeLockRetryAttempt = 0;
+  }
+
+  private scheduleNodeLockRetry(): void {
+    if (this.nodeLockRetryTimer) return; // one retry pending at a time
+    const plan = nodeLockRetryPlan(this.nodeLockRetryAttempt + 1);
+    if (!plan.retry) return; // exhausted — leave the pill; the user can still tap Start
+    this.nodeLockRetryAttempt += 1;
+    this.nodeLockRetryTimer = setTimeout(() => {
+      this.nodeLockRetryTimer = undefined;
+      if (this.isRunning()) {
+        this.nodeLockRetryAttempt = 0;
+        return;
+      }
+      // startNode's catch re-schedules if it's still a lock error; the UI refreshes on success.
+      void this.startNode()
+        .then(() => this.emit("state-changed"))
+        .catch(() => {});
+    }, plan.delayMs);
+  }
+
+  // If the node is stopped because another context held the single-node lock (a stale frozen
+  // sibling page), re-attempt now — e.g. on foreground-resume, when iOS has likely reaped it.
+  // No-op otherwise. Best-effort; never throws into the caller.
+  async retryStartIfLocked(): Promise<void> {
+    if (this.isRunning() || !isNodeAlreadyRunningError(this.lastStartError ?? "")) return;
+    await this.startNode()
+      .then(() => this.emit("state-changed"))
+      .catch(() => {});
   }
 
   // Start the node, enforcing the readiness guard: a seed with no channel state may start ONLY if
@@ -374,6 +419,7 @@ export class WalletController {
 
   async stopNode(): Promise<void> {
     if (this.startingPromise) await this.startingPromise.catch(() => {});
+    this.clearNodeLockRetry(); // an intentional stop cancels any pending lock-contention retry
     this.lastStartError = undefined; // intentional stop — not a start failure
     if (this.wallet) {
       await this.wallet.nwc.stop().catch((e) => console.warn("[NWC] stop failed:", e?.message || e));

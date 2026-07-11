@@ -85,6 +85,15 @@ import {
   Event_PaymentSent,
   Event_PaymentFailed,
   Event_SpendableOutputs,
+  Event_ChannelClosed,
+  ClosureReason,
+  ClosureReason_CounterpartyForceClosed,
+  ClosureReason_HolderForceClosed,
+  ClosureReason_LegacyCooperativeClosure,
+  ClosureReason_CounterpartyInitiatedCooperativeClosure,
+  ClosureReason_LocallyInitiatedCooperativeClosure,
+  ClosureReason_CommitmentTxConfirmed,
+  ClosureReason_OutdatedChannelManager,
   Result_ThirtyTwoBytesNoneZ_OK,
   PaymentParameters,
   RouteParameters,
@@ -114,6 +123,8 @@ import { CrossDeviceLockError } from "./cross-device-lease-error";
 import { reconnectDelayMs, shouldRedialNow } from "./peer-reconnect";
 import { normalizeBackupSecret } from "./seed-phrase";
 import { PaymentLogger, boostNoteFromCustomRecords, TX_KEY_PREFIX } from "./payment-log";
+import { CloseLogger, type ChannelCloseRecord } from "./close-log";
+import type { ChannelCloseReason } from "./close-log";
 import type { PaymentRecord } from "@libre/shared";
 import {
   parseHighwater,
@@ -130,6 +141,22 @@ import { PaymentTimeoutError } from "./payment-timeout-error";
 export { PaymentTimeoutError } from "./payment-timeout-error";
 
 export { IndexedDBStorageProvider };
+
+/** Map an LDK ClosureReason to a stable, minification-safe label. Exported for tests. */
+export function closureReasonLabel(reason: unknown): ChannelCloseReason {
+  if (reason instanceof ClosureReason_CounterpartyForceClosed) return "counterparty-force-closed";
+  if (reason instanceof ClosureReason_HolderForceClosed) return "we-force-closed";
+  if (reason instanceof ClosureReason_CommitmentTxConfirmed) return "force-closed";
+  if (
+    reason instanceof ClosureReason_LegacyCooperativeClosure ||
+    reason instanceof ClosureReason_CounterpartyInitiatedCooperativeClosure ||
+    reason instanceof ClosureReason_LocallyInitiatedCooperativeClosure
+  ) {
+    return "cooperative";
+  }
+  if (reason instanceof ClosureReason_OutdatedChannelManager) return "outdated-manager";
+  return "other";
+}
 
 export interface Logger {
   info(message: string, ...args: any[]): void;
@@ -403,6 +430,8 @@ export class LibreListenerWallet {
   public nwc: NwcManager;
   // Forward-only payment history (source of truth for getPayments + NWC list_transactions).
   private paymentLog: PaymentLogger;
+  // Forward-only channel-close history (source of truth for getChannelCloses).
+  private closeLog: CloseLogger;
 
   // In-flight payBolt11 settlement waiters, resolved/rejected by the SAME payment-log demux
   // listener (never a second LDK event listener — a duplicate would double-process every
@@ -438,6 +467,7 @@ export class LibreListenerWallet {
     this.acquireRunLock = options.acquireRunLock;
     this.nwc = new NwcManager(this, { logger: this.logger, storage: this.storage, network: this.config.network });
     this.paymentLog = new PaymentLogger({ storage: this.storage, logger: this.logger });
+    this.closeLog = new CloseLogger({ storage: this.storage, logger: this.logger });
   }
 
   async start(): Promise<void> {
@@ -962,6 +992,18 @@ export class LibreListenerWallet {
           this.broadcastNodeAnnouncement();
         } else if (event instanceof Event_PaymentClaimed) {
           this.logger?.info(`[LDK Event] Payment claimed!`);
+        } else if (event instanceof Event_ChannelClosed) {
+          const channelId = bytesToHex(event.channel_id.get_a());
+          const counterparty =
+            event.counterparty_node_id && event.counterparty_node_id.length === 33 && event.counterparty_node_id.some((b) => b !== 0)
+              ? bytesToHex(event.counterparty_node_id)
+              : undefined;
+          const capacitySat =
+            event.channel_capacity_sats instanceof Option_u64Z_Some ? Number(event.channel_capacity_sats.some) : undefined;
+          const reason = closureReasonLabel(event.reason);
+          this.logger?.info(`[LDK Event] ChannelClosed ${channelId} (${reason})`);
+          this.closeLog.record({ channelId, counterpartyNodeId: counterparty, capacitySat, reason, closedAt: Date.now() });
+          this.notifyStateChanged();
         } else if (event instanceof Event_SpendableOutputs) {
           // A channel close left on-chain outputs we can claim. Sweep them to the
           // configured address. Done synchronously here so the descriptors are used
@@ -1041,6 +1083,7 @@ export class LibreListenerWallet {
     // outcomes. Thin LDK `instanceof` demux here (minification-safe, per the event-dispatch
     // gotcha) → plain PaymentLogger calls; the testable logic lives in payment-log.ts.
     await this.paymentLog.load();
+    await this.closeLog.load();
     // Register the demux listener only once for this wallet instance — re-registering on every
     // start() would stack duplicates (N restarts → N redundant recordSent/recordReceived writes
     // per event). The closure only touches this.paymentLog (which persists across stop/start).
@@ -1698,6 +1741,12 @@ export class LibreListenerWallet {
   async getPayments(): Promise<PaymentRecord[]> {
     if (!this.paymentLog.isLoaded()) await this.paymentLog.load();
     return this.paymentLog.getRecords();
+  }
+
+  // Channel-close history, newest first. Works with the node stopped (lazily loads).
+  async getChannelCloses(): Promise<ChannelCloseRecord[]> {
+    if (!this.closeLog.isLoaded()) await this.closeLog.load();
+    return this.closeLog.getRecords();
   }
 
   // Register an outbound payment intent so it appears in history with its amount even
@@ -2536,6 +2585,8 @@ export { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
 export { EsploraSyncClient } from "./esplora-client";
 export type { WalletConfig, PaymentRecord } from "@libre/shared";
 export { PaymentLogger, boostNoteFromCustomRecords, TX_KEY_PREFIX } from "./payment-log";
+export { CloseLogger, CLOSE_KEY_PREFIX } from "./close-log";
+export type { ChannelCloseRecord, ChannelCloseReason } from "./close-log";
 export { LspsClient } from "./lsps-client";
 export { Lsps1RestClient, clampExpiryBlocks, isOrderComplete, isOrderFailed, orderInvoice } from "./lsps1-rest-client";
 export { VssClient, VssError, isVssConflict, isVssNotFound } from "./vss-client";

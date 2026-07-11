@@ -25,4 +25,8 @@ describe("LDK event dispatch is minification-safe", () => {
   it("dispatches inbound channel opens via instanceof", () => {
     expect(indexSrc).toMatch(/event\s+instanceof\s+Event_OpenChannelRequest/);
   });
+
+  it("dispatches channel closes via instanceof (close records depend on it)", () => {
+    expect(indexSrc).toMatch(/event\s+instanceof\s+Event_ChannelClosed/);
+  });
 });

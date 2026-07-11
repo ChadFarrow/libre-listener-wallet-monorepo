@@ -17,6 +17,12 @@
 // a restore unless the address book comes along; without it a channel opened to a non-default
 // peer (e.g. an LSP) stays offline until a manual reconnect. It's tiny (a few entries) and
 // additive: older backups simply lack the key (restore falls back to the configured peer).
+//
+// NOTE on payment history: the `tx_*` records (PaymentLogger, one per payment) are NOT listed
+// here — they're dynamic, unbounded keys, so like the channel-monitor keys they're ENUMERATED
+// and appended at export time (exportState, gated on storage.keys()). Additive + not fund-
+// critical: older backups lack them and restore fine; a restore onto a fresh device now carries
+// the transaction list so history follows the wallet instead of resetting.
 export const BACKUP_DIRECT_KEYS = [
   "ldk_seed",
   "channel_manager",

@@ -41,7 +41,7 @@ export class DemoController {
   private payments: PaymentRecord[] = [];
   private connections: NwcConnectionView[] = [
     {
-      name: "stablekraft",
+      name: "v4vmusic.com",
       clientPubkey: "ab".repeat(32),
       relayUrl: "wss://relay.getalby.com/v1",
       spendingLimitSats: 10_000,

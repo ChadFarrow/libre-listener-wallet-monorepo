@@ -1,7 +1,7 @@
 import "./style.css";
 import { WalletController } from "./wallet-controller";
 import { DemoController } from "./core/demo-controller";
-import { enterDemoFromUrl, isDemoMode, exitDemo } from "./core/demo-mode";
+import { enterDemoFromUrl, isDemoMode, exitDemo, applyDemoManifest } from "./core/demo-mode";
 import type { AppContext } from "./core/app-context";
 import { emitControllerEvent, onControllerEvent } from "./core/events";
 import { AUTO_START_KEY } from "./core/auto-start";
@@ -23,6 +23,9 @@ const controller = isDemoMode()
 const ctx: AppContext = { controller, isRunning: () => controller.isRunning() };
 
 if (isDemoMode()) {
+  // Swap the manifest so an "Add to Home Screen" from here installs a demo PWA that relaunches
+  // into ?demo (iOS drops the query otherwise → the install boots the real app + real sign-in).
+  applyDemoManifest();
   document.getElementById("demo-badge")?.classList.remove("hidden");
   const exitBtn = document.getElementById("d-exit-demo");
   exitBtn?.classList.remove("hidden");

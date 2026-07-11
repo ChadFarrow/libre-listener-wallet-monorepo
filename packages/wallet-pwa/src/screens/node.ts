@@ -19,9 +19,7 @@ export function initNodeScreen(ctx: AppContext): void {
       st.style.color = s.running ? "var(--accent)" : "var(--warn)";
       $("node-network").textContent = s.network;
       $("node-peers").textContent = s.peers != null ? `${s.peers} connected` : "—";
-      $("node-id").textContent = s.nodeId
-        ? s.nodeId.match(/.{1,8}/g)!.join(" ")
-        : "(start the node to load)";
+      $("node-id").textContent = s.nodeId || "(start the node to load)";
       $("node-toggle").textContent = s.running ? "Stop node" : "Start node";
     } catch (e) {
       setMsg("node-msg", (e as Error).message, "err");

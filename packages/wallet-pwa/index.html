@@ -76,6 +76,11 @@
           <div class="gap-10"></div>
           <button class="btn-ghost" id="copy-node-id">Copy node ID</button>
           <p class="center-note">Share your node ID so another node can open a channel to your wallet.</p>
+          <div class="field-label">Node name</div>
+          <input class="field" id="node-alias" autocomplete="off" maxlength="32" placeholder="e.g. Chad's phone wallet" />
+          <p class="center-note" style="text-align:left;padding:4px 2px">Shown to nodes you connect to instead of "Unknown" once you share a channel. Applies the next time the node starts.</p>
+          <button class="btn-ghost" id="save-node-alias">Save name</button>
+          <p class="msg" id="node-alias-msg"></p>
           <label class="toggle-row"><input type="checkbox" id="auto-start" /> Start the node automatically when the app opens</label>
           <div class="gap-10"></div>
           <button class="btn-primary" id="node-toggle">Start node</button>
@@ -505,6 +510,10 @@
           </div>
         </div>
         <div class="drawer-body">
+          <button class="d-item" id="d-home">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 9.5V21h14V9.5"/></svg>
+            <span class="grow">Wallet</span>
+          </button>
           <div class="d-section">Node</div>
           <button class="d-item" id="d-node">
             <span class="node-dot off" id="node-dot"></span>

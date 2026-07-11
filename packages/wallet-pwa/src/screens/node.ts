@@ -78,7 +78,37 @@ export function initNodeScreen(ctx: AppContext): void {
     localStorage.setItem(AUTO_START_KEY, autoStart.checked ? "1" : "0");
   });
 
-  registerScreen("screen-node", { onShow: () => void refresh() });
+  // Node name (BOLT7 alias) — what peer nodes display instead of "Unknown". Loaded only on
+  // show (never in refresh(), which controller events re-run while typing); applied at start().
+  const aliasInput = $<HTMLInputElement>("node-alias");
+  async function loadAlias(): Promise<void> {
+    try {
+      const cfg = await controller.getConfig();
+      aliasInput.value = cfg.nodeAlias ?? "";
+    } catch {
+      /* leave the field as-is; saving still works */
+    }
+  }
+  $("save-node-alias").addEventListener("click", () => {
+    void controller
+      .setNodeAlias(aliasInput.value)
+      .then(() =>
+        setMsg(
+          "node-alias-msg",
+          running ? "Saved — applies when the node restarts" : "Saved",
+          "ok"
+        )
+      )
+      .catch((e) => setMsg("node-alias-msg", (e as Error).message, "err"));
+  });
+
+  registerScreen("screen-node", {
+    onShow: () => {
+      void refresh();
+      void loadAlias();
+      setMsg("node-alias-msg", "");
+    },
+  });
   onControllerEvent(() => {
     if (currentScreen() === "screen-node") void refresh();
   });

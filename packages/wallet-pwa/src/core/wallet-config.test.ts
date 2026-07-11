@@ -77,6 +77,21 @@ describe("AppConfig.peer (persisted last-connected peer)", () => {
   });
 });
 
+describe("AppConfig.nodeAlias (user-set node name announced to peers)", () => {
+  it("round-trips through serialize/parse", () => {
+    const cfg: AppConfig = { network: "mainnet", nodeAlias: "Chad's phone" };
+    expect(parseConfig(serializeConfig(cfg)).nodeAlias).toBe("Chad's phone");
+  });
+
+  it("is optional: old configs without it parse unchanged (backward compat)", () => {
+    expect(parseConfig(JSON.stringify({ network: "mainnet" })).nodeAlias).toBeUndefined();
+  });
+
+  it("drops a blank alias", () => {
+    expect(parseConfig(JSON.stringify({ network: "mainnet", nodeAlias: "  " })).nodeAlias).toBeUndefined();
+  });
+});
+
 describe("parsePeerString / formatPeerString", () => {
   it("parses pubkey@host:port", () => {
     const p = parsePeerString(DEFAULT_MAINNET_PEER);

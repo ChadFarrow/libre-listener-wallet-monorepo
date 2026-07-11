@@ -54,6 +54,7 @@ export class DemoController {
   private orders = new Map<string, DemoOrder>();
   private receiveTimer: ReturnType<typeof setTimeout> | undefined;
   private sweepAddress = "";
+  private nodeAlias?: string;
 
   constructor(emit: ControllerEvent = () => {}) {
     this.emit = emit;
@@ -271,11 +272,23 @@ export class DemoController {
   async syncGossip(): Promise<void> {}
 
   async getConfig() {
-    return { network: "demo", esploraUrl: "", bridgeUrl: "", rapidGossipSyncUrl: "", peer: "" };
+    return {
+      network: "demo",
+      esploraUrl: "",
+      bridgeUrl: "",
+      rapidGossipSyncUrl: "",
+      peer: "",
+      nodeAlias: this.nodeAlias,
+    };
   }
 
   async setConfig(): Promise<never> {
     throw new Error("Settings can't be changed in demo mode.");
+  }
+
+  // Demo requires no real info: the node name just sticks in memory for the session.
+  async setNodeAlias(alias: string | undefined): Promise<void> {
+    this.nodeAlias = alias?.trim() || undefined;
   }
 
   async getSweepAddress(): Promise<{ address: string }> {

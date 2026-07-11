@@ -1,9 +1,10 @@
 import type { AppContext } from "../core/app-context";
 import { classifySendInput } from "../core/send-input";
 import { isDemoMode } from "../core/demo-mode";
+import { sendResultView, type SendResultKind } from "../core/send-result";
 import { guardedClick } from "../core/ui-helpers";
-import { registerScreen } from "../ui/nav";
-import { $, show, setMsg, fmtSats } from "./util";
+import { registerScreen, resetToHome } from "../ui/nav";
+import { $, show, setMsg } from "./util";
 
 // Paste-only send: BOLT11 invoice or Lightning Address. QR scanning is a deferred follow-up.
 // Fund-safety: a PAYMENT_TIMEOUT after dispatch means IN FLIGHT — shown as pending, never
@@ -17,6 +18,29 @@ export function initSendScreen(ctx: AppContext): void {
   const controller = ctx.controller;
   const input = $<HTMLTextAreaElement>("send-input");
   const amountRow = $("send-amount-row");
+
+  // Full-cover confirmation shown after a send so a settled/in-flight payment is unmissable
+  // (the old inline "Paid ✓" line cleared with the form and read as "nothing happened").
+  function showResult(kind: SendResultKind, amountSats?: number): void {
+    const v = sendResultView(kind, amountSats);
+    const cover = $("send-result");
+    cover.classList.toggle("warn", v.tone === "warn");
+    $("send-result-amount").textContent = v.amountText;
+    $("send-result-title").textContent = v.title;
+    $("send-result-note").textContent = v.note;
+    show(cover, true);
+  }
+
+  function hideResult(): void {
+    show("send-result", false);
+    $("send-result").classList.remove("warn");
+  }
+
+  // Done returns home (form is already reset), where the updated balance + Transactions live.
+  $("send-result-done").addEventListener("click", () => {
+    hideResult();
+    resetToHome();
+  });
 
   function syncInputKind(): void {
     // Demo accepts anything — no real invoice/address required; the amount field always shows.
@@ -46,8 +70,9 @@ export function initSendScreen(ctx: AppContext): void {
       const amt = parseInt($<HTMLInputElement>("send-amount").value.replace(/\D/g, "") || "0", 10) || 100;
       setMsg("send-msg", "Sending…");
       const res = await controller.payLightning(raw, { amountSats: amt });
-      setMsg("send-msg", `Paid ${fmtSats(res.amountSats)} sats ✓ (demo)`, "ok");
       input.value = "";
+      setMsg("send-msg", "");
+      showResult("sent", res.amountSats);
       return;
     }
     const classified = classifySendInput(input.value);
@@ -66,14 +91,17 @@ export function initSendScreen(ctx: AppContext): void {
     setMsg("send-msg", "Sending…");
     try {
       const res = await controller.payLightning(input.value, { amountSats });
-      setMsg("send-msg", `Paid ${fmtSats(res.amountSats)} sats ✓`, "ok");
       input.value = "";
+      setMsg("send-msg", "");
       syncInputKind();
+      showResult("sent", res.amountSats);
     } catch (e) {
       if (isPaymentTimeout(e)) {
         // The payment left the node and hasn't settled yet — pending, NOT failed. Retrying
         // now could double-pay; the transactions sheet shows the final outcome.
-        setMsg("send-msg", "Payment is still in flight — check Transactions in a moment before retrying.", "err");
+        input.value = "";
+        setMsg("send-msg", "");
+        showResult("pending", amountSats);
         return;
       }
       setMsg("send-msg", (e as Error).message, "err");
@@ -82,6 +110,7 @@ export function initSendScreen(ctx: AppContext): void {
 
   registerScreen("screen-send", {
     onShow: () => {
+      hideResult(); // a re-entry starts clean (e.g. Send again after a prior confirmation)
       setMsg("send-msg", "");
       syncInputKind();
     },

@@ -9,12 +9,15 @@ export interface OnboardingInputs {
   backedUp: boolean; // per-network seed-backed-up marker (core/onboarding.ts)
   driveConfigured: boolean; // remembered Drive account — the mandatory-backup gate signal
   channels: number; // total channels incl. pending — the pill handles "opening"
+  everHadChannel: boolean; // close record or prior channel state — a RETURNING user, not a first-run
 }
 
 export function currentOnboardingStep(i: OnboardingInputs): OnboardingStep {
   if (!i.hasWallet) return "welcome";
   if (!i.backedUp) return "seed";
   if (!i.driveConfigured) return "drive";
-  if (i.channels === 0) return "channel";
+  // Only a wallet that never had a channel gets the first-channel step. After a close the
+  // status pill owns the "get a new one" nudge — the full-screen gate must not hijack home.
+  if (i.channels === 0 && !i.everHadChannel) return "channel";
   return "done";
 }

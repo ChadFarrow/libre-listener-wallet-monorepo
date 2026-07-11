@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAmount, statusColor, relativeTime, groupPaymentsByDay } from "./tx-format";
+import { formatAmount, statusColor, relativeTime, groupPaymentsByDay, groupByDay, channelEventLabel, type ChannelEventRecord } from "./tx-format";
 import type { PaymentRecord } from "@libre/shared";
 
 const rec = (over: Partial<PaymentRecord>): PaymentRecord => ({
@@ -66,5 +66,24 @@ describe("groupPaymentsByDay", () => {
     const groups = groupPaymentsByDay([today, t2], now);
     expect(groups).toHaveLength(1);
     expect(groups[0].records.map((r) => r.id)).toEqual([today.id, t2.id]);
+  });
+});
+
+describe("channel event rows", () => {
+  it("labels closes and sweeps", () => {
+    expect(channelEventLabel({ kind: "channel-close", timestamp: 0 })).toBe("Channel closed");
+    expect(channelEventLabel({ kind: "sweep", timestamp: 0, sat: 93813 })).toBe("Funds recovered on-chain");
+  });
+
+  it("groupByDay is generic over anything with a timestamp", () => {
+    const now = Date.UTC(2026, 6, 11, 12);
+    const items: ChannelEventRecord[] = [
+      { kind: "sweep", timestamp: now - 1000, sat: 1 },
+      { kind: "channel-close", timestamp: now - 90_000_000 }, // yesterday-ish
+    ];
+    const groups = groupByDay(items, now);
+    expect(groups[0].label).toBe("Today");
+    expect(groups[0].records[0].kind).toBe("sweep");
+    expect(groups.length).toBe(2);
   });
 });

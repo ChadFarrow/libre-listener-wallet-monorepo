@@ -1,6 +1,7 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
 import { statusPill, type StatusPillTarget } from "../core/status-pill";
+import { channelLifecycle } from "../core/channel-lifecycle";
 import { balanceDisplay } from "../core/balance-display";
 import { getSeedBackedUp } from "../core/onboarding";
 import { driveConfigured } from "../drive-integration";
@@ -16,6 +17,7 @@ const PILL_SCREEN: Record<StatusPillTarget, string | "drawer"> = {
   channels: "screen-channels",
   "cloud-backup": "screen-backup",
   recovery: "screen-recovery",
+  sweep: "screen-sweep",
 };
 
 export function initHomeScreen(ctx: AppContext): void {
@@ -46,12 +48,34 @@ export function initHomeScreen(ctx: AppContext): void {
         show(fiatEl, false);
       }
 
+      const lifecycle = channelLifecycle({
+        channels: s.channels ?? 0,
+        usableChannels: s.usableChannels ?? 0,
+        closeCount: s.closes?.count ?? 0,
+        sweepNeedsAddress: s.sweep?.needsAddress ?? false,
+        sweepPendingCount: s.sweep?.pendingCount ?? 0,
+      });
+
+      // Post-close context: balance 0 is not "empty wallet" while funds are coming back on-chain.
+      const recEl = $("balance-recovering");
+      if (lifecycle === "closed-recovering" || lifecycle === "closed-needs-address") {
+        const sat = s.sweep?.pendingSat ?? 0;
+        recEl.textContent =
+          lifecycle === "closed-needs-address"
+            ? "Channel closed — funds waiting for a recovery address"
+            : sat > 0
+              ? `Recovering ${fmtSats(sat)} sats to your on-chain address`
+              : "Recovering your funds on-chain";
+        show(recEl, true);
+      } else {
+        show(recEl, false);
+      }
+
       const pill = statusPill({
         hasWallet: s.hasSeed || s.createdNew || s.hasChannelState,
         running: s.running,
         startError: s.startError,
-        channels: s.channels ?? 0,
-        usableChannels: s.usableChannels ?? 0,
+        lifecycle,
         driveConfigured: isDemoMode() ? demoState.driveConfigured : driveConfigured(),
         backedUp: isDemoMode() ? demoState.seedBackedUp : getSeedBackedUp(s.network),
       });

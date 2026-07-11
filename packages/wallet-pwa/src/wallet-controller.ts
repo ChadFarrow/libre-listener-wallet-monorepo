@@ -2,12 +2,15 @@ import {
   LibreListenerWallet,
   IndexedDBStorageProvider,
   PaymentLogger,
+  CloseLogger,
+  SWEEP_LAST_KEY,
   bytesToHex,
   seedHexToMnemonic,
   resolveLnAddressInvoice,
   parsePeerAddressBook,
   type SecureStorageProvider,
   type ChannelInfo,
+  type ChannelCloseRecord,
 } from "@libre/listener-wallet";
 import { zeroConfTrustedPubkeys, acquireWebNodeLock, nodeLockName, isNodeAlreadyRunningError } from "@libre/shared";
 import { nodeLockRetryPlan } from "./core/start-retry";
@@ -137,6 +140,8 @@ export class WalletController {
     usableChannels?: number;
     peers?: number;
     startError?: string;
+    closes: { count: number; last?: ChannelCloseRecord };
+    sweep: { needsAddress: boolean; pendingCount: number; pendingSat: number; lastSweep?: { txid: string; sat: number; at: number } };
   }> {
     const network = await this.activeNetwork();
     const storage = this.storageForNetwork(network);
@@ -158,6 +163,30 @@ export class WalletController {
       usableChannels = chans.filter((c) => c.isUsable).length;
       peers = this.wallet.getConnectedPeers().length;
     }
+    const closeRecs = await this.getChannelCloses().catch(() => [] as ChannelCloseRecord[]);
+    const closes = { count: closeRecs.length, ...(closeRecs[0] ? { last: closeRecs[0] } : {}) };
+    let sweep: { needsAddress: boolean; pendingCount: number; pendingSat: number; lastSweep?: { txid: string; sat: number; at: number } } = {
+      needsAddress: false,
+      pendingCount: 0,
+      pendingSat: 0,
+    };
+    if (running && this.wallet) {
+      sweep = this.wallet.getSweepStatus();
+    } else {
+      // Stopped: best-effort from storage so the pill can still say "recovering".
+      try {
+        const pendingRaw = await storage.getItem(WalletController.SWEEP_PENDING_STORAGE_KEY);
+        const pending = pendingRaw ? (JSON.parse(pendingRaw) as unknown[]) : [];
+        const lastRaw = await storage.getItem(SWEEP_LAST_KEY);
+        const last = lastRaw ? (JSON.parse(lastRaw) as { txid: string; sat: number; at: number }) : undefined;
+        sweep = {
+          needsAddress: false, // only knowable while running
+          pendingCount: Array.isArray(pending) ? pending.length : 0,
+          pendingSat: 0,
+          ...(last ? { lastSweep: last } : {}),
+        };
+      } catch { /* defaults stand — display-only */ }
+    }
     return {
       network,
       running,
@@ -171,6 +200,8 @@ export class WalletController {
       peers,
       // Only meaningful while stopped — a running node has no outstanding start error.
       startError: running ? undefined : this.lastStartError,
+      closes,
+      sweep,
     };
   }
 
@@ -624,6 +655,19 @@ export class WalletController {
     const logger = new PaymentLogger({ storage: this.storageForNetwork(await this.activeNetwork()) });
     await logger.load();
     return logger.getRecords();
+  }
+
+  // Mirror of the SDK's SWEEP_PENDING_KEY ("sweep_pending_txs") for the stopped-node read.
+  // Display-only: a drifted literal shows 0 pending, it can never affect the sweep itself.
+  private static readonly SWEEP_PENDING_STORAGE_KEY = "sweep_pending_txs";
+
+  // Channel-close history (SDK CloseLogger is the source of truth). Works with the node
+  // STOPPED — fresh CloseLogger over storage, same pattern as getPayments().
+  async getChannelCloses(): Promise<ChannelCloseRecord[]> {
+    if (this.isRunning()) return this.wallet!.getChannelCloses();
+    const log = new CloseLogger({ storage: this.storageForNetwork(await this.activeNetwork()) });
+    await log.load();
+    return log.getRecords();
   }
 
   // Serialize concurrent sends — a double-tap must never double-pay (the UI's guardedClick is

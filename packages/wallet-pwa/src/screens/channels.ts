@@ -3,6 +3,7 @@ import type { ChannelInfo } from "@libre/listener-wallet";
 import { channelConfLabel } from "@libre/shared";
 import { onControllerEvent } from "../core/events";
 import { registerScreen, currentScreen, showScreen } from "../ui/nav";
+import { relativeTime } from "../core/tx-format";
 import { $, fmtSats } from "./util";
 
 // Per-channel cards: capacity bar (spendable / estimated ~1% reserve / receivable) + numbers.
@@ -85,6 +86,30 @@ export function initChannelsScreen(ctx: AppContext): void {
     }
     const chans = await controller.getChannels().catch(() => [] as ChannelInfo[]);
     if (!chans.length) {
+      const s = await controller.getState().catch(() => null);
+      const closes = s?.closes?.count ?? 0;
+      const sweep = s?.sweep;
+      if (closes > 0 || sweep?.needsAddress || (sweep?.pendingCount ?? 0) > 0) {
+        const when = s?.closes?.last ? ` ${relativeTime(s.closes.last.closedAt, Date.now())}` : "";
+        note.textContent = `Your channel closed${when}.`;
+        host.appendChild(note);
+        const sweepNote = document.createElement("p");
+        sweepNote.className = "center-note";
+        if (sweep?.needsAddress) {
+          sweepNote.textContent = "Funds are waiting — set a recovery address to get them back on-chain.";
+        } else if ((sweep?.pendingCount ?? 0) > 0) {
+          sweepNote.textContent =
+            (sweep?.pendingSat ?? 0) > 0
+              ? `Recovering ${fmtSats(sweep!.pendingSat)} sats to your on-chain address…`
+              : "Recovering your funds on-chain…";
+        } else if (sweep?.lastSweep) {
+          sweepNote.textContent = `${fmtSats(sweep.lastSweep.sat)} sats were sent to your recovery address.`;
+        } else {
+          sweepNote.textContent = "Get a new channel to keep sending and receiving.";
+        }
+        host.appendChild(sweepNote);
+        return;
+      }
       note.textContent = "No channels yet — get one to receive.";
       host.appendChild(note);
       return;

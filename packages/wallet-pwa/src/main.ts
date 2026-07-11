@@ -35,6 +35,7 @@ if (isDemoMode()) {
 const AUTO_DOWNLOAD_KEY = "libre_auto_download";
 let autoDlTimer: ReturnType<typeof setTimeout> | undefined;
 onControllerEvent((event) => {
+  if (isDemoMode()) return; // demo has no real backups — and must never touch Drive/files
   if (event !== "state-changed") return;
   if (
     !shouldAutoDownload({
@@ -74,6 +75,7 @@ onControllerEvent((event) => {
 // (drive-ui), after which the next state change syncs. Never prompts on its own.
 let driveSyncTimer: ReturnType<typeof setTimeout> | undefined;
 onControllerEvent((event) => {
+  if (isDemoMode()) return;
   if (event !== "state-changed") return;
   if (!controller.isRunning() || !driveConnected()) return;
   clearTimeout(driveSyncTimer);
@@ -89,6 +91,9 @@ onControllerEvent((event) => {
 // pointer/key gesture — no popup, no dedicated Reconnect click; the next state change then
 // auto-syncs.
 function armDriveGestureReconnect(): void {
+  // Demo must NEVER reach Google — the real wallet's remembered Drive account lives in this
+  // origin's localStorage, so the silent reconnect would fire a real sign-in from a demo tap.
+  if (isDemoMode()) return;
   if (!shouldArmGestureReconnect(driveConnected(), rememberedEmail())) return;
   const onFirstGesture = () => {
     window.removeEventListener("pointerdown", onFirstGesture);

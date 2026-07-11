@@ -12,6 +12,7 @@ import {
   deleteAllBackups,
 } from "./drive-backup";
 import type { WalletController } from "./wallet-controller";
+import { isDemoMode } from "./core/demo-mode";
 
 const CLIENT_ID_KEY = "libre_google_client_id";
 const HINT_KEY = "libre_drive_hint";
@@ -39,6 +40,10 @@ export function driveConfigured(): boolean {
 }
 
 export async function ensureDriveConnected(opts: { silent?: boolean } = {}): Promise<void> {
+  // Demo mode must NEVER reach Google: this is the single choke point every Drive flow
+  // (connect, backup-now, delete, restore) funnels through. Demo screens simulate their own
+  // "connected" state; anything that lands here in demo gets a clean error, not a sign-in.
+  if (isDemoMode()) throw new Error("Google Drive isn't available in demo mode.");
   if (isConnected()) return;
   const clientId = googleClientId();
   if (!clientId) throw new Error("No Google Client ID configured — set one under Backup → advanced.");

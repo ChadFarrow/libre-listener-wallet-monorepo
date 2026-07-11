@@ -60,4 +60,19 @@ describe("diag tap", () => {
     expect((await diagStats()).count).toBe(0);
     expect(await diagExportText()).toBe("");
   });
+
+  it("captures the stack head for uncaught errors when present", async () => {
+    const err = new Error("kapow");
+    window.dispatchEvent(new ErrorEvent("error", { message: "kapow", error: err }));
+    await diagFlushNow();
+    const text = await diagExportText();
+    expect(text).toContain("uncaught: kapow @ Error: kapow");
+  });
+
+  it("diagStats folds in the pending in-memory batch (matches export view)", async () => {
+    console.log("[Test] pending stat line");
+    // No manual flush — stats must flush internally.
+    const s = await diagStats();
+    expect(s.count).toBeGreaterThan(0);
+  });
 });

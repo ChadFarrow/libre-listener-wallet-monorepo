@@ -72,10 +72,15 @@ export function installDiagTap(): void {
     record("error", args);
   };
 
-  window.addEventListener("error", (e) => record("error", [`uncaught: ${e.message}`]));
-  window.addEventListener("unhandledrejection", (e) =>
-    record("error", [`unhandledrejection: ${argToString((e as PromiseRejectionEvent).reason)}`]),
-  );
+  window.addEventListener("error", (e) => {
+    const stackHead = (e.error as Error | undefined)?.stack?.split("\n").slice(0, 2).join(" | ");
+    record("error", [stackHead ? `uncaught: ${e.message} @ ${stackHead}` : `uncaught: ${e.message}`]);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const reason = (e as PromiseRejectionEvent).reason;
+    const stackHead = (reason as Error | undefined)?.stack?.split("\n").slice(0, 2).join(" | ");
+    record("error", [stackHead ? `unhandledrejection: ${argToString(reason)} @ ${stackHead}` : `unhandledrejection: ${argToString(reason)}`]);
+  });
 
   // Lifecycle stamps — the backbone of overnight diagnosis. hidden/pagehide flush
   // immediately: issued IndexedDB puts complete even if the page is killed right after.
@@ -113,6 +118,7 @@ export async function diagExportText(): Promise<string> {
 }
 
 export async function diagStats(): Promise<{ count: number; bytes: number }> {
+  await flush(); // fold the pending batch in first so stats match export view
   try {
     const entries = await store.readAll();
     const bytes = entries.reduce((n, e) => n + e.msg.length + 30, 0);

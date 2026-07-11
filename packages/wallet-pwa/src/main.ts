@@ -14,7 +14,7 @@ import { initScreens } from "./screens";
 
 // Demo mode (?demo): a fake in-memory controller — no real node, storage, or network — so the
 // UI can be exercised end-to-end with zero setup. The badge + drawer exit make it unmistakable.
-enterDemoFromUrl(location.search);
+enterDemoFromUrl(location.search, location.hash);
 
 // The single LDK node owner (or its demo stand-in). Its emit callback fans out to any screen.
 const controller = isDemoMode()

@@ -6,9 +6,22 @@
 
 const DEMO_KEY = "libre_demo";
 
-export function enterDemoFromUrl(search: string): void {
+// Demo can be requested via the ?demo query OR a #demo hash fragment. The hash matters on iOS:
+// a home-screen PWA relaunches at the manifest start_url, and iOS STRIPS the query string from it
+// (so "./?demo" → "./" and the real app boots), but it preserves the fragment (client-side, never
+// sent to the server). So the demo manifest's start_url carries "#demo" and we honor it here.
+export function urlHasDemo(search: string, hash = ""): boolean {
   try {
-    if (new URLSearchParams(search).has("demo")) sessionStorage.setItem(DEMO_KEY, "1");
+    if (new URLSearchParams(search).has("demo")) return true;
+  } catch {
+    /* malformed search — fall through to the hash check */
+  }
+  return hash.replace(/^#/, "").split(/[&/]/).includes("demo");
+}
+
+export function enterDemoFromUrl(search: string, hash = ""): void {
+  try {
+    if (urlHasDemo(search, hash)) sessionStorage.setItem(DEMO_KEY, "1");
   } catch {
     /* sessionStorage unavailable — demo simply won't engage */
   }
@@ -28,14 +41,15 @@ export function exitDemo(): void {
   } catch {
     /* ignore */
   }
-  location.href = location.pathname; // strip ?demo and reboot into the real app
+  location.href = location.pathname; // strip ?demo/#demo and reboot into the real app
 }
 
 // Point the live manifest <link> at the demo manifest so an "Add to Home Screen" from the demo
-// captures its start_url (./?demo). iOS launches an installed PWA at the manifest's start_url, and
-// the real manifest's "." strips the ?demo query — so without this a home-screen install boots as
-// the REAL app (real Google sign-in in onboarding). The real app never runs this, so its manifest
-// is untouched. Pure resolver split out for tests.
+// captures its start_url (which carries #demo). iOS launches an installed PWA at the manifest's
+// start_url, and the real manifest's "." — plus iOS stripping any query — means a home-screen
+// install otherwise boots as the REAL app (real Google sign-in in onboarding). The demo manifest's
+// start_url uses a #demo fragment, which iOS preserves. The real app never runs this, so its
+// manifest is untouched. Pure resolver split out for tests.
 const DEMO_MANIFEST = "manifest-demo.webmanifest";
 
 export function resolveManifestHref(currentHref: string | null | undefined, demoManifest = DEMO_MANIFEST): string {

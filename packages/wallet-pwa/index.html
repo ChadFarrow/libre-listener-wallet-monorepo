@@ -108,6 +108,18 @@
           <p class="center-note hidden" id="reserve-hint"></p>
           <p class="msg" id="receive-msg"></p>
         </div>
+        <!-- Full-cover confirmation shown when the displayed invoice gets paid -->
+        <div class="result-cover hidden" id="recv-result" aria-live="polite">
+          <div class="result-inner">
+            <div class="result-badge">
+              <svg class="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+            </div>
+            <div class="result-amount" id="recv-result-amount"></div>
+            <div class="result-title">Payment received</div>
+            <p class="result-note">Your invoice was paid — the sats are in your wallet.</p>
+          </div>
+          <button class="btn-primary" id="recv-result-done">Done</button>
+        </div>
       </section>
 
       <!-- ══════════ SEND (wired in a later step) ══════════ -->

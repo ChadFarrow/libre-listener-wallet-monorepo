@@ -1989,6 +1989,50 @@ export class LibreListenerWallet {
     }
   }
 
+  /**
+   * Proactively drop and redial every desired peer — call this on app foreground-resume.
+   *
+   * On iOS a backgrounded PWA is FROZEN (timers paused) and the OS can kill the bridge socket
+   * WITHOUT delivering an onclose, leaving a "zombie" half-open connection that LDK still lists as
+   * connected. So getBalance()/isUsable look healthy, but a send routes bytes into the dead socket
+   * and silently STALLS until the peer tick's ping-timeout finally disconnects it (~10-20s). This
+   * collapses that window: it force-closes each peer's current descriptor, tells LDK the socket is
+   * gone NOW (so the redial isn't skipped by connectPeer's ldkHasPeer early-return), and redials.
+   *
+   * Safe to call from an app event (visibilitychange) — NOT from inside a SocketDescriptor callback,
+   * so the synchronous socket_disconnected/process_events calls don't hit the re-entrancy trap (see
+   * handleDisconnect). Reconnection re-establishes transport only; it never advances channel state.
+   */
+  async refreshPeerConnections(): Promise<void> {
+    const pm = this.peerManager;
+    if (!pm || !this.isRunning) return;
+    for (const [pubkey, addr] of [...this.desiredPeers.entries()]) {
+      const desc = this.connectedPeers.get(pubkey);
+      if (desc) {
+        // Drop from the map FIRST so the handleDisconnect that disconnect_socket() fires doesn't
+        // ALSO scheduleReconnect — we redial ourselves below.
+        this.connectedPeers.delete(pubkey);
+        try {
+          desc.disconnect_socket();
+        } catch {
+          /* transport already gone */
+        }
+        // Force LDK to forget the (possibly zombie) peer synchronously; otherwise ldkHasPeer() stays
+        // true and connectPeer's idempotent early-return would skip the redial. A duplicate
+        // socket_disconnected (also deferred by handleDisconnect) is a documented no-op.
+        try {
+          pm.socket_disconnected(SocketDescriptor.new_impl(desc));
+        } catch {
+          /* already gone */
+        }
+      }
+      void this.connectPeer(pubkey, addr.host, addr.port).catch((e) =>
+        this.logger?.warn(`[Peer] resume refresh redial ${pubkey} failed: ${e instanceof Error ? e.message : e}`)
+      );
+    }
+    pm.process_events();
+  }
+
   handleDisconnect(desc: WebSocketDescriptor): void {
     if (this.connectedPeers.get(desc.peerPubkey)?.id === desc.id) {
       this.connectedPeers.delete(desc.peerPubkey);

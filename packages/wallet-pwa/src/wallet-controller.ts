@@ -651,6 +651,14 @@ export class WalletController {
     this.emit("state-changed");
   }
 
+  // Foreground-resume peer refresh (iOS zombie-socket fix). Drops + redials every desired peer so a
+  // send after returning to the app doesn't route into a socket iOS killed while the page was
+  // frozen. No-op when the node isn't running. Best-effort — never throws into the resume handler.
+  async refreshPeerConnections(): Promise<void> {
+    if (!this.wallet || !this.isRunning()) return;
+    await this.wallet.refreshPeerConnections();
+  }
+
   // Remember the last successfully connected peer so auto-start can redial it. Best-effort: a
   // persist failure must not fail the connect that already succeeded.
   private async savePeer(pubkey: string, host: string, port: number): Promise<void> {

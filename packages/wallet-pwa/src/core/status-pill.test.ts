@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { statusPill } from "./status-pill";
+import type { ChannelLifecycle } from "./channel-lifecycle";
 
 const HEALTHY = {
   hasWallet: true,
   running: true,
-  channels: 1,
-  usableChannels: 1,
+  lifecycle: "active" as ChannelLifecycle,
   driveConfigured: true,
   backedUp: true,
 };
@@ -16,11 +16,11 @@ describe("statusPill", () => {
   });
 
   it("is hidden with no wallet (onboarding owns that state)", () => {
-    expect(statusPill({ ...HEALTHY, hasWallet: false, running: false, channels: 0, usableChannels: 0 })).toBeNull();
+    expect(statusPill({ ...HEALTHY, hasWallet: false, running: false, lifecycle: "none" })).toBeNull();
   });
 
   it("node stopped outranks everything and targets the node screen", () => {
-    const p = statusPill({ ...HEALTHY, running: false, channels: 0, driveConfigured: false, backedUp: false });
+    const p = statusPill({ ...HEALTHY, running: false, lifecycle: "none", driveConfigured: false, backedUp: false });
     expect(p).toMatchObject({ level: "bad", target: "node" });
     expect(p!.text).toMatch(/node/i);
   });
@@ -30,30 +30,47 @@ describe("statusPill", () => {
     expect(p!.text).toContain("Esplora unreachable");
   });
 
-  it("no channel yet → warn targeting get-channel", () => {
-    const p = statusPill({ ...HEALTHY, channels: 0, usableChannels: 0 });
-    expect(p).toMatchObject({ level: "warn", target: "get-channel" });
-    expect(p!.text).toMatch(/channel/i);
+  it("closed-needs-address → bad, targets the sweep screen (fund-safety prompt)", () => {
+    const p = statusPill({ ...HEALTHY, lifecycle: "closed-needs-address" });
+    expect(p).toMatchObject({ level: "bad", target: "sweep" });
+    expect(p!.text).toMatch(/recovery address/i);
   });
 
-  it("channel exists but none usable → info 'opening' targeting channels", () => {
-    const p = statusPill({ ...HEALTHY, channels: 1, usableChannels: 0 });
+  it("closed-recovering → info, targets the sweep screen", () => {
+    const p = statusPill({ ...HEALTHY, lifecycle: "closed-recovering" });
+    expect(p).toMatchObject({ level: "info", target: "sweep" });
+    expect(p!.text).toMatch(/recovering/i);
+  });
+
+  it("closed-recovered → warn 'get a new one', NOT first-run copy", () => {
+    const p = statusPill({ ...HEALTHY, lifecycle: "closed-recovered" });
+    expect(p).toMatchObject({ level: "warn", target: "get-channel" });
+    expect(p!.text).toMatch(/closed/i);
+    expect(p!.text).not.toMatch(/no channel yet/i);
+  });
+
+  it("none (never had) keeps the first-run copy", () => {
+    const p = statusPill({ ...HEALTHY, lifecycle: "none" });
+    expect(p).toMatchObject({ level: "warn", target: "get-channel" });
+    expect(p!.text).toMatch(/no channel yet/i);
+  });
+
+  it("opening → info targeting channels (unchanged copy)", () => {
+    const p = statusPill({ ...HEALTHY, lifecycle: "opening" });
     expect(p).toMatchObject({ level: "info", target: "channels" });
     expect(p!.text).toMatch(/opening/i);
   });
 
   it("seed not backed up → warn targeting recovery", () => {
-    const p = statusPill({ ...HEALTHY, backedUp: false });
-    expect(p).toMatchObject({ level: "warn", target: "recovery" });
+    expect(statusPill({ ...HEALTHY, backedUp: false })).toMatchObject({ level: "warn", target: "recovery" });
   });
 
   it("Drive not configured → warn targeting cloud-backup", () => {
-    const p = statusPill({ ...HEALTHY, driveConfigured: false });
-    expect(p).toMatchObject({ level: "warn", target: "cloud-backup" });
+    expect(statusPill({ ...HEALTHY, driveConfigured: false })).toMatchObject({ level: "warn", target: "cloud-backup" });
   });
 
-  it("priority: no-channel outranks backup drift", () => {
-    const p = statusPill({ ...HEALTHY, channels: 0, usableChannels: 0, backedUp: false });
-    expect(p!.target).toBe("get-channel");
+  it("priority: closed states outrank backup drift", () => {
+    const p = statusPill({ ...HEALTHY, lifecycle: "closed-needs-address", backedUp: false, driveConfigured: false });
+    expect(p!.target).toBe("sweep");
   });
 });

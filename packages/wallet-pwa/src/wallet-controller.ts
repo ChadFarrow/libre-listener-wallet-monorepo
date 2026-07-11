@@ -303,37 +303,46 @@ export class WalletController {
       }
       await this.startNode();
       if (!plan.connectPeer) return;
-
-      const cfg = await this.getConfig();
-      const savedPeer = cfg.peer;
-      const peerStr = savedPeer || defaultPeer(network);
-      if (!peerStr) {
-        console.warn("[AutoStart] no saved or default peer for this network — skipping peer connect");
-        return;
-      }
-      if (!savedPeer) {
-        console.warn("[AutoStart] no saved peer — dialing the network default, which may not be your channel peer");
-      }
-      const { pubkey, host, port } = parsePeerString(peerStr);
-      const wallet = this.wallet; // abort the retry loop if stop()/restore swaps the instance
-      const connected = await connectWithRetry(
-        async () => {
-          await wallet!.connectPeer(pubkey, host, port);
-        },
-        {
-          shouldContinue: () => this.wallet === wallet && !!wallet && wallet.status() === "Running",
-          onAttemptFailed: (n, e) =>
-            console.warn(`[AutoStart] peer connect attempt ${n} failed:`, (e as Error)?.message || e),
-        }
-      );
-      if (connected) {
-        this.emit("state-changed");
-        console.log(`[AutoStart] node running, ${savedPeer ? "saved peer" : "default peer"} connected`);
-      } else {
-        console.warn("[AutoStart] peer connect gave up — use Connect peer in settings");
-      }
+      await this.connectSavedOrDefaultPeer(network);
     } catch (e) {
       console.warn("[AutoStart] failed:", (e as Error)?.message || e);
+    }
+  }
+
+  // Dial the saved (or network-default) peer with backoff. Shared by auto-start and restore:
+  // the SDK's own start()-time redial only reaches counterparties in the persisted peer address
+  // book (`peer_addresses`), which is NOT in a backup — so after a restore that book is empty and
+  // the channel peer never gets dialed. This best-effort dial brings a channel opened to the
+  // saved/default peer back online; a channel with a different peer (e.g. an LSP) still needs a
+  // manual Connect-peer, which the peers screen surfaces.
+  private async connectSavedOrDefaultPeer(network: string): Promise<void> {
+    const cfg = await this.getConfig();
+    const savedPeer = cfg.peer;
+    const peerStr = savedPeer || defaultPeer(network);
+    if (!peerStr) {
+      console.warn("[Peer] no saved or default peer for this network — skipping peer connect");
+      return;
+    }
+    if (!savedPeer) {
+      console.warn("[Peer] no saved peer — dialing the network default, which may not be your channel peer");
+    }
+    const { pubkey, host, port } = parsePeerString(peerStr);
+    const wallet = this.wallet; // abort the retry loop if stop()/restore swaps the instance
+    const connected = await connectWithRetry(
+      async () => {
+        await wallet!.connectPeer(pubkey, host, port);
+      },
+      {
+        shouldContinue: () => this.wallet === wallet && !!wallet && wallet.status() === "Running",
+        onAttemptFailed: (n, e) =>
+          console.warn(`[Peer] connect attempt ${n} failed:`, (e as Error)?.message || e),
+      }
+    );
+    if (connected) {
+      this.emit("state-changed");
+      console.log(`[Peer] node running, ${savedPeer ? "saved peer" : "default peer"} connected`);
+    } else {
+      console.warn("[Peer] peer connect gave up — use Connect peer in settings");
     }
   }
 
@@ -438,6 +447,12 @@ export class WalletController {
       await this.applySweepAddress();
       await this.persistActiveNetwork(targetNetwork);
       void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
+      // A backup carries channel state but NOT the peer address book, so start()'s redial can't reach
+      // the channel peer — dial the saved/default peer (best-effort) so the channel can come online
+      // without a manual reconnect.
+      void this.connectSavedOrDefaultPeer(targetNetwork).catch((e) =>
+        console.warn("[Peer] post-restore connect failed:", (e as Error)?.message || e),
+      );
       this.emit("state-changed");
       return this.currentNode();
     } finally {

@@ -80,6 +80,22 @@ export function showScreen(id: string): void {
   applyPush(prevId, id);
 }
 
+// Navigate from the open drawer straight to a screen. The drawer and the screen SHARE one history
+// entry (we reuse the drawer's layer), so we never call history.back() here. Doing that — closing
+// the drawer via history.back() and then synchronously pushState-ing the screen — races the async
+// popstate: on iOS the late popstate pops the just-pushed screen right back, so the drawer closed
+// but nothing opened. On desktop (permanent sidebar, no drawer layer) this just pushes normally.
+export function showScreenFromDrawer(id: string): void {
+  const prevId = current(stack);
+  const nextStack = push(stack, id);
+  setDrawer(false); // visual close only; no history.back()
+  if (nextStack === stack) return;
+  stack = nextStack;
+  if (layers[layers.length - 1]?.kind === "drawer") layers[layers.length - 1] = { kind: "screen" };
+  else pushHistoryLayer({ kind: "screen" });
+  applyPush(prevId, id);
+}
+
 // UI-initiated back (the ← buttons). Routed through history so the button and the platform
 // back gesture share one code path; falls back to a direct pop when no layer was recorded.
 export function goBack(): void {

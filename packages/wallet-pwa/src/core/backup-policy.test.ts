@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isMobileUa, shouldAutoDownload } from "./backup-policy";
+import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync } from "./backup-policy";
 
 describe("isMobileUa", () => {
   it("detects phones and tablets", () => {
@@ -31,5 +31,26 @@ describe("shouldAutoDownload", () => {
 
   it("off toggle means off", () => {
     expect(shouldAutoDownload({ toggleOn: false, driveConfigured: false, mobile: false })).toBe(false);
+  });
+});
+
+describe("shouldDriveAutoSync", () => {
+  const base = { event: "state-changed", demo: false, running: true, driveConnected: true };
+
+  it("syncs on a state-changed while running with Drive connected (the peer-connect → backup path)", () => {
+    expect(shouldDriveAutoSync(base)).toBe(true);
+  });
+
+  it("ignores non state-changed events", () => {
+    expect(shouldDriveAutoSync({ ...base, event: "payment" })).toBe(false);
+  });
+
+  it("never syncs in demo (must not touch Drive)", () => {
+    expect(shouldDriveAutoSync({ ...base, demo: true })).toBe(false);
+  });
+
+  it("skips when the node is stopped (exportState needs it) or Drive has no live token", () => {
+    expect(shouldDriveAutoSync({ ...base, running: false })).toBe(false);
+    expect(shouldDriveAutoSync({ ...base, driveConnected: false })).toBe(false);
   });
 });

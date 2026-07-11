@@ -7,7 +7,7 @@ import { emitControllerEvent, onControllerEvent } from "./core/events";
 import { AUTO_START_KEY } from "./core/auto-start";
 import { registerServiceWorker, wireInstallPrompt } from "./register-sw";
 import { downloadBackupName } from "./core/backup-name";
-import { isMobileUa, shouldAutoDownload } from "./core/backup-policy";
+import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync } from "./core/backup-policy";
 import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail } from "./drive-integration";
 import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { initScreens } from "./screens";
@@ -73,14 +73,14 @@ onControllerEvent((event) => {
 
 // ---- Google Drive auto-sync (debounced on every state change) ----
 // Once Drive is connected, keep the encrypted backup current automatically so a newly opened channel
-// is always recoverable — the whole reason cloud backup is mandatory before getting a channel. Only
-// runs when a live token exists; a fresh launch silently reconnects on the user's first interaction
-// (drive-ui), after which the next state change syncs. Never prompts on its own.
+// — AND a newly-learned peer address (connectPeer + the restore/auto-start dial both emit
+// "state-changed") — is always recoverable. Peer addresses now ride along in the backup, so this is
+// what makes "enter seed + sign into Drive → everything reconnects" hands-off: no manual "Back up
+// now". Only runs when a live token exists; a fresh launch silently reconnects on the user's first
+// interaction (drive-ui), after which the next state change syncs. Never prompts on its own.
 let driveSyncTimer: ReturnType<typeof setTimeout> | undefined;
 onControllerEvent((event) => {
-  if (isDemoMode()) return;
-  if (event !== "state-changed") return;
-  if (!controller.isRunning() || !driveConnected()) return;
+  if (!shouldDriveAutoSync({ event, demo: isDemoMode(), running: controller.isRunning(), driveConnected: driveConnected() })) return;
   clearTimeout(driveSyncTimer);
   driveSyncTimer = setTimeout(() => {
     void driveBackupNow(controller).catch((e) => console.warn("[DriveSync] auto-backup failed:", (e as Error)?.message || e));

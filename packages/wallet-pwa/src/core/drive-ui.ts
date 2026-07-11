@@ -24,6 +24,21 @@ export function cloudBackupButtons(
   return { connect: { label: hasRememberedAccount ? "Reconnect" : "Connect Drive", primary: true }, backupNowPrimary: false };
 }
 
+// The little status chip next to "Cloud backup" in the drawer, so the connected/syncing state is
+// visible at a glance without opening the screen. "configured" = a remembered Drive account (set up),
+// "connected" = a live token this session, "running" = node up (auto-sync only fires while running).
+export function drawerBackupStatus(opts: {
+  demo: boolean;
+  configured: boolean;
+  connected: boolean;
+  running: boolean;
+}): { label: string; cls: string } {
+  if (opts.demo) return { label: opts.configured ? "Demo" : "", cls: "" };
+  if (!opts.configured) return { label: "Off", cls: "warn" };
+  if (opts.connected && opts.running) return { label: "Syncing ✓", cls: "ok" };
+  return { label: "Connected", cls: "ok" };
+}
+
 /**
  * Whether to retry a silent Drive reconnect on the user's first interaction. GIS's
  * OAuth token model needs a user gesture (a page-load attempt fails with

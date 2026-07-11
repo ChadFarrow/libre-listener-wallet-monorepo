@@ -127,6 +127,19 @@
           <button class="btn-primary" id="send-pay">Pay</button>
           <p class="msg" id="send-msg"></p>
         </div>
+        <!-- Full-cover confirmation shown after a send (success or in-flight) -->
+        <div class="result-cover hidden" id="send-result" aria-live="polite">
+          <div class="result-inner">
+            <div class="result-badge" id="send-result-badge">
+              <svg class="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+              <svg class="ic-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            </div>
+            <div class="result-amount" id="send-result-amount"></div>
+            <div class="result-title" id="send-result-title"></div>
+            <p class="result-note" id="send-result-note"></p>
+          </div>
+          <button class="btn-primary" id="send-result-done">Done</button>
+        </div>
       </section>
 
       <!-- ══════════ GET A CHANNEL ══════════ -->

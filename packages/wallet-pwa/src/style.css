@@ -203,6 +203,39 @@ textarea.field { resize: none; }
 .msg.ok { color: var(--accent); }
 .msg.err { color: #ff8a8a; }
 
+/* ————— post-send confirmation cover ————— */
+.result-cover {
+  position: absolute; inset: 0; z-index: 20;
+  background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 22px; padding: 24px 22px calc(28px + var(--safe-bottom));
+  animation: result-in 0.28s var(--ease-spring);
+}
+.result-cover.hidden { display: none; }
+@keyframes result-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+.result-inner { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; max-width: 340px; }
+.result-badge {
+  width: 84px; height: 84px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-dim); color: var(--accent); margin-bottom: 6px;
+  animation: result-pop 0.42s var(--ease-spring) both;
+}
+@keyframes result-pop { 0% { transform: scale(0.4); opacity: 0; } 60% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
+.result-badge svg { width: 44px; height: 44px; }
+.result-badge .ic-clock { display: none; }
+.result-cover.warn .result-badge { background: rgba(240, 180, 41, 0.15); color: var(--warn); }
+.result-cover.warn .result-badge .ic-check { display: none; }
+.result-cover.warn .result-badge .ic-clock { display: block; }
+.result-amount { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.result-amount:empty { display: none; }
+.result-title { font-size: 18px; font-weight: 700; color: var(--text); }
+.result-cover.warn .result-title { color: var(--warn); }
+.result-note { font-size: 14px; line-height: 1.55; color: var(--text-dim); margin-top: 2px; }
+.result-cover .btn-primary { width: 100%; max-width: 420px; }
+@media (prefers-reduced-motion: reduce) {
+  .result-cover, .result-badge { animation: none; }
+}
+
 .qr-wrap { display: flex; justify-content: center; margin: 14px 0 10px; }
 .qr { background: #fff; padding: 10px; border-radius: 18px; width: 240px; max-width: 70vw; height: auto; }
 

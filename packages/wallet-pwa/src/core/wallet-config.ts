@@ -13,6 +13,9 @@ export interface AppConfig {
   // Last successfully connected channel peer ("pubkey@host:port"). Saved by the offscreen host
   // on every manual connect; auto-start redials it (funded wallets only).
   peer?: string;
+  // User-set node name, announced to connected peers (BOLT7 alias, ≤32 UTF-8 bytes) so the
+  // wallet shows as this instead of "Unknown" in the peer node's UI. Applied on next start.
+  nodeAlias?: string;
 }
 
 const CONFIG_KEY = "ldk_config";
@@ -93,6 +96,7 @@ export function parseConfig(rawJson: string | null): AppConfig {
       bridgeUrl: str(c.bridgeUrl),
       rapidGossipSyncUrl: str(c.rapidGossipSyncUrl),
       peer: str(c.peer),
+      nodeAlias: str(c.nodeAlias),
     };
   } catch (e) {
     // Don't silently boot mainnet on a corrupt config without a trace (guardrails §4).

@@ -106,6 +106,8 @@ import {
   Result_C3Tuple_ThirtyTwoBytesRecipientOnionFieldsRouteParametersZNoneZ_OK,
 } from "lightningdevkit";
 import { StorageCache, bytesToHex, hexToBytes, parseSeedHex } from "./storage-cache";
+import { NodeAnnouncer } from "./node-announcer";
+import { peersNeedingAnnouncement } from "./node-announcement";
 import { createDurablePersist } from "./durable-persist";
 import { getSecureRandomBytes } from "./crypto-utils";
 import { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
@@ -409,6 +411,9 @@ export class LibreListenerWallet {
   private gossipSyncPromise?: Promise<void>;
   private chainSyncPromise?: Promise<void>;
   private nodeAnnTickCount = 0;
+  private nodeAnnouncer?: NodeAnnouncer;
+  // pubkey -> hadReadyChannel at last direct announce (see peersNeedingAnnouncement)
+  private announceState = new Map<string, boolean>();
   private nextDescriptorId: number = 1;
   private stateVersion: number = 0;
   private monitorHighwater: Highwater = new Map();
@@ -884,11 +889,25 @@ export class LibreListenerWallet {
 
     // 11. Setup PeerManager
     const ignoringHandler = IgnoringMessageHandler.constructor_new();
+    // Direct-to-peer alias delivery: LDK's broadcast_node_announcement never reaches a peer
+    // that didn't request a gossip sync (lnd doesn't, from us), so when an alias is configured
+    // we send our signed node_announcement through the custom-message slot instead.
+    this.nodeAnnouncer = this.config.alias
+      ? new NodeAnnouncer({
+          alias: this.config.alias,
+          getNodeSecret: () => this.keysManager!.get_node_secret_key(),
+          logger: this.logger
+            ? { info: (m) => this.logger!.info(m), error: (m) => this.logger!.error(m) }
+            : undefined,
+        })
+      : undefined;
     this.peerManager = PeerManager.constructor_new(
       this.channelManager.as_ChannelMessageHandler(),
       ignoringHandler.as_RoutingMessageHandler(),
       ignoringHandler.as_OnionMessageHandler(),
-      ignoringHandler.as_CustomMessageHandler(),
+      this.nodeAnnouncer
+        ? this.nodeAnnouncer.buildHandler()
+        : ignoringHandler.as_CustomMessageHandler(),
       Math.floor(Date.now() / 1000),
       getSecureRandomBytes(32),
       this.ldkLogger,
@@ -916,12 +935,29 @@ export class LibreListenerWallet {
     this.peerTickIntervalId = setInterval(() => {
       if (this.peerManager) {
         this.peerManager.timer_tick_occurred();
-        this.peerManager.process_events();
-        // Re-broadcast our node_announcement (~every 5 min) so the alias propagates
-        // once a channel is publicly announced. No-op until then.
-        if (this.config.alias && ++this.nodeAnnTickCount % 30 === 0) {
-          this.broadcastNodeAnnouncement();
+        // Direct alias delivery: announce to newly-seen peers, re-announce when a channel
+        // first becomes ready (lnd discards announcements for nodes not yet in its graph —
+        // its own private channel to us is what puts us there), and refresh everyone on the
+        // 5-min cadence below. queueTo before process_events so this tick flushes it.
+        if (this.nodeAnnouncer) {
+          const refreshAll = ++this.nodeAnnTickCount % 30 === 0;
+          if (refreshAll) this.announceState.clear();
+          const connected = (this.peerManager.list_peers() ?? []).map((p) =>
+            bytesToHex(p.get_counterparty_node_id())
+          );
+          const ready = new Set(
+            this.getChannels()
+              .filter((c) => c.isChannelReady)
+              .map((c) => c.counterpartyNodeId)
+          );
+          const { peers, next } = peersNeedingAnnouncement(this.announceState, connected, ready);
+          this.announceState = next;
+          for (const p of peers) this.nodeAnnouncer.queueTo(p);
+          // Keep the legacy gossip broadcast too — it reaches gossip-synced peers if a
+          // channel is ever publicly announced.
+          if (refreshAll) this.broadcastNodeAnnouncement();
         }
+        this.peerManager.process_events();
       }
     }, 10000);
 
@@ -1495,6 +1531,12 @@ export class LibreListenerWallet {
     this.peerTickIntervalId = undefined;
     this.eventTickIntervalId = undefined;
     this.gossipIntervalId = undefined;
+
+    // Drop any queued-but-unsent alias announcements and the per-peer announce state so a
+    // restart re-announces from scratch.
+    this.nodeAnnouncer?.clear();
+    this.nodeAnnouncer = undefined;
+    this.announceState.clear();
 
     // Stop auto-reconnect first: cancel pending redials and forget desired peers so the
     // disconnects below don't schedule new reconnect attempts.

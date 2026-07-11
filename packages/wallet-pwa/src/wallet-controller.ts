@@ -41,6 +41,7 @@ import { autoStartPlan, connectWithRetry } from "./core/auto-start";
 import { createWebSocketStreamProvider } from "./core/ws-provider";
 import { restoreBlockReason } from "./core/restore-guard";
 import { addressToScriptPubKey } from "./core/address-script";
+import { smoothUsable, type UsableSmootherState } from "./core/usable-smoothing";
 
 // Keys the SDK / app persist that this controller reasons about.
 const CHANNEL_MANAGER_KEY = "channel_manager";
@@ -127,6 +128,21 @@ export class WalletController {
     return next;
   }
 
+  // Save the node name without the stop-the-node guard: unlike endpoints/network it can't
+  // affect the running node — the alias is read once at start(), so it just applies next start.
+  async setNodeAlias(alias: string | undefined): Promise<void> {
+    const network = await this.activeNetwork();
+    const storage = this.storageForNetwork(network);
+    const current = parseConfig(await storage.getItem(CONFIG_KEY));
+    const trimmed = alias?.trim();
+    const next: AppConfig = {
+      ...current,
+      network: network as AppConfig["network"],
+      nodeAlias: trimmed || undefined,
+    };
+    await storage.setItem(CONFIG_KEY, serializeConfig(next));
+  }
+
   // Snapshot for the home/settings views.
   async getState(): Promise<{
     network: string;
@@ -160,8 +176,15 @@ export class WalletController {
       balance = this.wallet.getBalance();
       const chans = this.wallet.getChannels();
       channels = chans.length;
-      usableChannels = chans.filter((c) => c.isUsable).length;
+      // Smooth transient is_usable dips (monitor persist in flight, socket blip) so a healthy
+      // wallet doesn't flash "0/1" in the drawer / "channel opening" on the home pill.
+      const rawUsable = chans.filter((c) => c.isUsable).length;
+      const smoothed = smoothUsable(this.usableView, rawUsable, channels, Date.now());
+      this.usableView = smoothed.state;
+      usableChannels = smoothed.shown;
       peers = this.wallet.getConnectedPeers().length;
+    } else {
+      this.usableView = undefined; // stopped: next start smooths from a fresh reading
     }
     const closeRecs = await this.getChannelCloses().catch(() => [] as ChannelCloseRecord[]);
     const closes = { count: closeRecs.length, ...(closeRecs[0] ? { last: closeRecs[0] } : {}) };
@@ -220,7 +243,9 @@ export class WalletController {
         // crashes the SDK's EsploraSyncClient on an unconfigured wallet.
         esploraUrl: cfg.esploraUrl || defaultEsploraUrl(cfg.network),
         rapidGossipSyncUrl: cfg.rapidGossipSyncUrl || defaultRapidGossipSyncUrl(cfg.network),
-        alias: "Libre Listener Wallet",
+        // The user-set node name (BOLT7 alias) shown by peer nodes instead of "Unknown";
+        // delivered directly to connected peers by the SDK's node announcer.
+        alias: cfg.nodeAlias || "Libre Listener Wallet",
         // Allowlist genuinely-0-conf LSPs (Megalith) so their channels are instant. The SDK only
         // 0-conf-accepts a zeroconf-typed open, so a confirmed open still falls back safely.
         trustedZeroConfPeers: zeroConfTrustedPubkeys(),
@@ -256,6 +281,8 @@ export class WalletController {
   // Last node-start failure, captured at the source so the UI can show WHY the node isn't running —
   // otherwise an auto-start failure is a silent console log and looks like "it just didn't start".
   private lastStartError?: string;
+  // Smoothing state for the usable-channel count shown in the UI (see core/usable-smoothing.ts).
+  private usableView?: UsableSmootherState;
   // Auto-retry state for a NODE_ALREADY_RUNNING start (a stale single-node lock held by a
   // bfcache-frozen sibling page — see core/start-retry.ts).
   private nodeLockRetryTimer?: ReturnType<typeof setTimeout>;

@@ -17,7 +17,13 @@ declare const self: any;
 // it must never cache or intercept wallet network traffic (esplora / bridge / Drive / nostr).
 // v2: drops any shell cached by the pre-cleanRedirect SW (a redirected index.html could have been
 // stored, breaking iOS navigations — see core/sw-redirect.ts).
-const SHELL_CACHE = "libre-shell-v2";
+// v3: iOS stale-cache eviction. The demo-mode Drive-signin fixes only touched app JS, not this SW,
+// so its bytes never changed — iOS therefore never installed a new SW and kept serving the old
+// hashed bundle (cache-first) behind a stale index.html, so ?demo kept firing a real Google
+// sign-in on iOS. Bumping this constant changes the SW bytes, which forces iOS to install + activate
+// the new worker (purging every old cache below) and, together with the no-store navigation fetch,
+// breaks the loop so stuck clients pull the fixed bundle.
+const SHELL_CACHE = "libre-shell-v3";
 // Stable-named shell entries (relative to the SW scope, matching Vite's base:"./"). Hashed
 // main.js/style.css and the large WASM are cached lazily on first fetch instead of precached.
 const SHELL_PRECACHE = ["./", "./index.html", "./manifest.webmanifest"];
@@ -52,7 +58,10 @@ self.addEventListener("fetch", (event: any) => {
   // to the cached shell so the PWA still opens.
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req)
+      // no-store: bypass Safari's HTTP disk cache so we can't be handed a stale index.html that
+      // points back at an already-cached old bundle (the iOS ?demo-signin stale-loop). Offline this
+      // rejects and we fall back to the cached shell below.
+      fetch(req, { cache: "no-store" })
         .then(async (res: Response) => {
           // iOS Safari rejects a navigation served with a redirected response
           // ("Response served by service worker has redirections") — Cloudflare Pages

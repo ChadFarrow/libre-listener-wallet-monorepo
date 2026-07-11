@@ -40,10 +40,19 @@ if (isDemoMode()) {
 // drop + redial peers to collapse that window, and refresh the UI. Skipped in demo (no real peers).
 if (!isDemoMode()) {
   document.addEventListener("visibilitychange", () => {
-    if (!shouldRefreshOnVisible(document.visibilityState, controller.isRunning())) return;
-    void controller
-      .refreshPeerConnections()
-      .catch((e) => console.warn("[Resume] peer refresh failed:", (e as Error)?.message || e));
+    if (document.visibilityState !== "visible") return;
+    if (shouldRefreshOnVisible(document.visibilityState, controller.isRunning())) {
+      // Running: drop + redial peers in case iOS killed the bridge socket while frozen.
+      void controller
+        .refreshPeerConnections()
+        .catch((e) => console.warn("[Resume] peer refresh failed:", (e as Error)?.message || e));
+    } else {
+      // Stopped on a stale single-node lock (a frozen sibling page iOS just reaped on resume) —
+      // re-attempt the start instead of leaving a latched "already running" pill. No-op otherwise.
+      void controller
+        .retryStartIfLocked()
+        .catch((e) => console.warn("[Resume] start retry failed:", (e as Error)?.message || e));
+    }
     emitControllerEvent("state-changed");
   });
 }

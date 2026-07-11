@@ -1,4 +1,5 @@
 import "./style.css";
+import { installDiagTap } from "./core/diag-tap";
 import { WalletController } from "./wallet-controller";
 import { DemoController } from "./core/demo-controller";
 import { enterDemoFromUrl, isDemoMode, exitDemo, applyDemoManifest } from "./core/demo-mode";
@@ -18,6 +19,10 @@ import { initScreens } from "./screens";
 // Demo mode (?demo): a fake in-memory controller — no real node, storage, or network — so the
 // UI can be exercised end-to-end with zero setup. The badge + drawer exit make it unmistakable.
 enterDemoFromUrl(location.search, location.hash);
+
+// Always-on diagnostics: wrap console + lifecycle events BEFORE anything logs.
+// Local-only ring buffer; export lives in Developer settings. Spec: 2026-07-11-diag-log-design.md.
+installDiagTap();
 
 // The single LDK node owner (or its demo stand-in). Its emit callback fans out to any screen.
 const controller = isDemoMode()

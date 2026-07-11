@@ -1,5 +1,6 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
+import { deleteDiagDb } from "../core/diag-store";
 import { isDemoMode, demoState } from "../core/demo-mode";
 import { driveConnected, driveConfigured, driveSyncPending } from "../drive-integration";
 import { drawerBackupStatus } from "../core/drive-ui";
@@ -70,6 +71,7 @@ export function initDrawer(ctx: AppContext): void {
       if (!ok) return;
       try {
         await controller.resetWallet();
+        await deleteDiagDb(); // diagnostics DB is disposable — wipe it with everything else
         // Full clean slate: app-layer localStorage too, then reload — releasing the per-origin
         // node lock so the fresh onboarding can start a node without NODE_ALREADY_RUNNING.
         localStorage.clear();

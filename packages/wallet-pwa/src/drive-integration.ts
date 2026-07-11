@@ -61,6 +61,18 @@ export async function driveDeleteBackups(): Promise<string[]> {
   return deleteAllBackups();
 }
 
+// Pending-sync flag behind the drawer's "Synced ✓ / Syncing…" chip: set the moment a wallet
+// change arms the auto-sync debounce (main.ts), cleared only when an upload actually lands —
+// so a failed upload keeps reading "Syncing…" instead of falsely claiming "Synced".
+// In-memory + display-only; never gates a backup.
+let pendingSync = false;
+export function driveSyncPending(): boolean {
+  return pendingSync;
+}
+export function markDriveSyncPending(): void {
+  pendingSync = true;
+}
+
 // In-memory "this network's Drive backup is confirmed ours (this seed)" cache, so the ownership
 // check below (a Drive download + decrypt) runs once per wallet per session instead of on every
 // 5s-debounced auto-sync. Keyed by seed so a restore to a different wallet re-checks. Never
@@ -84,6 +96,9 @@ export async function driveBackupNow(controller: WalletController): Promise<{ ne
     confirmedOwnBackup.set(net, seedHex);
   }
   await uploadBackup(envelope, net);
+  // Backup landed — the drawer chip may flip "Syncing…" → "Synced ✓". Manual "Back up now"
+  // clears any pending auto-sync debt too (the uploaded state is the current state).
+  pendingSync = false;
   return { network: net };
 }
 

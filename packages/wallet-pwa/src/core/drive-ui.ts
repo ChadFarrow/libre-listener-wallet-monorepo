@@ -31,16 +31,22 @@ export function cloudBackupButtons(
 
 // The little status chip next to "Cloud backup" in the drawer, so the connected/syncing state is
 // visible at a glance without opening the screen. "configured" = a remembered Drive account (set up),
-// "connected" = a live token this session, "running" = node up (auto-sync only fires while running).
+// "connected" = a live token this session, "running" = node up (auto-sync only fires while running),
+// "pendingSync" = a wallet change is queued/uploading (or the last upload failed) — so an
+// up-to-date backup reads "Synced ✓" and only actual in-flight work reads "Syncing…".
 export function drawerBackupStatus(opts: {
   demo: boolean;
   configured: boolean;
   connected: boolean;
   running: boolean;
+  pendingSync: boolean;
 }): { label: string; cls: string } {
   if (opts.demo) return { label: opts.configured ? "Demo" : "", cls: "" };
   if (!opts.configured) return { label: "Off", cls: "warn" };
-  if (opts.connected) return opts.running ? { label: "Syncing ✓", cls: "ok" } : { label: "Connected", cls: "ok" };
+  if (opts.connected) {
+    if (!opts.running) return { label: "Connected", cls: "ok" };
+    return opts.pendingSync ? { label: "Syncing…", cls: "ok" } : { label: "Synced ✓", cls: "ok" };
+  }
   // Set up, but the in-memory token isn't live yet — match the Cloud-backup screen's "Reconnect
   // needed" rather than claiming a green "Connected" the screen would contradict.
   return { label: "Reconnect", cls: "warn" };

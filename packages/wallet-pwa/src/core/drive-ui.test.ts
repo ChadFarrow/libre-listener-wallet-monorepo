@@ -42,20 +42,23 @@ describe("cloudBackupButtons", () => {
 });
 
 describe("drawerBackupStatus", () => {
-  it("shows 'Syncing ✓' when connected with the node running", () => {
-    expect(drawerBackupStatus({ demo: false, configured: true, connected: true, running: true })).toEqual({ label: "Syncing ✓", cls: "ok" });
+  it("shows 'Synced ✓' when connected, running, and no upload is pending (up to date)", () => {
+    expect(drawerBackupStatus({ demo: false, configured: true, connected: true, running: true, pendingSync: false })).toEqual({ label: "Synced ✓", cls: "ok" });
+  });
+  it("shows 'Syncing…' while a wallet change is waiting to upload (or the last upload failed)", () => {
+    expect(drawerBackupStatus({ demo: false, configured: true, connected: true, running: true, pendingSync: true })).toEqual({ label: "Syncing…", cls: "ok" });
   });
   it("shows 'Connected' when the live token is up but the node is stopped", () => {
-    expect(drawerBackupStatus({ demo: false, configured: true, connected: true, running: false })).toEqual({ label: "Connected", cls: "ok" });
+    expect(drawerBackupStatus({ demo: false, configured: true, connected: true, running: false, pendingSync: false })).toEqual({ label: "Connected", cls: "ok" });
   });
   it("shows 'Reconnect' (warn) when set up but the token isn't live — matching the screen", () => {
-    expect(drawerBackupStatus({ demo: false, configured: true, connected: false, running: true })).toEqual({ label: "Reconnect", cls: "warn" });
+    expect(drawerBackupStatus({ demo: false, configured: true, connected: false, running: true, pendingSync: false })).toEqual({ label: "Reconnect", cls: "warn" });
   });
   it("shows 'Off' when Drive isn't set up", () => {
-    expect(drawerBackupStatus({ demo: false, configured: false, connected: false, running: true })).toEqual({ label: "Off", cls: "warn" });
+    expect(drawerBackupStatus({ demo: false, configured: false, connected: false, running: true, pendingSync: false })).toEqual({ label: "Off", cls: "warn" });
   });
   it("shows a demo marker in demo, never a real status", () => {
-    expect(drawerBackupStatus({ demo: true, configured: true, connected: false, running: true })).toEqual({ label: "Demo", cls: "" });
+    expect(drawerBackupStatus({ demo: true, configured: true, connected: false, running: true, pendingSync: false })).toEqual({ label: "Demo", cls: "" });
   });
 });
 

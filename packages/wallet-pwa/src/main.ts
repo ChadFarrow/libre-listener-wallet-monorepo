@@ -8,7 +8,7 @@ import { AUTO_START_KEY } from "./core/auto-start";
 import { registerServiceWorker, wireInstallPrompt } from "./register-sw";
 import { downloadBackupName } from "./core/backup-name";
 import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync } from "./core/backup-policy";
-import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail } from "./drive-integration";
+import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail, markDriveSyncPending } from "./drive-integration";
 import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { createKeepAlive } from "./core/keep-alive-audio";
@@ -120,9 +120,16 @@ onControllerEvent((event) => {
 let driveSyncTimer: ReturnType<typeof setTimeout> | undefined;
 onControllerEvent((event) => {
   if (!shouldDriveAutoSync({ event, demo: isDemoMode(), running: controller.isRunning(), driveConnected: driveConnected() })) return;
+  // Changes are now ahead of the Drive copy — flip the drawer chip to "Syncing…" until the
+  // upload lands (driveBackupNow clears the flag on success).
+  markDriveSyncPending();
   clearTimeout(driveSyncTimer);
   driveSyncTimer = setTimeout(() => {
-    void driveBackupNow(controller).catch((e) => console.warn("[DriveSync] auto-backup failed:", (e as Error)?.message || e));
+    void driveBackupNow(controller)
+      .catch((e) => console.warn("[DriveSync] auto-backup failed:", (e as Error)?.message || e))
+      // "drive-sync" (not "state-changed" — that would re-arm this debounce forever) so the
+      // drawer re-reads driveSyncPending() and flips Syncing… → Synced ✓.
+      .finally(() => emitControllerEvent("drive-sync"));
   }, 5000);
 });
 

@@ -1,7 +1,7 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
 import { isDemoMode, demoState } from "../core/demo-mode";
-import { driveConnected, driveConfigured } from "../drive-integration";
+import { driveConnected, driveConfigured, driveSyncPending } from "../drive-integration";
 import { drawerBackupStatus } from "../core/drive-ui";
 import { confirmModal } from "../ui/confirm-modal";
 import { showScreenFromDrawer } from "../ui/nav";
@@ -29,6 +29,7 @@ export function initDrawer(ctx: AppContext): void {
         configured: isDemoMode() ? demoState.driveConfigured : driveConfigured(),
         connected: isDemoMode() ? demoState.driveConfigured : driveConnected(),
         running: !!s.running,
+        pendingSync: isDemoMode() ? false : driveSyncPending(),
       });
       const bkVal = $("d-backup-val");
       bkVal.textContent = bk.label;

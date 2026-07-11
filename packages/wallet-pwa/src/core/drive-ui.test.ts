@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { driveButtonView, shouldArmGestureReconnect, backupMsgOnStateChange, NODE_STOPPED_BACKUP_MSG } from "./drive-ui";
+import { driveButtonView, cloudBackupButtons, shouldArmGestureReconnect, backupMsgOnStateChange, NODE_STOPPED_BACKUP_MSG } from "./drive-ui";
 
 describe("driveButtonView", () => {
   it("shows a success-styled 'Connected' button when connected", () => {
@@ -14,6 +14,29 @@ describe("driveButtonView", () => {
     expect(v.label).toBe("Connect Drive");
     expect(v.className).toContain("btn-secondary");
     expect(v.className).not.toContain("btn-success");
+  });
+});
+
+describe("cloudBackupButtons", () => {
+  it("when connected, 'Back up now' is primary and Reconnect drops to a quiet 'Switch Google account'", () => {
+    const v = cloudBackupButtons(true, true);
+    expect(v.backupNowPrimary).toBe(true);
+    expect(v.connect.primary).toBe(false);
+    expect(v.connect.label).toBe("Switch Google account");
+  });
+
+  it("when disconnected with a remembered account, the connect button is the primary 'Reconnect'", () => {
+    const v = cloudBackupButtons(false, true);
+    expect(v.connect.primary).toBe(true);
+    expect(v.connect.label).toBe("Reconnect");
+    expect(v.backupNowPrimary).toBe(false);
+  });
+
+  it("when never connected, the primary button is 'Connect Drive'", () => {
+    const v = cloudBackupButtons(false, false);
+    expect(v.connect.primary).toBe(true);
+    expect(v.connect.label).toBe("Connect Drive");
+    expect(v.backupNowPrimary).toBe(false);
   });
 });
 

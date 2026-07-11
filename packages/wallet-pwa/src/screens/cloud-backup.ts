@@ -12,6 +12,7 @@ import {
   driveBackupNow,
   driveDeleteBackups,
 } from "../drive-integration";
+import { cloudBackupButtons } from "../core/drive-ui";
 import { guardedClick } from "../core/ui-helpers";
 import { confirmModal } from "../ui/confirm-modal";
 import { registerScreen, currentScreen } from "../ui/nav";
@@ -37,21 +38,32 @@ export function initCloudBackupScreen(ctx: AppContext): void {
 
   function refresh(): void {
     if (isDemoMode()) {
+      const dv = cloudBackupButtons(demoState.driveConfigured, demoState.driveConfigured);
       $("backup-drive-state").textContent = demoState.driveConfigured ? "Connected (demo)" : "Not connected";
       $("backup-account").textContent = demoState.driveConfigured ? "demo@example.com" : "—";
-      $("drive-connect").textContent = demoState.driveConfigured ? "Reconnect" : "Connect Drive";
+      const cb = $("drive-connect");
+      cb.textContent = dv.connect.label;
+      cb.className = dv.connect.primary ? "btn-primary" : "btn-ghost";
+      ($("drive-backup-now") as HTMLElement).className = dv.backupNowPrimary ? "btn-primary" : "btn-ghost";
       show("auto-download-row", false);
       return;
     }
     const connected = driveConnected();
     const email = rememberedEmail();
     const state = $("backup-drive-state");
-    state.textContent = connected ? "Connected ✓" : email ? "Reconnect needed" : "Not connected";
+    state.textContent = connected ? "Connected ✓ · auto-syncing" : email ? "Reconnect needed" : "Not connected";
     state.style.color = connected ? "var(--accent)" : email ? "var(--warn)" : "";
     $("backup-account").textContent = email || "—";
-    $("drive-connect").textContent = connected ? "Reconnect" : "Connect Drive";
+    // When connected, "Back up now" is the primary (green) action and "Reconnect" drops to a quiet
+    // secondary — a big green Reconnect on an already-connected screen reads as "something's wrong".
+    const view = cloudBackupButtons(connected, !!email);
+    const connectBtn = $("drive-connect");
+    const backupNow = $("drive-backup-now") as HTMLButtonElement;
+    connectBtn.textContent = view.connect.label;
+    connectBtn.className = view.connect.primary ? "btn-primary" : "btn-ghost";
+    backupNow.className = view.backupNowPrimary ? "btn-primary" : "btn-ghost";
     ($("export") as HTMLButtonElement).disabled = !ctx.isRunning();
-    ($("drive-backup-now") as HTMLButtonElement).disabled = !ctx.isRunning();
+    backupNow.disabled = !ctx.isRunning();
     // Drive replaces the local auto-download once configured, and mobile never auto-downloads
     // (core/backup-policy.ts) — reflect the policy so the toggle can't promise what won't run.
     if (isMobileUa(navigator.userAgent)) {

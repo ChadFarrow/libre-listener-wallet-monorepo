@@ -44,6 +44,7 @@ export function initCloudBackupScreen(ctx: AppContext): void {
       const cb = $("drive-connect");
       cb.textContent = dv.connect.label;
       cb.className = dv.connect.primary ? "btn-primary" : "btn-ghost";
+      show(cb, dv.connect.show);
       ($("drive-backup-now") as HTMLElement).className = dv.backupNowPrimary ? "btn-primary" : "btn-ghost";
       show("auto-download-row", false);
       return;
@@ -61,6 +62,7 @@ export function initCloudBackupScreen(ctx: AppContext): void {
     const backupNow = $("drive-backup-now") as HTMLButtonElement;
     connectBtn.textContent = view.connect.label;
     connectBtn.className = view.connect.primary ? "btn-primary" : "btn-ghost";
+    show(connectBtn, view.connect.show); // hidden once connected — no "Switch account" clutter
     backupNow.className = view.backupNowPrimary ? "btn-primary" : "btn-ghost";
     ($("export") as HTMLButtonElement).disabled = !ctx.isRunning();
     backupNow.disabled = !ctx.isRunning();

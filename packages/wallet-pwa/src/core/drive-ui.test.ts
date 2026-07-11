@@ -18,15 +18,15 @@ describe("driveButtonView", () => {
 });
 
 describe("cloudBackupButtons", () => {
-  it("when connected, 'Back up now' is primary and Reconnect drops to a quiet 'Switch Google account'", () => {
+  it("when connected, 'Back up now' is primary and the connect/switch button is hidden", () => {
     const v = cloudBackupButtons(true, true);
     expect(v.backupNowPrimary).toBe(true);
-    expect(v.connect.primary).toBe(false);
-    expect(v.connect.label).toBe("Switch Google account");
+    expect(v.connect.show).toBe(false);
   });
 
   it("when disconnected with a remembered account, the connect button is the primary 'Reconnect'", () => {
     const v = cloudBackupButtons(false, true);
+    expect(v.connect.show).toBe(true);
     expect(v.connect.primary).toBe(true);
     expect(v.connect.label).toBe("Reconnect");
     expect(v.backupNowPrimary).toBe(false);
@@ -34,6 +34,7 @@ describe("cloudBackupButtons", () => {
 
   it("when never connected, the primary button is 'Connect Drive'", () => {
     const v = cloudBackupButtons(false, false);
+    expect(v.connect.show).toBe(true);
     expect(v.connect.primary).toBe(true);
     expect(v.connect.label).toBe("Connect Drive");
     expect(v.backupNowPrimary).toBe(false);
@@ -44,9 +45,11 @@ describe("drawerBackupStatus", () => {
   it("shows 'Syncing ✓' when connected with the node running", () => {
     expect(drawerBackupStatus({ demo: false, configured: true, connected: true, running: true })).toEqual({ label: "Syncing ✓", cls: "ok" });
   });
-  it("shows 'Connected' when set up but the node is stopped (or token not live yet)", () => {
+  it("shows 'Connected' when the live token is up but the node is stopped", () => {
     expect(drawerBackupStatus({ demo: false, configured: true, connected: true, running: false })).toEqual({ label: "Connected", cls: "ok" });
-    expect(drawerBackupStatus({ demo: false, configured: true, connected: false, running: true })).toEqual({ label: "Connected", cls: "ok" });
+  });
+  it("shows 'Reconnect' (warn) when set up but the token isn't live — matching the screen", () => {
+    expect(drawerBackupStatus({ demo: false, configured: true, connected: false, running: true })).toEqual({ label: "Reconnect", cls: "warn" });
   });
   it("shows 'Off' when Drive isn't set up", () => {
     expect(drawerBackupStatus({ demo: false, configured: false, connected: false, running: true })).toEqual({ label: "Off", cls: "warn" });

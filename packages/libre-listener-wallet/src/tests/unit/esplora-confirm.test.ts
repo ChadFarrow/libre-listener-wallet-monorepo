@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { planBuriedConfirmations, ldkTxidToDisplay } from "../../esplora-client";
+import { planBuriedConfirmations, ldkTxidToDisplay, forwardSyncBatchEnd, MAX_FORWARD_BLOCKS_PER_SYNC } from "../../esplora-client";
 
 describe("ldkTxidToDisplay", () => {
   it("reverses LDK little-endian txid bytes to esplora display hex", () => {
@@ -16,6 +16,27 @@ describe("ldkTxidToDisplay", () => {
 
 type Status = { confirmed: boolean; block_height?: number } | null;
 const from = (m: Record<string, Status>) => async (txid: string): Promise<Status> => m[txid] ?? null;
+
+describe("forwardSyncBatchEnd (long-freeze 429 throttle)", () => {
+  it("processes the whole gap in one tick when it's within the cap", () => {
+    expect(forwardSyncBatchEnd(100, 105, 20)).toBe(105);
+  });
+
+  it("caps a huge gap to a bounded batch (successive ticks finish the rest)", () => {
+    expect(forwardSyncBatchEnd(100, 1000, 20)).toBe(120);
+  });
+
+  it("never exceeds the tip, and is a no-op when already at tip", () => {
+    expect(forwardSyncBatchEnd(500, 500, 20)).toBe(500);
+    expect(forwardSyncBatchEnd(500, 500, 20)).toBeLessThanOrEqual(500);
+  });
+
+  it("advances by at most MAX_FORWARD_BLOCKS_PER_SYNC per tick", () => {
+    const best = 800_000;
+    const next = forwardSyncBatchEnd(best, best + 10_000, MAX_FORWARD_BLOCKS_PER_SYNC);
+    expect(next - best).toBe(MAX_FORWARD_BLOCKS_PER_SYNC);
+  });
+});
 
 describe("planBuriedConfirmations", () => {
   it("groups buried-confirmed txs by ascending height", async () => {

@@ -66,6 +66,17 @@ export async function planBuriedConfirmations(
     .map((height) => ({ height, txids: byHeight.get(height)! }));
 }
 
+// Cap how many blocks a single sync() advances forward. After a LONG freeze (an iOS PWA asleep for
+// hours/days), the block-by-block forward loop would otherwise fire hundreds of sequential esplora
+// requests on ONE resumed tick and trip a public-esplora 429 (documented gotcha). Capping the batch
+// spreads the catch-up across successive 30s ticks — every block is still processed in order (no
+// skipped confirmations or output spends), just throttled. Pure; returns the last height to process
+// this tick.
+export const MAX_FORWARD_BLOCKS_PER_SYNC = 20;
+export function forwardSyncBatchEnd(bestHeight: number, tipHeight: number, maxPerSync: number): number {
+  return Math.min(tipHeight, bestHeight + maxPerSync);
+}
+
 // LDK hands txids as raw bytes in internal (little-endian) order; esplora's REST API
 // addresses txs by display (big-endian) hex — the reverse. Convert before any esplora query.
 // (Do NOT use this when feeding a txid back to LDK, e.g. transaction_unconfirmed.)
@@ -332,9 +343,17 @@ export class EsploraSyncClient implements FilterInterface {
       }
     }
 
-    // 2. Sync forward block-by-block
+    // 2. Sync forward block-by-block — but only up to a bounded batch per tick, so a long freeze
+    // doesn't burst hundreds of esplora requests at once (429). Successive ticks finish the rest.
+    const batchEnd = forwardSyncBatchEnd(bestHeight, tipHeight, MAX_FORWARD_BLOCKS_PER_SYNC);
+    if (batchEnd < tipHeight) {
+      this.logger?.info(
+        `Chain catch-up throttled: syncing blocks ${bestHeight + 1}-${batchEnd} this tick, ` +
+          `${tipHeight - batchEnd} of ${tipHeight - bestHeight} remaining (continues next sync).`,
+      );
+    }
     let currentHeight = bestHeight + 1;
-    while (currentHeight <= tipHeight) {
+    while (currentHeight <= batchEnd) {
       const blockHashHex = await this.fetchBlockHash(currentHeight);
       const blockHeaderHex = await this.fetchBlockHeader(currentHeight);
       const blockHeader = hexToBytes(blockHeaderHex);

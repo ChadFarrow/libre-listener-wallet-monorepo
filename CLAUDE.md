@@ -8,6 +8,8 @@ The **Libre Listener Wallet** is a zero-infrastructure, non-custodial Bitcoin Li
 
 > Experimental: not production-ready. The README warns loss of funds is likely.
 
+**Repo meta:** MIT-licensed (`LICENSE`, added 2026-07-12). The root **`README.md` holds the canonical "Deployments & live URLs" table** — the single source of truth for what's live (PWA/Cloudflare, example-app/GitHub Pages, gateway + ws-bridge/Railway, extension + Android/GitHub Releases) and which workflow deploys each; **update that table when a deployment URL changes** rather than scattering URLs. It lists all 10 workspace packages grouped by role (apps / libraries / servers / dev-tools). GitHub description + topics are set on the repo.
+
 ## Read These First
 
 The `ai/` directory holds the authoritative contracts and design specs. When making non-trivial changes, read the relevant ones — they are the source of truth, not this file:

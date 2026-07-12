@@ -4,6 +4,8 @@ import {
   serializePushWakePrefs,
   shouldRefreshPushRegistration,
   effectivePushPrefs,
+  permissionDeniedMessage,
+  pushSubscribeFailedMessage,
   DEFAULT_PUSH_GATEWAY_URL,
   DEFAULT_PUSH_RELAY_URL,
   type PushWakePrefs,
@@ -52,6 +54,31 @@ describe("shouldRefreshPushRegistration", () => {
 
   it("skips when the node isn't running (can't sign the gateway auth)", () => {
     expect(shouldRefreshPushRegistration({ ...base, running: false })).toBe(false);
+  });
+});
+
+describe("permissionDeniedMessage", () => {
+  it("gives an unblock-in-settings path for 'denied' (re-prompt won't fire)", () => {
+    const msg = permissionDeniedMessage("denied");
+    expect(msg).toMatch(/site settings|Notifications/i);
+    expect(msg).toMatch(/Brave/);
+    // Must NOT tell a denied user to just 'tap Enable again' as the fix — that dead-ends.
+    expect(msg).not.toMatch(/prompt was dismissed/i);
+  });
+
+  it("tells a 'default' (dismissed) user to retry the prompt", () => {
+    const msg = permissionDeniedMessage("default");
+    expect(msg).toMatch(/dismissed/i);
+    expect(msg).toMatch(/again/i);
+  });
+});
+
+describe("pushSubscribeFailedMessage", () => {
+  it("names Brave's Google push-messaging setting", () => {
+    const msg = pushSubscribeFailedMessage();
+    expect(msg).toMatch(/Brave/);
+    expect(msg).toMatch(/Google/);
+    expect(msg).toMatch(/Background mode/);
   });
 });
 

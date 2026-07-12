@@ -10,6 +10,8 @@ import {
   serializePushWakePrefs,
   shouldRefreshPushRegistration,
   effectivePushPrefs,
+  permissionDeniedMessage,
+  pushSubscribeFailedMessage,
 } from "./core/push-registration";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
@@ -51,7 +53,7 @@ export async function enablePush(
   }
 
   const permission = await Notification.requestPermission();
-  if (permission !== "granted") throw new Error("Notification permission was denied.");
+  if (permission !== "granted") throw new Error(permissionDeniedMessage(permission));
 
   await subscribeAndRegister(ctx, reg, gatewayUrl, relayUrl);
 
@@ -82,10 +84,19 @@ async function subscribeAndRegister(
   if (!vapidRes.ok) throw new Error("Could not fetch the gateway's VAPID key.");
   const { publicKey } = await vapidRes.json();
 
-  const subscription = await reg.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
-  });
+  let subscription: PushSubscription;
+  try {
+    subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
+    });
+  } catch (e) {
+    // Permission was granted but the browser still won't hand out a push endpoint. On Android this
+    // is overwhelmingly Brave with Google push messaging disabled. Surface the fix, keep the raw
+    // cause in the console for diagnostics.
+    console.warn("[Push] pushManager.subscribe failed:", (e as Error)?.message || e);
+    throw new Error(pushSubscribeFailedMessage());
+  }
 
   // Prove control of walletPubkey, bound to this exact relay + endpoint, so the gateway won't
   // register someone else's endpoint under this wallet's (public) pubkey.

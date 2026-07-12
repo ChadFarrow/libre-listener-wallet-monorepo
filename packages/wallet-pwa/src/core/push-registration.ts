@@ -56,6 +56,40 @@ export function shouldRefreshPushRegistration(args: {
   return !!args.prefs && args.supported && args.permission === "granted" && args.running;
 }
 
+// Actionable guidance when Notification.requestPermission() doesn't return "granted". Two very
+// different cases hide behind "not granted", and the fix differs:
+//   - "denied": the browser has BLOCKED notifications for this app. A fresh requestPermission() will
+//     NOT re-prompt — the user must re-enable notifications in the browser's per-site settings. So
+//     telling them "try again" is a dead end; we tell them where to unblock it.
+//   - "default" (or anything else): the prompt was dismissed without a choice, so tapping Enable
+//     again WILL re-prompt.
+// Brave on Android is the common report: it can return "denied" quickly and, even once notifications
+// are allowed, needs "Use Google services for push messaging" ON (off by default) for a push
+// endpoint to exist — so we name that too.
+export function permissionDeniedMessage(permission: NotificationPermission): string {
+  if (permission === "denied") {
+    return (
+      "Notifications are blocked for this app. Turn them on in your browser's site settings " +
+      "(tap the address-bar site/lock icon → Permissions → Notifications), then tap Enable again. " +
+      "On Brave, also enable Settings → Privacy → “Use Google services for push messaging”. " +
+      "Or just turn on Background mode below — it keeps boosts settling without push."
+    );
+  }
+  return "The notification prompt was dismissed. Tap Enable offline wake again and choose Allow.";
+}
+
+// Guidance when notification permission WAS granted but the browser still refuses the push
+// subscription (pushManager.subscribe throws). On Android the dominant cause is Brave, which ships
+// with "Use Google services for push messaging" OFF — without it there is no push service to
+// subscribe to, so subscribe() fails even though notifications are allowed.
+export function pushSubscribeFailedMessage(): string {
+  return (
+    "Your browser wouldn't register for push. On Brave, open Settings → Privacy and enable " +
+    "“Use Google services for push messaging”, then try again (Android web push needs Google " +
+    "Play Services). Or turn on Background mode below to keep boosts settling without push."
+  );
+}
+
 // Resolve the prefs to refresh against. Stored prefs win. When none exist but the device still has a
 // live push subscription, it enabled wake on a build that predated these prefs — backfill the ship
 // defaults so the refresh (and thus the gateway registration) keeps working. Returns null when there

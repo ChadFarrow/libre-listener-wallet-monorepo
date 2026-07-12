@@ -4,6 +4,8 @@ import {
   serializePushWakePrefs,
   shouldRefreshPushRegistration,
   effectivePushPrefs,
+  permissionDeniedMessage,
+  pushSubscribeFailedMessage,
   DEFAULT_PUSH_GATEWAY_URL,
   DEFAULT_PUSH_RELAY_URL,
   type PushWakePrefs,
@@ -52,6 +54,37 @@ describe("shouldRefreshPushRegistration", () => {
 
   it("skips when the node isn't running (can't sign the gateway auth)", () => {
     expect(shouldRefreshPushRegistration({ ...base, running: false })).toBe(false);
+  });
+});
+
+describe("permissionDeniedMessage", () => {
+  it("gives an unblock-in-settings path for 'denied' (re-prompt won't fire)", () => {
+    const msg = permissionDeniedMessage("denied");
+    expect(msg).toMatch(/site settings|Notifications/i);
+    expect(msg).toMatch(/Brave/);
+    // Names the Play-Services dependency so GrapheneOS / de-Googled users aren't chasing a config
+    // that can't exist for them, and points at the push-free fallback.
+    expect(msg).toMatch(/Play/);
+    expect(msg).toMatch(/GrapheneOS|de-Googled/);
+    expect(msg).toMatch(/Background mode/);
+    // Must NOT tell a denied user to just 'tap Enable again' as the fix — that dead-ends.
+    expect(msg).not.toMatch(/prompt was dismissed/i);
+  });
+
+  it("tells a 'default' (dismissed) user to retry the prompt", () => {
+    const msg = permissionDeniedMessage("default");
+    expect(msg).toMatch(/dismissed/i);
+    expect(msg).toMatch(/again/i);
+  });
+});
+
+describe("pushSubscribeFailedMessage", () => {
+  it("names the Play-Services dependency, Brave's setting, and the push-free fallback", () => {
+    const msg = pushSubscribeFailedMessage();
+    expect(msg).toMatch(/Brave/);
+    expect(msg).toMatch(/Google Play Services/);
+    expect(msg).toMatch(/GrapheneOS|de-Googled/);
+    expect(msg).toMatch(/Background mode/);
   });
 });
 

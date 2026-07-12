@@ -56,6 +56,44 @@ export function shouldRefreshPushRegistration(args: {
   return !!args.prefs && args.supported && args.permission === "granted" && args.running;
 }
 
+// Actionable guidance when Notification.requestPermission() doesn't return "granted". Two very
+// different cases hide behind "not granted", and the fix differs:
+//   - "denied": the browser has BLOCKED notifications for this app. A fresh requestPermission() will
+//     NOT re-prompt — the user must re-enable notifications in the browser's per-site settings. So
+//     telling them "try again" is a dead end; we tell them where to unblock it.
+//   - "default" (or anything else): the prompt was dismissed without a choice, so tapping Enable
+//     again WILL re-prompt.
+// Brave on Android is the common report: it can return "denied" quickly and, even once notifications
+// are allowed, needs "Use Google services for push messaging" ON (off by default) for a push
+// endpoint to exist — so we name that too.
+export function permissionDeniedMessage(permission: NotificationPermission): string {
+  if (permission === "denied") {
+    return (
+      "Notifications are blocked for this app. Unblock them in the browser's site settings " +
+      "(tap the address-bar site/lock icon → Permissions → Notifications), then tap Enable again. " +
+      "Android web push also needs Google Play Services (Brave: Settings → Privacy → “Use Google " +
+      "services for push messaging”), so it can't work on GrapheneOS or de-Googled Android without " +
+      "sandboxed Play. Background mode below keeps boosts running without push."
+    );
+  }
+  return "The notification prompt was dismissed. Tap Enable offline wake again and choose Allow.";
+}
+
+// Guidance when notification permission WAS granted but the browser still refuses the push
+// subscription (pushManager.subscribe throws). Android web push is delivered through Google Play
+// Services (FCM), so subscribe() fails when that transport is missing or disabled: Brave ships with
+// "Use Google services for push messaging" OFF, and GrapheneOS / de-Googled Android has no Play
+// Services at all (sandboxed Play is an optional install). In the de-Googled case NO config fixes
+// it — Background mode (keep-alive) is the push-free path.
+export function pushSubscribeFailedMessage(): string {
+  return (
+    "Your browser wouldn't register for push. Android web push needs Google Play Services (Brave: " +
+    "enable Settings → Privacy → “Use Google services for push messaging”); it can't work on " +
+    "GrapheneOS or de-Googled Android without sandboxed Play. Turn on Background mode below to keep " +
+    "boosts settling without push."
+  );
+}
+
 // Resolve the prefs to refresh against. Stored prefs win. When none exist but the device still has a
 // live push subscription, it enabled wake on a build that predated these prefs — backfill the ship
 // defaults so the refresh (and thus the gateway registration) keeps working. Returns null when there

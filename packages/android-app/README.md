@@ -50,9 +50,12 @@ pnpm --filter @libre/android-app cap:add
 Then wire the foreground-service plugin into the generated project (the `native/` files are the
 canonical source — copy them in):
 
-1. Copy `native/ForegroundService.kt`, `native/LibreForegroundServicePlugin.kt`, and
-   `native/WebViewResidency.kt` into `android/app/src/main/java/com/v4vmusic/librelistener/` (the
-   package dir already exists — it holds the generated `MainActivity.java`).
+1. Copy `native/ForegroundService.kt`, `native/LibreForegroundServicePlugin.kt`,
+   `native/WebViewResidency.kt`, and `native/LibreBackupStoragePlugin.kt` into
+   `android/app/src/main/java/com/v4vmusic/librelistener/` (the package dir already exists — it holds
+   the generated `MainActivity.java`). The backup-storage plugin (SAF off-device backup) also needs
+   `implementation "androidx.documentfile:documentfile:1.0.1"` added to `android/app/build.gradle`'s
+   `dependencies { }`.
 2. **Enable Kotlin** — the Capacitor template generates a Java-only project, so the `.kt` sources
    won't compile until you:
    - add `classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21'` to the `buildscript`
@@ -68,6 +71,7 @@ canonical source — copy them in):
        @Override
        public void onCreate(Bundle savedInstanceState) {
            registerPlugin(LibreForegroundServicePlugin.class);
+           registerPlugin(LibreBackupStoragePlugin.class);
            super.onCreate(savedInstanceState);
        }
    }

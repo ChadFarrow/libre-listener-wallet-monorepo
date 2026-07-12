@@ -95,9 +95,13 @@ export function createKeepAlive(): KeepAlive {
       .play()
       .then(() => {
         active = true;
+        // Logged so a diagnostics export confirms the keep-alive is actually holding the page
+        // alive (vs. silently blocked/suspended) — the page-lifecycle stamps tell the rest.
+        console.log("[KeepAlive] playing inaudible tone — page kept alive while backgrounded");
       })
       .catch(() => {
         // Blocked by the autoplay policy (no gesture yet) — retry on the first user interaction.
+        console.log("[KeepAlive] play blocked (no user gesture yet) — will retry on first interaction");
         armGesture();
       });
   };
@@ -116,6 +120,7 @@ export function createKeepAlive(): KeepAlive {
       if (audio) {
         audio.pause();
         active = false;
+        console.log("[KeepAlive] stopped");
       }
     },
     isActive(): boolean {

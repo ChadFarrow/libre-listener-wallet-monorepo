@@ -123,6 +123,7 @@ import { VssMirror, deriveVssStoreId, VSS_STATE_BACKUP_KEY } from "./vss-mirror"
 import { VssDeviceLease } from "./vss-device-lease";
 import { CrossDeviceLockError } from "./cross-device-lease-error";
 import { reconnectDelayMs, shouldRedialNow } from "./peer-reconnect";
+import { pollUntil } from "./await-usable";
 import { normalizeBackupSecret } from "./seed-phrase";
 import { PaymentLogger, boostNoteFromCustomRecords, TX_KEY_PREFIX } from "./payment-log";
 import { CloseLogger, type ChannelCloseRecord } from "./close-log";
@@ -2462,6 +2463,24 @@ export class LibreListenerWallet {
 
   // --- Value-for-Value Keysend & Splits Implementation ---
 
+  // On resume-from-background the channel peer reconnects over ~0.5–2s; a payment attempted in that
+  // window fails RouteNotFound (no usable first-hop yet) and an NWC client sees it as failed. If we
+  // HAVE a channel but none is usable right now, wait briefly for the peer to come back before
+  // routing. Pure wait — nothing is sent, so no double-pay risk. Returns true once a channel is
+  // usable (or one already was), false on timeout (caller then attempts anyway, failing as before).
+  // A wallet with NO channels doesn't wait — there's nothing to wait for.
+  private async awaitUsableChannel(timeoutMs = 8000, pollMs = 250): Promise<boolean> {
+    const mgr = this.channelManager;
+    if (!mgr) return false;
+    if (mgr.list_channels().length === 0) return false;
+    const usable = () => mgr.list_channels().some((c: ChannelDetails) => c.get_is_usable());
+    const ok = await pollUntil(usable, { timeoutMs, pollMs });
+    if (!ok) {
+      this.logger?.warn(`[Pay] No usable channel after ${timeoutMs}ms — peer may be reconnecting; attempting anyway.`);
+    }
+    return ok;
+  }
+
   async sendKeysendPayment(options: {
     destinationPubkey: string;
     amountSats: number;
@@ -2475,6 +2494,9 @@ export class LibreListenerWallet {
 
     const { destinationPubkey, amountSats, customRecords, retryAttempts } = options;
     this.logger?.info(`[Keysend] Sending ${amountSats} sats to ${destinationPubkey}...`);
+    // Wait out a brief peer-reconnect window (resume-from-background) so the boost doesn't fail
+    // RouteNotFound. No-op when a channel is already usable.
+    await this.awaitUsableChannel();
 
     try {
       const destPubkeyBytes = hexToBytes(destinationPubkey);
@@ -2604,6 +2626,11 @@ export class LibreListenerWallet {
     const onionFields = tuple.get_b();
     const routeParams = tuple.get_c();
     const hashHex = bytesToHex(paymentHash);
+
+    // Wait out a brief peer-reconnect window (resume-from-background) so the pay doesn't fail
+    // RouteNotFound before the channel is usable again. No-op when a channel is already usable;
+    // nothing has been sent yet, so no double-pay risk.
+    await this.awaitUsableChannel();
 
     // Register the settlement waiter BEFORE send_payment so a fast Event_PaymentSent can't race it.
     const settled = new Promise<string>((resolve, reject) => {

@@ -12,6 +12,7 @@ import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync } from "./core/back
 import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail, markDriveSyncPending } from "./drive-integration";
 import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
+import { refreshPushRegistration } from "./web-push";
 import { createKeepAlive } from "./core/keep-alive-audio";
 import { shouldKeepAlive, keepAliveEnabled } from "./core/keep-alive";
 import { installNoZoom } from "./core/no-zoom";
@@ -87,6 +88,9 @@ if (!isDemoMode()) {
       void controller
         .refreshPeerConnections()
         .catch((e) => console.warn("[Resume] peer refresh failed:", (e as Error)?.message || e));
+      // iOS can also drop the push subscription while frozen — re-register it on resume so offline
+      // wake keeps working (silent + best-effort; no-op unless wake was enabled).
+      void refreshPushRegistration(ctx);
     } else {
       // Stopped on a stale single-node lock (a frozen sibling page iOS just reaped on resume) —
       // re-attempt the start instead of leaving a latched "already running" pill. No-op otherwise.
@@ -189,6 +193,22 @@ function armDriveGestureReconnect(): void {
   window.addEventListener("keydown", onFirstGesture);
 }
 armDriveGestureReconnect();
+
+// ---- Offline-wake push re-registration (iOS drops subscriptions silently) ----
+// iOS invalidates a PWA's push subscription over time; once the gateway 410s and deletes the stale
+// row, this device stops getting wake notifications until it re-registers. So re-register on every
+// node start-transition (covers cold launch + a manual restart). refreshPushRegistration is silent +
+// best-effort and no-ops unless the user actually enabled wake, so this is safe to fire each time.
+if (!isDemoMode()) {
+  let pushWasRunning = false;
+  onControllerEvent(() => {
+    const running = controller.isRunning();
+    if (running && !pushWasRunning) {
+      void refreshPushRegistration(ctx);
+    }
+    pushWasRunning = running;
+  });
+}
 
 // ---- boot ----
 registerServiceWorker();

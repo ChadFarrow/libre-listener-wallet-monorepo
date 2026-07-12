@@ -487,7 +487,14 @@ export class LibreListenerWallet {
     this.wasmUrl = options.wasmUrl;
     this.acquireRunLock = options.acquireRunLock;
     this.nwc = new NwcManager(this, { logger: this.logger, storage: this.storage, network: this.config.network });
-    this.paymentLog = new PaymentLogger({ storage: this.storage, logger: this.logger });
+    // onChange pushes a live UI refresh on every payment-history mutation (e.g. a freshly-noted
+    // NWC pending boost) — a display-only signal, so it notifies subscribers WITHOUT bumping the
+    // fund-critical state_version or scheduling a VSS mirror.
+    this.paymentLog = new PaymentLogger({
+      storage: this.storage,
+      logger: this.logger,
+      onChange: () => this.notifyStateListeners(),
+    });
     this.closeLog = new CloseLogger({ storage: this.storage, logger: this.logger });
   }
 
@@ -1282,6 +1289,16 @@ export class LibreListenerWallet {
     this.storage
       .setItem("state_version", String(this.stateVersion))
       .catch((err) => this.logger?.error(`Failed to persist state_version: ${err instanceof Error ? err.message : err}`));
+    this.notifyStateListeners();
+    // Mirror the new state to VSS (debounced, best-effort; no-op unless config.vssUrl is set).
+    this.vssMirror?.schedule();
+  }
+
+  // Fire the onStateChanged subscribers only — a lightweight UI-refresh signal WITHOUT bumping the
+  // fund-critical state_version or scheduling a VSS mirror. Used for display-only changes such as a
+  // payment-history mutation (a noted-pending NWC boost), which must reach the transaction list live
+  // but does not change channel state.
+  private notifyStateListeners(): void {
     for (const l of this.stateListeners) {
       try {
         l();
@@ -1289,8 +1306,6 @@ export class LibreListenerWallet {
         this.logger?.error(`onStateChanged listener error: ${e instanceof Error ? e.message : e}`);
       }
     }
-    // Mirror the new state to VSS (debounced, best-effort; no-op unless config.vssUrl is set).
-    this.vssMirror?.schedule();
   }
 
   /**

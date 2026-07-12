@@ -1,10 +1,10 @@
 import type { AppContext } from "../core/app-context";
-import { onControllerEvent } from "../core/events";
+import { onControllerEvent, emitControllerEvent } from "../core/events";
 import { statusPill, type StatusPillTarget } from "../core/status-pill";
 import { channelLifecycle } from "../core/channel-lifecycle";
 import { balanceDisplay } from "../core/balance-display";
 import { getSeedBackedUp } from "../core/onboarding";
-import { driveConfigured } from "../drive-integration";
+import { driveConfigured, driveConnected, ensureDriveConnected } from "../drive-integration";
 import { isDemoMode, demoState } from "../core/demo-mode";
 import { getUsdRate, satsToUsd } from "../core/fiat-rate";
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
@@ -18,6 +18,9 @@ const PILL_SCREEN: Record<StatusPillTarget, string | "drawer"> = {
   "get-channel": "screen-get-channel",
   channels: "screen-channels",
   "cloud-backup": "screen-backup",
+  // reconnect-drive is handled as an inline action (one-tap reconnect); the backup screen is the
+  // fallback destination if that reconnect can't complete.
+  "reconnect-drive": "screen-backup",
   recovery: "screen-recovery",
   sweep: "screen-sweep",
 };
@@ -79,6 +82,8 @@ export function initHomeScreen(ctx: AppContext): void {
         startError: s.startError,
         lifecycle,
         driveConfigured: isDemoMode() ? demoState.driveConfigured : driveConfigured(),
+        // Demo has no real token; treat a configured demo wallet as connected so the nag never shows.
+        driveConnected: isDemoMode() ? demoState.driveConfigured : driveConnected(),
         backedUp: isDemoMode() ? demoState.seedBackedUp : getSeedBackedUp(s.network),
       });
       const pillEl = $("status-pill");
@@ -98,10 +103,35 @@ export function initHomeScreen(ctx: AppContext): void {
 
   $("status-pill").addEventListener("click", () => {
     if (!pillTarget) return;
+    // One-tap Drive reconnect: THIS click is a trusted user gesture, which is exactly what the
+    // interactive OAuth popup needs to open on an installed iOS PWA (the silent, gesture-less
+    // reconnect can't). On success the auto-sync resumes; on failure fall back to the backup screen.
+    if (pillTarget === "reconnect-drive") {
+      void reconnectDrive();
+      return;
+    }
     const dest = PILL_SCREEN[pillTarget];
     if (dest === "drawer") openDrawer();
     else showScreen(dest);
   });
+
+  async function reconnectDrive(): Promise<void> {
+    const text = $("status-pill-text");
+    const prev = text.textContent;
+    text.textContent = "Reconnecting Google Drive…";
+    try {
+      await ensureDriveConnected();
+      // Connected — arm the auto-sync (main.ts's shouldDriveAutoSync fires on state-changed once a
+      // live token exists) and refresh so the nag clears.
+      emitControllerEvent("state-changed");
+      void refresh();
+    } catch (e) {
+      console.warn("[Home] Drive reconnect failed:", (e as Error)?.message || e);
+      text.textContent = prev;
+      // Couldn't complete inline (popup blocked/cancelled) — send them to the full backup screen.
+      showScreen("screen-backup");
+    }
+  }
 
   // ---- Background-mode chip (keep-alive audio) ----
   // The ONE place a user can reliably start keep-alive: this click is a trusted gesture, which is

@@ -40,18 +40,36 @@ export function driveConfigured(): boolean {
   return !!rememberedEmail();
 }
 
+// Coalesce concurrent connect attempts (e.g. the home pill's one-tap reconnect firing on the same
+// tap that arms the first-gesture silent reconnect). A SILENT request may piggyback on any attempt
+// in flight, but an INTERACTIVE one must NOT inherit a silent attempt — silent fails where
+// interactive succeeds (an iOS PWA blocks the silent popup), so letting the pill's interactive
+// reconnect await a failing silent attempt would defeat its whole purpose. Cleared when it settles.
+let connectInFlight: { interactive: boolean; p: Promise<void> } | null = null;
+
 export async function ensureDriveConnected(opts: { silent?: boolean } = {}): Promise<void> {
   // Demo mode must NEVER reach Google: this is the single choke point every Drive flow
   // (connect, backup-now, delete, restore) funnels through. Demo screens simulate their own
   // "connected" state; anything that lands here in demo gets a clean error, not a sign-in.
   if (isDemoMode()) throw new Error("Google Drive isn't available in demo mode.");
   if (isConnected()) return;
-  const clientId = googleClientId();
-  if (!clientId) throw new Error("No Google Client ID configured — set one under Backup → advanced.");
-  const hint = localStorage.getItem(HINT_KEY) || undefined;
-  await driveConnect(clientId, { silent: opts.silent, hint });
-  const email = getConnectedEmail();
-  if (email) localStorage.setItem(HINT_KEY, email);
+  const interactive = !opts.silent;
+  // Reuse an in-flight attempt only when it's at least as capable as this one.
+  if (connectInFlight && (!interactive || connectInFlight.interactive)) return connectInFlight.p;
+  const p = (async () => {
+    const clientId = googleClientId();
+    if (!clientId) throw new Error("No Google Client ID configured — set one under Backup → advanced.");
+    const hint = localStorage.getItem(HINT_KEY) || undefined;
+    await driveConnect(clientId, { silent: opts.silent, hint });
+    const email = getConnectedEmail();
+    if (email) localStorage.setItem(HINT_KEY, email);
+  })();
+  connectInFlight = { interactive, p };
+  try {
+    await p;
+  } finally {
+    if (connectInFlight?.p === p) connectInFlight = null;
+  }
 }
 
 // Remove every network's encrypted backup from Google Drive. Ensures a live token first (it's

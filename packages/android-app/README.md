@@ -263,7 +263,10 @@ The **A. renderer-residency** path below was built and it **works**. Two layers 
 **Remaining follow-ups (not blockers to the core result):**
 - Overlay permission needs an in-app prompt flow (the `requestOverlayPermission` plugin method exists;
   the web side should call it on first background-mode enable). Tested here by granting via adb.
-- Battery: an always-resident renderer + wake lock draws power; measure over a real day.
+- Battery: **the wake lock was dropped** (2026-07-12) — proven redundant: the 1x1 overlay alone kept
+  the node alive across 120s occluded + screen OFF (heartbeat 69/69, zero freezes) with NO
+  `PARTIAL_WAKE_LOCK` (`ForegroundService.USE_WAKE_LOCK = false`, easily flipped back). Still worth a
+  real all-day drain measurement of the always-resident renderer.
 - The "Failed to find route" splits are a **separate** routing/liquidity issue (single channel to one
   peer), not the background problem — fix with better-connected channel liquidity.
 - iOS is unaddressed (overlay/foreground-service are Android-only; iOS background NWC needs push).

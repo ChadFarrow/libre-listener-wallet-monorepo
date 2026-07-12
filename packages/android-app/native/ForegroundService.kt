@@ -27,7 +27,7 @@ class ForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
-        acquireWakeLock()
+        if (USE_WAKE_LOCK) acquireWakeLock()
         // START_STICKY: if the OS kills us under memory pressure, restart so the node keeps running.
         return START_STICKY
     }
@@ -78,6 +78,13 @@ class ForegroundService : Service() {
     companion object {
         const val CHANNEL_ID = "libre_node_keepalive"
         const val NOTIFICATION_ID = 4242
+
+        // The 1x1 overlay (WebViewResidency) alone keeps the node alive with the screen OFF — PROVEN
+        // on-device 2026-07-12: a 2s heartbeat held perfect cadence across 120s occluded + screen off
+        // with NO wake lock (69/69 beacons, zero freezes, visibilityState stayed "visible"). So the
+        // PARTIAL_WAKE_LOCK is redundant; dropping it saves battery (the CPU isn't force-held awake).
+        // Kept as an easily-flipped fallback in case some device/OS Dozes the renderer harder.
+        const val USE_WAKE_LOCK = false
 
         fun start(context: Context) {
             val intent = Intent(context, ForegroundService::class.java)

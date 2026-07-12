@@ -301,10 +301,14 @@ The **A. renderer-residency** path below was built and it **works**. Two layers 
 **Remaining follow-ups (not blockers to the core result):**
 - Overlay permission needs an in-app prompt flow (the `requestOverlayPermission` plugin method exists;
   the web side should call it on first background-mode enable). Tested here by granting via adb.
-- Battery: **the wake lock was dropped** (2026-07-12) — proven redundant: the 1x1 overlay alone kept
-  the node alive across 120s occluded + screen OFF (heartbeat 69/69, zero freezes) with NO
-  `PARTIAL_WAKE_LOCK` (`ForegroundService.USE_WAKE_LOCK = false`, easily flipped back). Still worth a
-  real all-day drain measurement of the always-resident renderer.
+- Battery / wake lock: **the wake lock is REQUIRED and back ON** (`ForegroundService.USE_WAKE_LOCK =
+  true`). It was briefly dropped (2026-07-12) as "proven redundant" — but that proof was run with the
+  phone **plugged in**, which **disables Doze**, so it never exercised the on-battery path. Unplugged,
+  Doze suspends the CPU (screen-off + idle) and stalls the relay socket even with the overlay holding
+  the renderer, so background boosts settled while charging but stalled on battery. The overlay and the
+  wake lock fix two DIFFERENT suspensions (renderer-occlusion vs. Doze CPU) and both are needed. Any
+  future battery-vs-reliability testing MUST be done **unplugged**. Real all-day drain measurement of
+  the always-resident renderer + wake lock is still an open follow-up.
 - The "Failed to find route" splits are a **separate** routing/liquidity issue (single channel to one
   peer), not the background problem — fix with better-connected channel liquidity.
 - iOS is unaddressed (overlay/foreground-service are Android-only; iOS background NWC needs push).

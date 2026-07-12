@@ -79,12 +79,19 @@ class ForegroundService : Service() {
         const val CHANNEL_ID = "libre_node_keepalive"
         const val NOTIFICATION_ID = 4242
 
-        // The 1x1 overlay (WebViewResidency) alone keeps the node alive with the screen OFF — PROVEN
-        // on-device 2026-07-12: a 2s heartbeat held perfect cadence across 120s occluded + screen off
-        // with NO wake lock (69/69 beacons, zero freezes, visibilityState stayed "visible"). So the
-        // PARTIAL_WAKE_LOCK is redundant; dropping it saves battery (the CPU isn't force-held awake).
-        // Kept as an easily-flipped fallback in case some device/OS Dozes the renderer harder.
-        const val USE_WAKE_LOCK = false
+        // Hold a PARTIAL_WAKE_LOCK so the node keeps processing the relay socket in the background.
+        //
+        // The overlay (WebViewResidency) and this wake lock fix TWO DIFFERENT suspensions, both needed:
+        //   - overlay   → stops Chromium freezing the OCCLUDED RENDERER (the node's event loop).
+        //   - wake lock → stops DOZE suspending the CPU when on battery + screen-off + idle (Doze
+        //                 defers wakeups and cuts the network, stalling the relay regardless of the
+        //                 renderer).
+        // The 2026-07-12 "overlay alone survives 120s screen-off" proof was run with the phone PLUGGED
+        // IN (required to capture the heartbeat over adb/logcat) — and charging DISABLES Doze, so that
+        // test never exercised the on-battery path. Dropping the wake lock then regressed background
+        // boosts on battery (settle while charging, stall unplugged). Keep it on: correctness for an
+        // always-on wallet outweighs the CPU-awake battery cost.
+        const val USE_WAKE_LOCK = true
 
         fun start(context: Context) {
             val intent = Intent(context, ForegroundService::class.java)

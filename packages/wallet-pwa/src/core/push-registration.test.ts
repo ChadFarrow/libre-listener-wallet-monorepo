@@ -62,6 +62,11 @@ describe("permissionDeniedMessage", () => {
     const msg = permissionDeniedMessage("denied");
     expect(msg).toMatch(/site settings|Notifications/i);
     expect(msg).toMatch(/Brave/);
+    // Names the Play-Services dependency so GrapheneOS / de-Googled users aren't chasing a config
+    // that can't exist for them, and points at the push-free fallback.
+    expect(msg).toMatch(/Play/);
+    expect(msg).toMatch(/GrapheneOS|de-Googled/);
+    expect(msg).toMatch(/Background mode/);
     // Must NOT tell a denied user to just 'tap Enable again' as the fix — that dead-ends.
     expect(msg).not.toMatch(/prompt was dismissed/i);
   });
@@ -74,10 +79,11 @@ describe("permissionDeniedMessage", () => {
 });
 
 describe("pushSubscribeFailedMessage", () => {
-  it("names Brave's Google push-messaging setting", () => {
+  it("names the Play-Services dependency, Brave's setting, and the push-free fallback", () => {
     const msg = pushSubscribeFailedMessage();
     expect(msg).toMatch(/Brave/);
-    expect(msg).toMatch(/Google/);
+    expect(msg).toMatch(/Google Play Services/);
+    expect(msg).toMatch(/GrapheneOS|de-Googled/);
     expect(msg).toMatch(/Background mode/);
   });
 });

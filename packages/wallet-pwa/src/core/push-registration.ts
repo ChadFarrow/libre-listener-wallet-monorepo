@@ -69,24 +69,28 @@ export function shouldRefreshPushRegistration(args: {
 export function permissionDeniedMessage(permission: NotificationPermission): string {
   if (permission === "denied") {
     return (
-      "Notifications are blocked for this app. Turn them on in your browser's site settings " +
+      "Notifications are blocked for this app. Unblock them in the browser's site settings " +
       "(tap the address-bar site/lock icon → Permissions → Notifications), then tap Enable again. " +
-      "On Brave, also enable Settings → Privacy → “Use Google services for push messaging”. " +
-      "Or just turn on Background mode below — it keeps boosts settling without push."
+      "Android web push also needs Google Play Services (Brave: Settings → Privacy → “Use Google " +
+      "services for push messaging”), so it can't work on GrapheneOS or de-Googled Android without " +
+      "sandboxed Play. Background mode below keeps boosts running without push."
     );
   }
   return "The notification prompt was dismissed. Tap Enable offline wake again and choose Allow.";
 }
 
 // Guidance when notification permission WAS granted but the browser still refuses the push
-// subscription (pushManager.subscribe throws). On Android the dominant cause is Brave, which ships
-// with "Use Google services for push messaging" OFF — without it there is no push service to
-// subscribe to, so subscribe() fails even though notifications are allowed.
+// subscription (pushManager.subscribe throws). Android web push is delivered through Google Play
+// Services (FCM), so subscribe() fails when that transport is missing or disabled: Brave ships with
+// "Use Google services for push messaging" OFF, and GrapheneOS / de-Googled Android has no Play
+// Services at all (sandboxed Play is an optional install). In the de-Googled case NO config fixes
+// it — Background mode (keep-alive) is the push-free path.
 export function pushSubscribeFailedMessage(): string {
   return (
-    "Your browser wouldn't register for push. On Brave, open Settings → Privacy and enable " +
-    "“Use Google services for push messaging”, then try again (Android web push needs Google " +
-    "Play Services). Or turn on Background mode below to keep boosts settling without push."
+    "Your browser wouldn't register for push. Android web push needs Google Play Services (Brave: " +
+    "enable Settings → Privacy → “Use Google services for push messaging”); it can't work on " +
+    "GrapheneOS or de-Googled Android without sandboxed Play. Turn on Background mode below to keep " +
+    "boosts settling without push."
   );
 }
 

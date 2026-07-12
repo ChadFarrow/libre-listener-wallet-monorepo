@@ -14,7 +14,13 @@ import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { createKeepAlive } from "./core/keep-alive-audio";
 import { shouldKeepAlive, keepAliveEnabled } from "./core/keep-alive";
+import { installNoZoom } from "./core/no-zoom";
 import { initScreens } from "./screens";
+
+// Native-app feel: block every zoom gesture (pinch, ctrl+wheel) the viewport meta can't cover.
+// The viewport meta + `touch-action: manipulation` (style.css) handle standalone PWAs and
+// double-tap; this covers the iOS Safari tab + desktop trackpad cases.
+installNoZoom();
 
 // Demo mode (?demo): a fake in-memory controller — no real node, storage, or network — so the
 // UI can be exercised end-to-end with zero setup. The badge + drawer exit make it unmistakable.

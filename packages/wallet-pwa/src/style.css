@@ -38,6 +38,9 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
   overscroll-behavior: none;
+  /* No zoom anywhere: `manipulation` disables double-tap-to-zoom while still allowing pans/scrolls
+     (the sheet drag + swipe-up). Pinch-zoom is off via the viewport meta + the no-zoom JS guard. */
+  touch-action: manipulation;
 }
 #app { position: fixed; inset: 0; background: var(--bg); overflow: hidden; }
 

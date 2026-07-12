@@ -3,6 +3,7 @@
 // this bundle, which also removes the "SW must bundle every dependency" hazard and shrinks it.
 import { cleanRedirect } from "./core/sw-redirect";
 import { shouldNotifyForPush } from "./core/push-notify";
+import { swDiag } from "./core/sw-diag";
 
 declare const self: any;
 
@@ -88,22 +89,28 @@ self.addEventListener("fetch", (event: any) => {
 });
 
 self.addEventListener("push", (event: any) => {
-  if (!event.data) return;
+  event.waitUntil(handlePush(event));
+});
+
+async function handlePush(event: any): Promise<void> {
+  if (!event.data) {
+    await swDiag("warn", "push received with no data payload");
+    return;
+  }
 
   let payload: any;
   try {
     payload = event.data.json();
   } catch (e: any) {
     console.error("[SW] Failed to parse push notification payload:", e.message || e);
+    await swDiag("error", `push payload parse failed: ${e?.message || e}`);
     return;
   }
 
   console.log("[SW] Push received:", payload);
-
-  event.waitUntil(
-    handlePushEvent(payload)
-  );
-});
+  await swDiag("log", `push received: ${JSON.stringify(payload)}`);
+  await handlePushEvent(payload);
+}
 
 async function handlePushEvent(_payload: { walletPubkey: string; relayUrl: string; eventId: string }) {
   // NOTIFICATION-ONLY WAKE. We deliberately DO NOT boot a Lightning node in the service worker.
@@ -128,15 +135,25 @@ async function handlePushEvent(_payload: { walletPubkey: string; relayUrl: strin
   const visibilityStates = clientsList.map((c: any) => c.visibilityState as string);
   if (!shouldNotifyForPush(visibilityStates)) {
     console.log("[SW] Visible PWA window — the foreground node handles the request. No notification.");
+    await swDiag("log", `visible window (${visibilityStates.join(",")}) — foreground node handles it, no notification`);
     return;
   }
 
   console.log("[SW] No visible window (closed or backgrounded) — showing tap-to-open notification.");
-  await self.registration.showNotification("Payment request", {
-    body: "A Lightning payment is waiting. Tap to open your wallet and complete it.",
-    tag: "nwc-payment-pending",
-    data: { url: self.registration.scope },
-  });
+  await swDiag("log", `no visible window (clients: [${visibilityStates.join(",") || "none"}]) — showing tap-to-open notification`);
+  try {
+    await self.registration.showNotification("Payment request", {
+      body: "A Lightning payment is waiting. Tap to open your wallet and complete it.",
+      tag: "nwc-payment-pending",
+      data: { url: self.registration.scope },
+    });
+    await swDiag("log", "notification shown");
+  } catch (e: any) {
+    // iOS revokes/penalises a subscription that receives a push without showing a notification, so
+    // record a failed showNotification explicitly — it's the fingerprint of "notifications stopped".
+    await swDiag("error", `showNotification failed: ${e?.message || e}`);
+    throw e;
+  }
 }
 
 self.addEventListener("notificationclick", (event: any) => {

@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { shouldKeepAlive, keepAliveEnabled, setKeepAliveEnabled, KEEP_ALIVE_KEY } from "./keep-alive";
+import {
+  shouldKeepAlive,
+  keepAliveEnabled,
+  setKeepAliveEnabled,
+  shouldSeedKeepAliveDefault,
+  KEEP_ALIVE_KEY,
+} from "./keep-alive";
 
 describe("shouldKeepAlive", () => {
   it("runs only when enabled AND running AND not demo", () => {
@@ -13,6 +19,21 @@ describe("shouldKeepAlive", () => {
   });
   it("never runs in demo (no real node)", () => {
     expect(shouldKeepAlive({ enabled: true, running: true, demo: true })).toBe(false);
+  });
+});
+
+describe("shouldSeedKeepAliveDefault", () => {
+  it("seeds ON when native and the toggle is unset", () => {
+    expect(shouldSeedKeepAliveDefault(true, null)).toBe(true);
+  });
+  it("does not re-enable when native and the user explicitly turned it off", () => {
+    expect(shouldSeedKeepAliveDefault(true, "0")).toBe(false);
+  });
+  it("does not touch an already-on native toggle", () => {
+    expect(shouldSeedKeepAliveDefault(true, "1")).toBe(false);
+  });
+  it("never seeds on the browser PWA (audio keep-alive stays opt-in)", () => {
+    expect(shouldSeedKeepAliveDefault(false, null)).toBe(false);
   });
 });
 

@@ -3,13 +3,14 @@ import { onControllerEvent, emitControllerEvent } from "../core/events";
 import { statusPill, type StatusPillTarget } from "../core/status-pill";
 import { channelLifecycle } from "../core/channel-lifecycle";
 import { balanceDisplay } from "../core/balance-display";
+import { loadLastBalanceSats, saveLastBalanceSats } from "../core/balance-cache";
 import { getSeedBackedUp } from "../core/onboarding";
 import { driveConfigured, driveConnected, ensureDriveConnected } from "../drive-integration";
 import { isDemoMode, demoState } from "../core/demo-mode";
 import { getUsdRate, satsToUsd } from "../core/fiat-rate";
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
 import { bgChipView } from "../core/bg-mode";
-import { ensureOverlayPermission } from "../core/native-bridge";
+import { ensureOverlayPermission, isNativeApp } from "../core/native-bridge";
 import { nativeBackupAvailable, backupFolderConfigured } from "../core/native-backup";
 import { registerScreen, showScreen, currentScreen, openDrawer } from "../ui/nav";
 import { $, show, fmtSats } from "./util";
@@ -31,19 +32,22 @@ export function initHomeScreen(ctx: AppContext): void {
   const controller = ctx.controller;
   let pillTarget: StatusPillTarget | null = null;
   // Last confirmed spendable, held across a background→resume so the balance doesn't flash 0 while
-  // the peer reconnects (see core/balance-display.ts). Survives backgrounding as a closure var.
-  let lastShownSats: number | null = null;
+  // the peer reconnects (see core/balance-display.ts). Seeded from the persisted cache so even a cold
+  // boot shows the real balance during the peer-connect window instead of the 0-flash.
+  let lastShownSats: number | null = loadLastBalanceSats();
 
   async function refresh(): Promise<void> {
     try {
       const s = await controller.getState();
       const bal = balanceDisplay({
         balance: s.balance,
-        channels: s.channels ?? 0,
-        usableChannels: s.usableChannels ?? 0,
+        hasChannelState: s.hasChannelState,
         lastShownSats,
       });
-      if (bal.sats != null && !bal.stale) lastShownSats = bal.sats; // remember only fresh readings
+      if (bal.sats != null && !bal.stale) {
+        lastShownSats = bal.sats; // remember only fresh readings
+        saveLastBalanceSats(bal.sats); // persist so a cold boot can seed from it (no 0-flash)
+      }
       $("balance-sats").textContent = bal.sats != null ? fmtSats(bal.sats) : "—";
       // Fiat line: best-effort, hidden whenever no rate is available (offline, API down).
       const fiatEl = $("balance-fiat");
@@ -158,6 +162,7 @@ export function initHomeScreen(ctx: AppContext): void {
       nodeRunning: controller.isRunning(),
       active: ctx.keepAlive.isActive(),
       enabled: keepAliveEnabled(),
+      native: isNativeApp(),
     });
     show(bgChip, v.visible);
     bgChip.classList.toggle("on", v.on);

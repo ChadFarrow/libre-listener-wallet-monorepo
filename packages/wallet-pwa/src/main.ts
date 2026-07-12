@@ -13,9 +13,15 @@ import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, 
 import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { refreshPushRegistration } from "./web-push";
-import { createKeepAliveForPlatform, isNativeApp } from "./core/native-bridge";
+import { createKeepAliveForPlatform, isNativeApp, ensureOverlayPermission } from "./core/native-bridge";
 import { nativeBackupAvailable, backupFolderConfigured, nativeBackupNow } from "./core/native-backup";
-import { shouldKeepAlive, keepAliveEnabled } from "./core/keep-alive";
+import {
+  shouldKeepAlive,
+  keepAliveEnabled,
+  setKeepAliveEnabled,
+  shouldSeedKeepAliveDefault,
+  KEEP_ALIVE_KEY,
+} from "./core/keep-alive";
 import { installNoZoom } from "./core/no-zoom";
 import { initScreens } from "./screens";
 
@@ -40,6 +46,14 @@ const controller = isDemoMode()
 // plain browser/PWA → the inaudible audio keep-alive. Same KeepAlive interface either way.
 const keepAlive = createKeepAliveForPlatform();
 const ctx: AppContext = { controller, isRunning: () => controller.isRunning(), keepAlive };
+
+// Native APK: keeping the node alive in the background (a foreground service, not battery-costly
+// audio) is the whole reason the wrapper exists, so default it ON. Seed the toggle once, before the
+// run-state wiring below reads it — an explicit user OFF is preserved, and the browser PWA/iOS never
+// seed (their audio keep-alive stays opt-in). Skipped in demo (no real node).
+if (!isDemoMode() && shouldSeedKeepAliveDefault(isNativeApp(), localStorage.getItem(KEEP_ALIVE_KEY))) {
+  setKeepAliveEnabled(true);
+}
 
 // ---- Background keep-alive (silent audio) ----
 // When enabled (developer toggle, default off) keep the node's page alive in the background so NWC
@@ -67,6 +81,20 @@ if (!isDemoMode()) {
     window.addEventListener("pointerdown", prime);
     window.addEventListener("keydown", prime);
   }
+}
+
+// Native APK: with background mode default-on, prompt for the "draw over other apps" overlay
+// permission once, when the node first comes up — that overlay is what keeps the WebView (and the
+// LDK node) alive while occluded, so boosts settle in the background. Self-limiting:
+// ensureOverlayPermission() no-ops once granted. No-op in a browser PWA (isNativeApp() false).
+if (isNativeApp() && !isDemoMode()) {
+  let overlayPrompted = false;
+  onControllerEvent(() => {
+    if (!overlayPrompted && controller.isRunning()) {
+      overlayPrompted = true;
+      void ensureOverlayPermission();
+    }
+  });
 }
 
 if (isDemoMode()) {
@@ -248,6 +276,25 @@ if (nativeBackupAvailable()) {
   if (drawerLabel) drawerLabel.textContent = "Local backup";
   const backupTitle = document.querySelector("#screen-backup .title");
   if (backupTitle) backupTitle.textContent = "Local backup";
+}
+
+// Native APK: the keep-alive control is a foreground service, not "iOS background audio" — relabel it
+// to "Background mode" so the copy is accurate. And remove the Web Push (offline wake) section: it
+// can't work in the APK (no FCM on GrapheneOS; the foreground service replaces it). The browser PWA
+// keeps both as-is (accurate/functional there). The home bg-mode chip is hidden via bgChipView.
+if (isNativeApp()) {
+  const kaDetails = document.getElementById("keepalive-toggle")?.closest("details");
+  if (kaDetails) {
+    const summary = kaDetails.querySelector("summary");
+    if (summary) summary.textContent = "Background mode";
+    const note = kaDetails.querySelector(".center-note");
+    if (note)
+      note.textContent =
+        "Keeps the node running in the background so boosts settle while the app is in the background.";
+    const label = document.getElementById("keepalive-toggle")?.parentElement;
+    if (label?.lastChild) label.lastChild.textContent = " Keep the node running in the background";
+  }
+  document.getElementById("push-enable")?.closest("details")?.remove();
 }
 
 // Auto-start (default on; a stateless non-created-here seed is a silent skip in the controller).

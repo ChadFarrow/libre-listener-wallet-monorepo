@@ -13,6 +13,9 @@ export interface BgChipState {
   active: boolean;
   // keep-alive is enabled in settings (persisted) but may not yet have been activated by a tap.
   enabled: boolean;
+  // The native Android APK: background mode is default-ON and the overlay permission is prompted
+  // automatically, so the chip's whole job (enable + grant) is done for the user — hide it there.
+  native?: boolean;
 }
 
 export interface BgChipView {
@@ -22,7 +25,7 @@ export interface BgChipView {
 }
 
 export function bgChipView(s: BgChipState): BgChipView {
-  if (s.demo || !s.nodeRunning) return { visible: false, on: false, text: "" };
+  if (s.native || s.demo || !s.nodeRunning) return { visible: false, on: false, text: "" };
   if (s.active) return { visible: true, on: true, text: "Background mode on" };
   return {
     visible: true,

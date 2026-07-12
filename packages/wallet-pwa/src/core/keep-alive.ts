@@ -20,6 +20,15 @@ export function keepAliveEnabled(): boolean {
   }
 }
 
+// Whether to seed keep-alive ON by default on first run. Native (the Android APK) keeps the node
+// alive via a foreground service, which is the whole reason the wrapper exists — so it should default
+// ON there, but only when the user hasn't set the toggle yet (`stored === null`); an explicit "0"
+// (user turned it off) is respected. The browser PWA/iOS default stays OFF (its audio keep-alive is
+// opt-in — it can claim Now Playing / interrupt other audio). Pure so main.ts's boot seed is tested.
+export function shouldSeedKeepAliveDefault(native: boolean, stored: string | null): boolean {
+  return native && stored === null;
+}
+
 export function setKeepAliveEnabled(on: boolean): void {
   try {
     localStorage.setItem(KEEP_ALIVE_KEY, on ? "1" : "0");

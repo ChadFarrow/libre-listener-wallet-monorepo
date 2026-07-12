@@ -34,4 +34,14 @@ describe("bgChipView", () => {
       text: "Background mode on",
     });
   });
+
+  it("is hidden on the native APK (background mode is default-on + auto-granted, chip redundant)", () => {
+    // Even in the would-be-visible states, native hides the chip entirely.
+    expect(bgChipView({ demo: false, nodeRunning: true, active: false, enabled: false, native: true }).visible).toBe(
+      false,
+    );
+    expect(bgChipView({ demo: false, nodeRunning: true, active: true, enabled: true, native: true }).visible).toBe(
+      false,
+    );
+  });
 });

@@ -20,6 +20,22 @@ export interface AppConfig {
 
 const CONFIG_KEY = "ldk_config";
 
+// The node alias has its OWN storage key (not inside device-specific `ldk_config`) so it rides the
+// encrypted backup (SDK BACKUP_DIRECT_KEYS) and syncs across devices — esplora/bridge/peer stay
+// local. Pre-sync installs stored the alias inside ldk_config; that legacy value is migrated to
+// this key on first read (see WalletController.getConfig). Value = the trimmed alias string.
+export const NODE_ALIAS_KEY = "node_alias";
+
+// Resolve the effective node alias, preferring the dedicated (backed-up, synced) key and falling
+// back to a legacy value that lived inside ldk_config on pre-sync installs. Pure — the caller owns
+// the migration write. Empty/whitespace collapses to undefined (no alias set).
+export function resolveNodeAlias(dedicated: string | null | undefined, legacy: string | null | undefined): string | undefined {
+  const d = typeof dedicated === "string" ? dedicated.trim() : "";
+  if (d) return d;
+  const l = typeof legacy === "string" ? legacy.trim() : "";
+  return l || undefined;
+}
+
 // Public Esplora endpoints per network (mainnet matches the PWA default). Used only when the user
 // hasn't configured one; they can still override it in Connection settings.
 export function defaultEsploraUrl(network: string): string {

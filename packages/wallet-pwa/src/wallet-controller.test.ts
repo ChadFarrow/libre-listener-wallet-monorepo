@@ -58,6 +58,46 @@ describe("WalletController.payLightning input validation (no node needed)", () =
   });
 });
 
+describe("WalletController node alias (node stopped) — cross-device sync", () => {
+  beforeEach(async () => {
+    await new IndexedDBStorageProvider(DB).clear();
+  });
+
+  it("saves the alias to the backed-up `node_alias` key so it rides the backup", async () => {
+    const controller = new WalletController();
+    await controller.setNodeAlias("  Chad's phone  ");
+    // BACKUP_DIRECT_KEYS includes node_alias, so exportState will carry exactly this value.
+    expect(await new IndexedDBStorageProvider(DB).getItem("node_alias")).toBe("Chad's phone");
+    expect((await controller.getConfig()).nodeAlias).toBe("Chad's phone");
+  });
+
+  it("clearing the alias removes the key (and can't reappear)", async () => {
+    const controller = new WalletController();
+    await controller.setNodeAlias("Node");
+    await controller.setNodeAlias("");
+    expect(await new IndexedDBStorageProvider(DB).getItem("node_alias")).toBeNull();
+    expect((await controller.getConfig()).nodeAlias).toBeUndefined();
+  });
+
+  it("migrates a pre-sync alias stored inside ldk_config into the dedicated backed-up key", async () => {
+    const storage = new IndexedDBStorageProvider(DB);
+    // Legacy install: alias lived inside device-specific ldk_config, never backed up.
+    await storage.setItem("ldk_config", JSON.stringify({ network: "mainnet", nodeAlias: "Legacy name", esploraUrl: "https://x/api" }));
+    const controller = new WalletController();
+    expect((await controller.getConfig()).nodeAlias).toBe("Legacy name");
+    // First read migrated it to the dedicated key — now exportState includes it.
+    expect(await storage.getItem("node_alias")).toBe("Legacy name");
+  });
+
+  it("a restored backup's node_alias surfaces on this device (fresh ldk_config)", async () => {
+    // Simulate importState having written the backed-up key onto a fresh device.
+    const storage = new IndexedDBStorageProvider(DB);
+    await storage.setItem("node_alias", "Restored name");
+    const controller = new WalletController();
+    expect((await controller.getConfig()).nodeAlias).toBe("Restored name");
+  });
+});
+
 describe("WalletController.listPeers (node stopped)", () => {
   beforeEach(async () => {
     await new IndexedDBStorageProvider(DB).clear();

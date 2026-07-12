@@ -18,6 +18,13 @@
 // peer (e.g. an LSP) stays offline until a manual reconnect. It's tiny (a few entries) and
 // additive: older backups simply lack the key (restore falls back to the configured peer).
 //
+// `node_alias` (the user-set BOLT7 node name shown to peers) is included for the same reason as
+// peer_addresses — NOT fund-safety, but so the name follows the wallet across devices. It's a
+// single small string set by the app; only the alias is backed up, never the device-specific
+// endpoints/peer that live alongside it in the app's ldk_config. Additive + backward-compatible:
+// older backups simply lack the key and restore fine (the golden envelopes below have no
+// node_alias and must keep decrypting).
+//
 // NOTE on payment history: the `tx_*` records (PaymentLogger, one per payment) are NOT listed
 // here — they're dynamic, unbounded keys, so like the channel-monitor keys they're ENUMERATED
 // and appended at export time (exportState, gated on storage.keys()). Additive + not fund-
@@ -29,4 +36,5 @@ export const BACKUP_DIRECT_KEYS = [
   "ldk_keys_index",
   "state_version",
   "peer_addresses",
+  "node_alias",
 ] as const;

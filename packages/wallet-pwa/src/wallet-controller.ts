@@ -33,7 +33,9 @@ import {
   defaultPeer,
   parsePeerString,
   formatPeerString,
+  resolveNodeAlias,
   CONFIG_KEY,
+  NODE_ALIAS_KEY,
   type AppConfig,
 } from "./core/wallet-config";
 import { resolveActiveNetwork } from "./core/sw-config";
@@ -114,7 +116,23 @@ export class WalletController {
     const storage = this.storageForNetwork(network);
     const cfg = parseConfig(await storage.getItem(CONFIG_KEY));
     cfg.network = network as AppConfig["network"];
+    cfg.nodeAlias = await this.resolveAndMigrateAlias(storage, cfg.nodeAlias);
     return cfg;
+  }
+
+  // The node alias lives in its own `node_alias` storage key (NOT device-specific ldk_config) so
+  // it's carried by the encrypted backup and syncs across devices. Prefer that key; for a pre-sync
+  // install whose alias still sits inside ldk_config, migrate it to the dedicated key on first read
+  // so exportState starts including it. Best-effort — a read must never fail on a migration write.
+  private async resolveAndMigrateAlias(storage: SecureStorageProvider, legacy: string | undefined): Promise<string | undefined> {
+    const dedicated = await storage.getItem(NODE_ALIAS_KEY);
+    const alias = resolveNodeAlias(dedicated, legacy);
+    if (alias && dedicated == null) {
+      await storage.setItem(NODE_ALIAS_KEY, alias).catch((e) => {
+        console.warn("[Config] could not migrate node alias to its backed-up key:", (e as Error)?.message || e);
+      });
+    }
+    return alias;
   }
 
   async setConfig(patch: Partial<AppConfig>): Promise<AppConfig> {
@@ -133,14 +151,17 @@ export class WalletController {
   async setNodeAlias(alias: string | undefined): Promise<void> {
     const network = await this.activeNetwork();
     const storage = this.storageForNetwork(network);
-    const current = parseConfig(await storage.getItem(CONFIG_KEY));
     const trimmed = alias?.trim();
-    const next: AppConfig = {
-      ...current,
-      network: network as AppConfig["network"],
-      nodeAlias: trimmed || undefined,
-    };
-    await storage.setItem(CONFIG_KEY, serializeConfig(next));
+    // The alias is authoritative in its own backed-up `node_alias` key (synced across devices).
+    if (trimmed) await storage.setItem(NODE_ALIAS_KEY, trimmed);
+    else await storage.removeItem(NODE_ALIAS_KEY);
+    // Strip any legacy copy from device-specific ldk_config so it can never shadow the dedicated
+    // key (e.g. reappear after the user clears the name). Only rewrite when it was actually there.
+    const current = parseConfig(await storage.getItem(CONFIG_KEY));
+    if (current.nodeAlias !== undefined) {
+      delete current.nodeAlias;
+      await storage.setItem(CONFIG_KEY, serializeConfig({ ...current, network: network as AppConfig["network"] }));
+    }
   }
 
   // Snapshot for the home/settings views.

@@ -50,9 +50,9 @@ pnpm --filter @libre/android-app cap:add
 Then wire the foreground-service plugin into the generated project (the `native/` files are the
 canonical source — copy them in):
 
-1. Copy `native/ForegroundService.kt` and `native/LibreForegroundServicePlugin.kt` into
-   `android/app/src/main/java/com/v4vmusic/librelistener/` (the package dir already exists — it holds
-   the generated `MainActivity.java`).
+1. Copy `native/ForegroundService.kt`, `native/LibreForegroundServicePlugin.kt`, and
+   `native/WebViewResidency.kt` into `android/app/src/main/java/com/v4vmusic/librelistener/` (the
+   package dir already exists — it holds the generated `MainActivity.java`).
 2. **Enable Kotlin** — the Capacitor template generates a Java-only project, so the `.kt` sources
    won't compile until you:
    - add `classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21'` to the `buildscript`
@@ -92,9 +92,12 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradl
 adb install -r packages/android-app/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-On first launch, grant the **notification** permission (Android 13+) and, if boosts still stall in the
-background, set the app's battery usage to **Unrestricted** (GrapheneOS: Settings → Apps → Libre
-Listener → App battery usage).
+On first launch, grant the **notification** permission (Android 13+) and the **"draw over other apps"**
+permission (Settings → Apps → Libre Listener → Display over other apps — required by the overlay
+residency that keeps the node alive in the background; the app also exposes a `requestOverlayPermission`
+plugin method to prompt for it). For testing you can grant it via adb:
+`adb shell appops set com.v4vmusic.librelistener SYSTEM_ALERT_WINDOW allow`. If boosts still stall in
+the background, set the app's battery usage to **Unrestricted**.
 
 ---
 
@@ -198,7 +201,36 @@ happening"**:
 own node, no network path to most V4V recipients), independent of the background question. Would fail
 the same on desktop; fix with better-connected channel liquidity.
 
-### Fix direction (open — the background problem is NOT yet solved)
+### RESOLVED (2026-07-12): overlay residency — background boosts settle occluded, screen on OR off
+
+The **A. renderer-residency** path below was built and it **works**. Two layers in the plugin
+(`LibreForegroundServicePlugin.kt` + `WebViewResidency.kt`):
+
+1. Pin the renderer priority to `IMPORTANT` / not-waived-when-hidden (bought ~60s of grace alone).
+2. On background, reparent the WebView into a **1x1 always-on-top overlay** (SYSTEM_ALERT_WINDOW) so it
+   stays *visible* to Chromium — `visibilityState` never goes hidden, so the freeze timer never starts.
+   On foreground, move it back into the activity (use `removeViewImmediate` — plain `removeView` is
+   async and leaves the WebView un-re-attached → blank UI; that was the one bug to fix).
+
+**Measured on-device (Pixel 6), all with the app occluded behind another app:**
+- **Renderer stays alive indefinitely.** An injected 2s heartbeat held a perfect 2000ms cadence with
+  `vis=visible` across **150s occluded (screen on)** AND **120s occluded + screen OFF** — vs. a total
+  freeze (≤60s, then dead for 7min) before the fix.
+- **Real boosts settle backgrounded.** With **stablekraft.app foreground** (Libre occluded), a real V4V
+  boost's `pay_keysend` AND `pay_invoice` splits **processed and settled in real time** (`[NWC] response
+  → pay_keysend/pay_invoice` + `PaymentSent … sent!`), while `get_balance`/`get_info` answered live too.
+  This is the exact burst that queued-and-timed-out before the fix.
+- **UI round-trips cleanly** (occlude → foreground renders normally) and **no crash** from the reparenting.
+
+**Remaining follow-ups (not blockers to the core result):**
+- Overlay permission needs an in-app prompt flow (the `requestOverlayPermission` plugin method exists;
+  the web side should call it on first background-mode enable). Tested here by granting via adb.
+- Battery: an always-resident renderer + wake lock draws power; measure over a real day.
+- The "Failed to find route" splits are a **separate** routing/liquidity issue (single channel to one
+  peer), not the background problem — fix with better-connected channel liquidity.
+- iOS is unaddressed (overlay/foreground-service are Android-only; iOS background NWC needs push).
+
+### Fix direction (superseded by the RESOLVED note above — kept for history)
 
 The requests **queue and drain on foreground rather than being lost**, so the problem is "wake/keep the
 renderer running while occluded," not data loss. Candidate fixes, roughly increasing effort/robustness:
@@ -228,8 +260,9 @@ actual keysend boost sent to the wallet's NWC while backgrounded/screen-off (nee
 ## Known risks / open validation (see the approved plan for the full list)
 
 - **R1 — hidden-WebView renderer throttling** stalls settlement even with the process alive.
-  **CONFIRMED on-device 2026-07-12** (see Phase 0 results above — 7m20s renderer freeze with the
-  foreground service up). Mitigation: Arm B (keep the WebView resident) and/or the native relay socket.
+  **CONFIRMED then RESOLVED on-device 2026-07-12** — the 1x1 overlay residency (WebViewResidency.kt)
+  keeps the WebView visible so the renderer never freezes; real boosts now settle occluded, screen on
+  or off (see the RESOLVED note above).
 - **Android 15 dataSync 6h/day cap** on foreground services — may force a `mediaPlayback`-typed service
   (backed by a real MediaSession using the wallet's existing keep-alive tone). Validate in Phase 3/4.
 - **Battery optimization** — GrapheneOS may throttle the service; request the ignore-battery-optimization

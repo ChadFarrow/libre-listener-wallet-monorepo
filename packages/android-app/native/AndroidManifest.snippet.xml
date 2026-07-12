@@ -9,6 +9,10 @@
 <uses-permission android:name="android.permission.WAKE_LOCK" />
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+<!-- Lets WebViewResidency.kt host the node's WebView in a 1x1 always-on-top overlay while the app is
+     occluded, so Chromium never freezes the renderer (the fix that makes background NWC actually work
+     — see README Phase 0). The user grants this once ("draw over other apps"). -->
+<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
 <!--
   2) Service: place inside <application>.

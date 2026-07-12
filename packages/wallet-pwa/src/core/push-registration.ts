@@ -10,6 +10,14 @@
 // localStorage key. UI preference — NOT a wallet-DB storage invariant (no storage-contract impact).
 export const PUSH_WAKE_PREFS_KEY = "libre_push_wake";
 
+// Defaults the offline-wake UI ships with (kept in sync BY HAND with the #push-gateway-url /
+// #push-relay-url input defaults in index.html). Used to backfill prefs for a legacy install that
+// enabled wake BEFORE these prefs existed — such a device has a live push subscription but no stored
+// prefs, so without this its launch refresh would silently no-op and its gateway registration would
+// go stale forever (the exact "wake stopped working" case seen in the field).
+export const DEFAULT_PUSH_GATEWAY_URL = "https://nwc-push-gateway-production.up.railway.app";
+export const DEFAULT_PUSH_RELAY_URL = "wss://relay.getalby.com/v1";
+
 export interface PushWakePrefs {
   // The endpoints the user actually enabled wake against, so a launch-time refresh reuses them
   // even if the developer-settings inputs later change or the defaults move.
@@ -46,4 +54,17 @@ export function shouldRefreshPushRegistration(args: {
   running: boolean;
 }): boolean {
   return !!args.prefs && args.supported && args.permission === "granted" && args.running;
+}
+
+// Resolve the prefs to refresh against. Stored prefs win. When none exist but the device still has a
+// live push subscription, it enabled wake on a build that predated these prefs — backfill the ship
+// defaults so the refresh (and thus the gateway registration) keeps working. Returns null when there
+// is nothing to act on (never enabled, or the subscription is already gone — nothing to detect).
+export function effectivePushPrefs(args: {
+  stored: PushWakePrefs | null;
+  hasLiveSubscription: boolean;
+}): PushWakePrefs | null {
+  if (args.stored) return args.stored;
+  if (args.hasLiveSubscription) return { gatewayUrl: DEFAULT_PUSH_GATEWAY_URL, relayUrl: DEFAULT_PUSH_RELAY_URL };
+  return null;
 }

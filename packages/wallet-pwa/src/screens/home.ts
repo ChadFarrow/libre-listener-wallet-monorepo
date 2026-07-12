@@ -7,6 +7,8 @@ import { getSeedBackedUp } from "../core/onboarding";
 import { driveConfigured } from "../drive-integration";
 import { isDemoMode, demoState } from "../core/demo-mode";
 import { getUsdRate, satsToUsd } from "../core/fiat-rate";
+import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
+import { bgChipView } from "../core/bg-mode";
 import { registerScreen, showScreen, currentScreen, openDrawer } from "../ui/nav";
 import { $, show, fmtSats } from "./util";
 
@@ -88,6 +90,7 @@ export function initHomeScreen(ctx: AppContext): void {
       } else {
         pillTarget = null;
       }
+      refreshBgChip();
     } catch (e) {
       console.warn("[Home] refresh failed:", (e as Error)?.message || e);
     }
@@ -98,6 +101,37 @@ export function initHomeScreen(ctx: AppContext): void {
     const dest = PILL_SCREEN[pillTarget];
     if (dest === "drawer") openDrawer();
     else showScreen(dest);
+  });
+
+  // ---- Background-mode chip (keep-alive audio) ----
+  // The ONE place a user can reliably start keep-alive: this click is a trusted gesture, which is
+  // exactly what iOS requires to begin audio playback. Once playing, the node stays alive while the
+  // app is backgrounded, so boosts sent from another app settle without switching back here. Best-
+  // effort — iOS can still suspend under memory pressure — but it's the only path to hands-off boosts.
+  const bgChip = $("bg-mode-chip");
+  function refreshBgChip(): void {
+    const v = bgChipView({
+      demo: isDemoMode(),
+      nodeRunning: controller.isRunning(),
+      active: ctx.keepAlive.isActive(),
+      enabled: keepAliveEnabled(),
+    });
+    show(bgChip, v.visible);
+    bgChip.classList.toggle("on", v.on);
+    if (v.visible) $("bg-mode-text").textContent = v.text;
+  }
+  bgChip.addEventListener("click", () => {
+    if (ctx.keepAlive.isActive()) {
+      setKeepAliveEnabled(false);
+      ctx.keepAlive.stop();
+    } else {
+      setKeepAliveEnabled(true);
+      if (controller.isRunning()) ctx.keepAlive.start(); // mark wanted (play may be gesture-gated)
+      ctx.keepAlive.unlock(); // within THIS click → satisfies the iOS autoplay gate, starts audio
+    }
+    refreshBgChip();
+    // play() resolves a tick later; re-read once it has so the chip reflects the real state.
+    setTimeout(refreshBgChip, 400);
   });
 
   $("btn-receive").addEventListener("click", () => showScreen("screen-receive"));

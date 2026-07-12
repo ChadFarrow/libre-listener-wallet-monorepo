@@ -114,6 +114,21 @@ body {
 .status-pill.info { color: var(--text-dim); }
 .status-pill.info .pill-dot { background: var(--accent); }
 
+/* Background-mode chip: one deliberate tap starts the keep-alive audio (iOS requires a gesture),
+   after which the node stays alive while backgrounded so boosts settle without reopening the app. */
+.bg-chip {
+  margin-top: 10px;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 14px; border-radius: 999px;
+  background: var(--panel); border: 1px solid rgba(34, 196, 94, 0.35);
+  font-size: 13px; font-weight: 600; color: var(--accent);
+  cursor: pointer; font-family: inherit; max-width: 100%;
+}
+.bg-chip svg { width: 15px; height: 15px; flex-shrink: 0; }
+.bg-chip.on { color: var(--accent); border-color: var(--accent); background: rgba(34, 196, 94, 0.12); }
+.bg-chip:not(.on) { color: var(--text-dim); border-color: var(--line); }
+.bg-chip:not(.on) svg { color: var(--accent); }
+
 .home-bottom { padding: 0 18px calc(20px + var(--safe-bottom)); }
 .chevron-hint {
   display: flex; justify-content: center; padding: 10px 0 16px;

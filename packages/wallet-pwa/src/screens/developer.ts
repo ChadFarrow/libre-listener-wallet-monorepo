@@ -4,6 +4,8 @@ import { googleClientId, setGoogleClientId } from "../drive-integration";
 import { enablePush, disablePush, isPushEnabled, pushSupported } from "../web-push";
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
 import { diagExportText, diagStats, diagClear } from "../core/diag-tap";
+import { isNativeApp } from "../core/native-bridge";
+import { nativeSaveText } from "../core/native-share";
 import { registerScreen } from "../ui/nav";
 import { $, setMsg } from "./util";
 
@@ -121,6 +123,21 @@ export function initDeveloperScreen(ctx: AppContext): void {
         const iso = new Date().toISOString();
         const stamp = `${iso.slice(0, 10)}-${iso.slice(11, 13)}${iso.slice(14, 16)}`;
         const name = `libre-diag-${network || "mainnet"}-${stamp}.txt`;
+        // Inside the native Android wrapper the browser export paths below don't work — a WebView has
+        // no blob download handler and no Web Share file support — so route through the native SAF
+        // "Save document" dialog. If that plugin is missing (an APK built before it shipped), fall back
+        // to copying the log to the clipboard so export is never a dead button in the wrapper.
+        if (isNativeApp()) {
+          if (await nativeSaveText(name, text)) {
+            setMsg("diag-msg", "Saved.", "ok");
+            return;
+          }
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            setMsg("diag-msg", "Copied to clipboard — paste into a note or email.", "ok");
+            return;
+          }
+        }
         const file = new File([text], name, { type: "text/plain" });
         const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean };
         if (nav.share && nav.canShare?.({ files: [file] })) {

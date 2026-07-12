@@ -82,6 +82,31 @@ describe("diagnostics card", () => {
     vi.unstubAllGlobals();
   });
 
+  it("export in the native wrapper routes through the SAF plugin, not a blob download", async () => {
+    console.log("[DiagTest] native marker");
+    await diagFlushNow();
+
+    const saveText = vi.fn().mockResolvedValue(undefined);
+    const createObjectURL = vi.fn(() => "blob:diag");
+    vi.stubGlobal("Capacitor", { isNativePlatform: () => true, Plugins: { LibreDiagnostics: { saveText } } });
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL: vi.fn() });
+
+    initScreens(makeCtx());
+    await flushDom();
+    showScreen("screen-dev");
+    await flushDom();
+
+    document.getElementById("diag-export")!.dispatchEvent(new Event("click"));
+    await vi.waitFor(() => expect(saveText).toHaveBeenCalledTimes(1));
+
+    // The native plugin got the log text and the browser blob path was NOT used.
+    expect(saveText.mock.calls[0][0].contents).toContain("[DiagTest] native marker");
+    expect(saveText.mock.calls[0][0].name).toMatch(/^libre-diag-mainnet-\d{4}-\d{2}-\d{2}-\d{4}\.txt$/);
+    expect(createObjectURL).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
   it("clear empties the buffer and updates the readout", async () => {
     console.log("[DiagTest] to be cleared");
     await diagFlushNow();

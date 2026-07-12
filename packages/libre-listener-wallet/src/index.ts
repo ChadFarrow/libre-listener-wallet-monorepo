@@ -1814,6 +1814,20 @@ export class LibreListenerWallet {
     this.paymentLog.notePending(rec);
   }
 
+  // Finalize a noted-pending payment as failed. Needed for a PRE-SEND failure (e.g. RouteNotFound):
+  // nothing left the node, so NO LDK event fires, and a record left pending would strand forever in
+  // history (the "stuck PENDING" bug). The NWC pay_invoice path calls this on send_payment error.
+  recordFailedPayment(paymentHashHex: string): void {
+    this.paymentLog.recordFailed(paymentHashHex);
+  }
+
+  // Public wrapper so the NWC pay paths (which call send_payment directly, not payBolt11) can wait
+  // out a peer-reconnect window before routing — the same pre-flight wait sendKeysendPayment/
+  // payBolt11 use. Resolves true once a channel is usable (or already was), false on timeout.
+  async waitForUsableChannel(): Promise<boolean> {
+    return this.awaitUsableChannel();
+  }
+
   getBalance(): { spendableSat: number; receivableSat: number } {
     return sumBalance(this.getChannels());
   }

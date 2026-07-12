@@ -94,15 +94,65 @@ describe("createNativeKeepAlive", () => {
     expect(ka.isActive()).toBe(true); // unlock didn't disturb state
   });
 
-  it("swallows an async start() rejection (fire-and-forget) without throwing", async () => {
+  it("is transition-gated: repeated start()/stop() (one per controller event) cross the bridge once", () => {
+    const calls: string[] = [];
     const svc: NativeForegroundService = {
-      start: () => Promise.reject(new Error("service denied")),
+      start: () => {
+        calls.push("start");
+      },
+      stop: () => {
+        calls.push("stop");
+      },
+    };
+    const ka = createNativeKeepAlive(svc);
+    ka.start();
+    ka.start();
+    ka.start();
+    expect(calls).toEqual(["start"]);
+    ka.stop();
+    ka.stop();
+    expect(calls).toEqual(["start", "stop"]);
+    ka.start();
+    expect(calls).toEqual(["start", "stop", "start"]);
+  });
+
+  it("first stop() still crosses the bridge (cleans up a service orphaned by a sticky restart)", () => {
+    const calls: string[] = [];
+    const svc: NativeForegroundService = {
+      start: () => {},
+      stop: () => {
+        calls.push("stop");
+      },
+    };
+    const ka = createNativeKeepAlive(svc);
+    ka.stop(); // never started in this page's lifetime — still send the stop
+    expect(calls).toEqual(["stop"]);
+  });
+
+  it("clears active when start() rejects, then retries on the next start()", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let fail = true;
+    const calls: string[] = [];
+    const svc: NativeForegroundService = {
+      start: () => {
+        calls.push("start");
+        return fail ? Promise.reject(new Error("service denied")) : Promise.resolve();
+      },
       stop: () => {},
     };
     const ka = createNativeKeepAlive(svc);
     expect(() => ka.start()).not.toThrow();
-    expect(ka.isActive()).toBe(true); // we optimistically mark active; the warn is logged async
-    await Promise.resolve();
+    expect(ka.isActive()).toBe(true); // optimistic until the bridge answers
+    // The rejection must clear active — otherwise the chip claims "Background mode on" forever
+    // while no foreground service is actually holding the process.
+    await vi.waitFor(() => expect(ka.isActive()).toBe(false));
+    expect(warn).toHaveBeenCalledOnce();
+
+    fail = false;
+    ka.start(); // next controller event retries (the failed attempt un-latched the transition gate)
+    expect(calls).toEqual(["start", "start"]);
+    await vi.waitFor(() => expect(ka.isActive()).toBe(true));
+    warn.mockRestore();
   });
 });
 

@@ -56,15 +56,40 @@ export function getNativeForegroundService(): NativeForegroundService | null {
 // needsActivation() is always false (native never needs a user tap to hold the page alive).
 export function createNativeKeepAlive(service: NativeForegroundService): KeepAlive {
   let active = false;
+  // start()/stop() are called on EVERY controller event (main.ts) — state-changed fires ~1/s under
+  // payment load — so only cross the plugin bridge (and log) on a real transition, or a streaming
+  // session floods the diagnostics ring buffer with keep-alive lines.
+  let requested: "start" | "stop" | null = null;
+  let loggedFailed = false; // warn once per failure episode, not on every controller-event retry
   return {
     start(): void {
+      if (requested === "start") return;
+      requested = "start";
       active = true;
-      void Promise.resolve(service.start()).catch((e) =>
-        console.warn("[KeepAlive/native] foreground service start failed:", (e as Error)?.message || e),
-      );
-      console.log("[KeepAlive/native] foreground service requested — node kept alive in the background");
+      void Promise.resolve(service.start())
+        .then(() => {
+          if (requested !== "start") return; // stopped meanwhile — don't log a stale "running"
+          loggedFailed = false;
+          console.log("[KeepAlive/native] foreground service running — node kept alive in the background");
+        })
+        .catch((e) => {
+          // A failed start must not report "background mode on": clear active so the home chip
+          // tells the truth, and clear requested so the next controller event retries.
+          if (requested === "start") {
+            requested = null;
+            active = false;
+          }
+          if (!loggedFailed) {
+            loggedFailed = true;
+            console.warn("[KeepAlive/native] foreground service start failed:", (e as Error)?.message || e);
+          }
+        });
     },
     stop(): void {
+      // Deliberately NOT gated on `active`: the first stop() (requested === null) still crosses the
+      // bridge, so a service orphaned by a START_STICKY restart of a killed process gets cleaned up.
+      if (requested === "stop") return;
+      requested = "stop";
       active = false;
       void Promise.resolve(service.stop()).catch(() => {
         /* best-effort stop */

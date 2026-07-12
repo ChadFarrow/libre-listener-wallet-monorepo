@@ -1,0 +1,208 @@
+name: Release Android APK
+
+# Builds (and, when signing secrets are present, signs) the Capacitor Android APK entirely in CI, so a
+# release no longer needs a Mac. It scripts every manual step from packages/android-app/README.md:
+# build the PWA → generate the native android/ project → wire in the canonical native/ sources
+# (wire-native.mjs) → assemble → sign with apksigner.
+#
+# - Push a tag `android-vX.Y.Z` (or `-preview`/`-rc`) → creates a GitHub Release with the signed APK.
+# - Manual run (workflow_dispatch) → builds and uploads the APK as a run artifact (no Release);
+#   signed if secrets are set, otherwise an unsigned APK for smoke-testing.
+#
+# Repo Variables used (Settings → Secrets and variables → Actions → Variables), same as the PWA deploys:
+#   VITE_MAINNET_PEER, VITE_MAINNET_BRIDGE, VITE_MAINNET_RGS, VITE_GOOGLE_CLIENT_ID
+# Repo Secrets used for signing (required for a tag release so installs stay signature-compatible):
+#   ANDROID_KEYSTORE_BASE64   base64 of your release keystore  (base64 -w0 my.keystore | pbcopy)
+#   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Use the SAME keystore that signed the existing releases — a different key can't update in place
+# (Android requires the same signer; a mismatch forces an uninstall, wiping the wallet).
+
+on:
+  push:
+    tags: ["android-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version name for a manual build (e.g. 0.1.2-dev). Ignored for tag pushes."
+        required: false
+        default: "0.0.0-dev"
+
+permissions:
+  contents: read
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create releases / upload assets
+    steps:
+      # Third-party actions pinned to a full commit SHA (supply-chain safety); trailing comment = version.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # JDK 21 is required by Capacitor 7 (it compiles --release 21). ubuntu-latest ships it — use it
+      # directly instead of a third-party setup-java action (one fewer pinned SHA to maintain).
+      - name: Use JDK 21
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+
+      - run: pnpm install --frozen-lockfile
+
+      # Backstop: never ship an APK whose bundled web app broke a persisted storage invariant.
+      - name: Storage-contract guard
+        run: pnpm check:storage
+
+      - name: Build workspace deps
+        run: pnpm build # turbo: shared → SDK → …
+
+      - name: Wallet-pwa unit tests
+        run: pnpm --filter @libre/wallet-pwa test
+
+      # Build the PWA the wrapper hosts. VITE_LSPS1_MOCK_URL="" is MANDATORY (same rule as the Cloudflare
+      # deploy): the gitignored .env.local sets a dev mock LSP that must NOT be baked into a release.
+      - name: Build wallet-pwa
+        env:
+          VITE_LSPS1_MOCK_URL: ""
+          VITE_MAINNET_PEER: ${{ vars.VITE_MAINNET_PEER }}
+          VITE_MAINNET_BRIDGE: ${{ vars.VITE_MAINNET_BRIDGE }}
+          VITE_MAINNET_RGS: ${{ vars.VITE_MAINNET_RGS }}
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+        run: pnpm --filter @libre/wallet-pwa build
+
+      # Capacitor deps are intentionally NOT committed (CLAUDE.md) — add them ephemerally in CI. The
+      # lockfile churn is discarded with the runner.
+      - name: Add Capacitor toolchain (ephemeral)
+        run: pnpm --filter @libre/android-app add -D @capacitor/cli@^7 @capacitor/core@^7 @capacitor/android@^7
+
+      - name: Generate native android/ project
+        run: pnpm --filter @libre/android-app cap:add
+
+      # Compute the version: tag pushes are the source of truth (android-vX.Y.Z[-preview]); manual runs
+      # use the input. versionCode is the monotonic run number so in-place updates always increase it.
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION_NAME="${GITHUB_REF_NAME#android-v}"
+          else
+            VERSION_NAME="${{ github.event.inputs.version }}"
+          fi
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION_NAME (code ${{ github.run_number }})"
+
+      # Wire the canonical native/ Kotlin plugins + manifest + gradle bits into the generated project,
+      # and stamp the version. Idempotent; mirrors the README "wire ... into the generated project" steps.
+      - name: Wire native sources
+        env:
+          VERSION_NAME: ${{ steps.ver.outputs.name }}
+          VERSION_CODE: ${{ steps.ver.outputs.code }}
+        run: node packages/android-app/scripts/wire-native.mjs
+
+      # Real launcher icon from the committed logo-mark (best-effort — a failure just leaves the
+      # Capacitor placeholder, which shouldn't block a diagnostics/backup fix release).
+      - name: Generate launcher icons
+        working-directory: packages/android-app
+        continue-on-error: true
+        run: |
+          npx --yes @capacitor/assets generate --android
+          BG=android/app/src/main/res/values/ic_launcher_background.xml
+          [ -f "$BG" ] && sed -i 's|>#[0-9A-Fa-f]\{6\}<|>#17913F<|' "$BG" || true
+
+      - name: Accept Android SDK licenses (best-effort)
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+
+      - name: Assemble release APK (unsigned)
+        working-directory: packages/android-app/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleRelease
+
+      # Sign with apksigner post-build (version-independent — no need to inject signingConfigs into the
+      # generated gradle). A tag release REQUIRES the keystore secrets; a manual run without them still
+      # uploads the unsigned APK for smoke-testing.
+      - name: Sign APK
+        id: sign
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          OUTDIR=packages/android-app/android/app/build/outputs/apk/release
+          UNSIGNED="$OUTDIR/app-release-unsigned.apk"
+          [ -f "$UNSIGNED" ] || UNSIGNED="$OUTDIR/app-release.apk"
+          [ -f "$UNSIGNED" ] || { echo "No release APK found in $OUTDIR"; ls -la "$OUTDIR" || true; exit 1; }
+
+          NAME="libre-listener-android-v${{ steps.ver.outputs.name }}.apk"
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          echo "Using build-tools: $BT"
+
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              echo "::error::A tag release needs signing secrets (ANDROID_KEYSTORE_BASE64 etc.) so the APK is signed with your release key. Add them in repo Secrets."
+              exit 1
+            fi
+            echo "::warning::No signing secrets — uploading the UNSIGNED APK (installable only after 'adb install' with an unsigned-allow, for smoke tests)."
+            cp "$UNSIGNED" "$NAME"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
+            "$BT/zipalign" -p -f 4 "$UNSIGNED" /tmp/aligned.apk
+            "$BT/apksigner" sign \
+              --ks /tmp/release.keystore \
+              --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+              --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --key-pass env:ANDROID_KEY_PASSWORD \
+              --out "$NAME" /tmp/aligned.apk
+            "$BT/apksigner" verify --print-certs "$NAME"
+            rm -f /tmp/release.keystore /tmp/aligned.apk
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          SHA="$(sha256sum "$NAME" | cut -d' ' -f1)"
+          echo "apk=$NAME" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "APK: $NAME  sha256=$SHA"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.sign.outputs.apk }}
+          path: ${{ steps.sign.outputs.apk }}
+
+      - name: Create GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK: ${{ steps.sign.outputs.apk }}
+          SHA: ${{ steps.sign.outputs.sha256 }}
+        run: |
+          PRE=""
+          case "$GITHUB_REF_NAME" in *-preview*|*-rc*|*-beta*|*-alpha*) PRE="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" "$APK" $PRE \
+            --title "Libre Listener — Android $GITHUB_REF_NAME" \
+            --notes "Native Android wrapper of the Libre Listener wallet (Capacitor). Built + signed in CI from \`$GITHUB_SHA\`.
+
+          ## ⚠️ Experimental — loss of funds is likely
+          Preview/dogfood build, not production. See the repo README.
+
+          ## Install (sideload — no Play Store, no auto-update)
+          \`\`\`
+          adb install -r $APK
+          \`\`\`
+          Or open the APK on the phone (enable \"install unknown apps\"). On first launch grant **Notifications** and **Display over other apps** (the overlay keeps the node alive in the background).
+
+          ## Verify
+          - **APK SHA-256:** \`$SHA\`
+          - Signed with the project release key (same signer as prior releases → installs in place).
+
+          Sideloaded builds don't auto-update — re-download and reinstall (never uninstall a funded wallet without a backup)."

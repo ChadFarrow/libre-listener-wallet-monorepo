@@ -25,3 +25,21 @@
     android:name=".ForegroundService"
     android:exported="false"
     android:foregroundServiceType="dataSync" />
+
+<!--
+  3) FileProvider for the Diagnostics share sheet: place inside <application>.
+  ACTION_SEND (LibreDiagnosticsPlugin) needs a content:// URI, not a raw file path. Its own authority
+  so it doesn't collide with Capacitor's built-in "${applicationId}.fileprovider". Also add the path
+  map at android/app/src/main/res/xml/diag_file_paths.xml:
+    <?xml version="1.0" encoding="utf-8"?>
+    <paths><cache-path name="diagnostics" path="diagnostics/" /></paths>
+-->
+<provider
+    android:name="androidx.core.content.FileProvider"
+    android:authorities="${applicationId}.diagfileprovider"
+    android:exported="false"
+    android:grantUriPermissions="true">
+    <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/diag_file_paths" />
+</provider>

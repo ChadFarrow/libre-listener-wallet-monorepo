@@ -5,7 +5,7 @@ import { enablePush, disablePush, isPushEnabled, pushSupported } from "../web-pu
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
 import { diagExportText, diagStats, diagClear } from "../core/diag-tap";
 import { isNativeApp } from "../core/native-bridge";
-import { nativeSaveText } from "../core/native-share";
+import { nativeShareText } from "../core/native-share";
 import { registerScreen } from "../ui/nav";
 import { $, setMsg } from "./util";
 
@@ -124,12 +124,12 @@ export function initDeveloperScreen(ctx: AppContext): void {
         const stamp = `${iso.slice(0, 10)}-${iso.slice(11, 13)}${iso.slice(14, 16)}`;
         const name = `libre-diag-${network || "mainnet"}-${stamp}.txt`;
         // Inside the native Android wrapper the browser export paths below don't work — a WebView has
-        // no blob download handler and no Web Share file support — so route through the native SAF
-        // "Save document" dialog. If that plugin is missing (an APK built before it shipped), fall back
-        // to copying the log to the clipboard so export is never a dead button in the wrapper.
+        // no blob download handler and no Web Share file support — so route through the native Android
+        // share sheet (same multi-target picker as iOS). If that plugin is missing (an APK built before
+        // it shipped), fall back to copying the log to the clipboard so export is never a dead button.
         if (isNativeApp()) {
-          if (await nativeSaveText(name, text)) {
-            setMsg("diag-msg", "Saved.", "ok");
+          if (await nativeShareText(name, text)) {
+            setMsg("diag-msg", "Shared.", "ok");
             return;
           }
           if (navigator.clipboard?.writeText) {

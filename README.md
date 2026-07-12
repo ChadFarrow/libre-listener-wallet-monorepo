@@ -62,7 +62,7 @@ The one place to see what's live and where it deploys from.
 | NWC push gateway (+ RGS proxy) | `https://nwc-push-gateway-production.up.railway.app` | Railway, root `railway.json` |
 | ws-bridge | `wss://ws-bridge-production-9e2f.up.railway.app` | Railway, `ws-bridge/railway.json` |
 | Browser extension (rolling build) | GitHub Releases → `browser-extension-latest` asset | `.github/workflows/release-extension-latest.yml` |
-| Android APK (signed) | GitHub Releases | Built on a Mac per [`packages/android-app/README.md`](packages/android-app/README.md) |
+| Android APK (signed) | GitHub Releases | `.github/workflows/release-android.yml` → push an `android-vX.Y.Z` tag (built + signed in CI; needs the `ANDROID_KEYSTORE_*` secrets). Local Mac build still documented in [`packages/android-app/README.md`](packages/android-app/README.md) |
 
 > Pinned rollback: the pre-redesign PWA UI stays reachable at `https://62281737.libre-wallet-pwa.pages.dev`.
 

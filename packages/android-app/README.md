@@ -149,6 +149,32 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@21/... ./gradlew assembleRelease
 wallet), then install the release APK and **restore from your backup folder**. Pick one signing key up
 front for any device you care about. Keep the keystore + `keystore.properties` backed up together.
 
+## Automated release (GitHub Actions — no Mac needed)
+
+`.github/workflows/release-android.yml` builds **and signs** the APK entirely in CI, scripting every
+manual step above (`scripts/wire-native.mjs` does the project wiring). Cutting a release is one action:
+
+```bash
+git tag android-v0.1.2-preview && git push origin android-v0.1.2-preview
+```
+
+→ a GitHub Release with the signed APK attached (tags containing `-preview`/`-rc`/`-beta` are marked
+pre-release). A manual **workflow_dispatch** run instead uploads the APK as a run artifact (signed if
+secrets are set, else unsigned) for smoke-testing without cutting a release.
+
+**One-time setup — add these in Settings → Secrets and variables → Actions:**
+
+- **Secrets** (required so the CI APK is signed with *your* key and installs in place over prior
+  releases — a different signer forces an uninstall, wiping the wallet):
+  - `ANDROID_KEYSTORE_BASE64` — `base64 -w0 ~/libre-android-release.keystore`
+  - `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`
+- **Variables** (same as the PWA deploys): `VITE_MAINNET_PEER`, `VITE_MAINNET_BRIDGE`,
+  `VITE_MAINNET_RGS`, `VITE_GOOGLE_CLIENT_ID`.
+
+CI signs post-build with `apksigner` (no `keystore.properties` needed there — that's the local-Mac
+path). It runs on `ubuntu-latest`'s preinstalled Android SDK + JDK 21; the ephemeral Capacitor deps and
+generated `android/` tree are discarded with the runner, so nothing new is committed.
+
 ---
 
 ## Phase 0 — the de-risking spike (do this before building anything else out)

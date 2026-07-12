@@ -132,10 +132,57 @@ Report the diagnostics back and we iterate on the code from there.
 
 ---
 
+## Phase 0 results (2026-07-12, Pixel 6 / Android, debug APK)
+
+First on-device run. The APK built (see the runbook above), installed, and the wallet came up native —
+every networking layer verified inside the wrapper along the way:
+
+- **Foreground-service keep-alive works.** Tapping "Keep boosts running in background" started the
+  real service (`isForeground=true`, `foregroundServiceType=dataSync`, id 4242), raised the ongoing
+  "Libre Listener is running" notification, and held a `PARTIAL_WAKE_LOCK` — all confirmed via
+  `dumpsys`. The web→native bridge logged `[KeepAlive/native] foreground service running`, i.e. it
+  chose the native path over the audio tone.
+- **Transport all works native:** RGS graph sync through the gateway proxy (36.6k channels), ws-bridge
+  dial-out + BOLT8 noise handshake to a mainnet peer, and an inbound channel-open handled correctly in
+  the **minified** build (`OpenChannelRequest → accept`, the `instanceof` dispatch path that used to
+  break in production).
+
+**But the headline finding — R1 is REAL, measured:** with the app backgrounded and the screen off, a
+2-second heartbeat injected into the page (via CDP) ran normally for ~1 min while `hidden`, then **all
+JS execution froze**. It stayed frozen the entire time the app was backgrounded and resumed the instant
+the app returned to foreground:
+
+```
+11:49:00  #39  gap=2001ms    vis=hidden    ← last beat while backgrounded
+11:56:20  #40  gap=439851ms  vis=visible   ← resumed on foreground: renderer was frozen 7m20s
+```
+
+Throughout that 7m20s freeze the foreground service was still up, the wake lock still held, and Android
+reported the process `isFrozen=false`. So **process-alive ≠ node-running**: the foreground service
+keeps the *process* and its native connections alive (a real gain over the plain PWA, whose tab gets
+reaped), but Chromium still suspends the hidden **WebView renderer** — where LDK's event loop and the
+relay socket processing actually run. The freeze is a *suspend*, not a kill: JS resumed cleanly on
+foreground (network fetch 257 ms), node undamaged.
+
+**Verdict: Arm A fails ("settles only on foreground").** The foreground service alone is necessary but
+not sufficient for background settlement. Next per the plan: **Arm B** (force the WebView
+resident/visible from the service so Chromium doesn't suspend the renderer) and/or the **R1 mitigation**
+(native Nostr relay socket forwarding NIP-47 bytes into the node) — but a native socket only helps if
+the renderer can be woken to process the bytes, which points back to Arm B. Full native-LDK is the
+heavy fallback.
+
+**Still open (definitive end-to-end):** the above measures *timer* freeze. The airtight test is an
+actual keysend boost sent to the wallet's NWC while backgrounded/screen-off (needs the channel usable
++ an NWC pairing + a second device) — the exact protocol above. Timer-freeze makes the expected result
+"doesn't settle until foreground," but run it to close the loop.
+
+---
+
 ## Known risks / open validation (see the approved plan for the full list)
 
-- **R1 — hidden-WebView renderer throttling** stalls settlement even with the process alive. Resolved
-  by the two-arm spike above; mitigation is the native relay socket.
+- **R1 — hidden-WebView renderer throttling** stalls settlement even with the process alive.
+  **CONFIRMED on-device 2026-07-12** (see Phase 0 results above — 7m20s renderer freeze with the
+  foreground service up). Mitigation: Arm B (keep the WebView resident) and/or the native relay socket.
 - **Android 15 dataSync 6h/day cap** on foreground services — may force a `mediaPlayback`-typed service
   (backed by a real MediaSession using the wallet's existing keep-alive tone). Validate in Phase 3/4.
 - **Battery optimization** — GrapheneOS may throttle the service; request the ignore-battery-optimization

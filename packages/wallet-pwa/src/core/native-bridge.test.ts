@@ -4,6 +4,7 @@ import {
   getNativeForegroundService,
   createNativeKeepAlive,
   createKeepAliveForPlatform,
+  ensureOverlayPermission,
   type NativeForegroundService,
 } from "./native-bridge";
 
@@ -152,6 +153,101 @@ describe("createNativeKeepAlive", () => {
     ka.start(); // next controller event retries (the failed attempt un-latched the transition gate)
     expect(calls).toEqual(["start", "start"]);
     await vi.waitFor(() => expect(ka.isActive()).toBe(true));
+    warn.mockRestore();
+  });
+});
+
+describe("ensureOverlayPermission", () => {
+  beforeEach(clearNativeGlobals);
+  afterEach(clearNativeGlobals);
+
+  it("is a no-op in a plain browser/PWA (not native)", async () => {
+    let called = false;
+    g.Capacitor = {
+      Plugins: {
+        LibreForegroundService: {
+          start: () => {},
+          stop: () => {},
+          hasOverlayPermission: async () => {
+            called = true;
+            return { granted: false };
+          },
+          requestOverlayPermission: async () => {},
+        },
+      },
+    };
+    // isNativeApp() is false (no __LIBRE_NATIVE__, no isNativePlatform) so it must not touch the plugin.
+    await ensureOverlayPermission();
+    expect(called).toBe(false);
+  });
+
+  it("requests the permission when native + not granted", async () => {
+    const calls: string[] = [];
+    g.__LIBRE_NATIVE__ = true;
+    g.Capacitor = {
+      Plugins: {
+        LibreForegroundService: {
+          start: () => {},
+          stop: () => {},
+          hasOverlayPermission: async () => {
+            calls.push("check");
+            return { granted: false };
+          },
+          requestOverlayPermission: async () => {
+            calls.push("request");
+          },
+        },
+      },
+    };
+    await ensureOverlayPermission();
+    expect(calls).toEqual(["check", "request"]);
+  });
+
+  it("does NOT request when already granted", async () => {
+    const calls: string[] = [];
+    g.__LIBRE_NATIVE__ = true;
+    g.Capacitor = {
+      Plugins: {
+        LibreForegroundService: {
+          start: () => {},
+          stop: () => {},
+          hasOverlayPermission: async () => {
+            calls.push("check");
+            return { granted: true };
+          },
+          requestOverlayPermission: async () => {
+            calls.push("request");
+          },
+        },
+      },
+    };
+    await ensureOverlayPermission();
+    expect(calls).toEqual(["check"]);
+  });
+
+  it("is a safe no-op when native but the plugin lacks the overlay methods (older wrapper)", async () => {
+    g.__LIBRE_NATIVE__ = true;
+    g.Capacitor = { Plugins: { LibreForegroundService: { start: () => {}, stop: () => {} } } };
+    await expect(ensureOverlayPermission()).resolves.toBeUndefined();
+  });
+
+  it("swallows a rejection from the permission check without throwing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    g.__LIBRE_NATIVE__ = true;
+    g.Capacitor = {
+      Plugins: {
+        LibreForegroundService: {
+          start: () => {},
+          stop: () => {},
+          hasOverlayPermission: async () => {
+            throw new Error("bridge error");
+          },
+          requestOverlayPermission: async () => {},
+        },
+      },
+    };
+    await expect(ensureOverlayPermission()).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 });

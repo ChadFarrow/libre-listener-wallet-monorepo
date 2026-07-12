@@ -9,6 +9,7 @@ import { isDemoMode, demoState } from "../core/demo-mode";
 import { getUsdRate, satsToUsd } from "../core/fiat-rate";
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
 import { bgChipView } from "../core/bg-mode";
+import { ensureOverlayPermission } from "../core/native-bridge";
 import { registerScreen, showScreen, currentScreen, openDrawer } from "../ui/nav";
 import { $, show, fmtSats } from "./util";
 
@@ -158,6 +159,9 @@ export function initHomeScreen(ctx: AppContext): void {
       setKeepAliveEnabled(true);
       if (controller.isRunning()) ctx.keepAlive.start(); // mark wanted (play may be gesture-gated)
       ctx.keepAlive.unlock(); // within THIS click → satisfies the iOS autoplay gate, starts audio
+      // Native wrapper: the overlay ("draw over other apps") permission is what keeps the node alive
+      // while occluded — prompt for it once, here, on the explicit enable gesture. No-op in a PWA.
+      void ensureOverlayPermission();
     }
     refreshBgChip();
     // play() resolves a tick later; re-read once it has so the chip reflects the real state.

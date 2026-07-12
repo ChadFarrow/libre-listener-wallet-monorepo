@@ -20,6 +20,12 @@ const PLUGIN_NAME = "LibreForegroundService";
 export interface NativeForegroundService {
   start(): Promise<void> | void;
   stop(): Promise<void> | void;
+  // Optional — present in wrapper builds with the overlay-residency plugin. The "draw over other apps"
+  // (SYSTEM_ALERT_WINDOW) permission is what lets the node's WebView stay visible (in a 1x1 overlay)
+  // while occluded, so the renderer isn't frozen and background boosts settle. Without it the wrapper
+  // falls back to a ~60s renderer-priority grace window. Prompt for it when background mode is enabled.
+  hasOverlayPermission?(): Promise<{ granted: boolean }>;
+  requestOverlayPermission?(): Promise<void>;
 }
 
 interface CapacitorGlobal {
@@ -106,6 +112,22 @@ export function createNativeKeepAlive(service: NativeForegroundService): KeepAli
       return false;
     },
   };
+}
+
+// Ensure the overlay ("draw over other apps") permission that keeps the node alive while occluded in
+// the native wrapper. Called when the user turns ON background mode: if the wrapper exposes the overlay
+// plugin methods and the permission isn't granted yet, open the system grant screen once. No-op in a
+// plain PWA, or a wrapper build without the overlay methods (it then falls back to the grace window).
+export async function ensureOverlayPermission(): Promise<void> {
+  if (!isNativeApp()) return;
+  const svc = getNativeForegroundService();
+  if (!svc?.hasOverlayPermission || !svc.requestOverlayPermission) return;
+  try {
+    const res = await svc.hasOverlayPermission();
+    if (!res?.granted) await svc.requestOverlayPermission();
+  } catch (e) {
+    console.warn("[native] overlay permission check failed:", (e as Error)?.message || e);
+  }
 }
 
 // Choose the background-liveness strategy for the current platform. In the native wrapper a

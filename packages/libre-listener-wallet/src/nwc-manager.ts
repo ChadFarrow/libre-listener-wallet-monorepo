@@ -46,6 +46,11 @@ const MAX_HANDLED_EVENT_IDS = 2000;
 const SETTLEMENT_TIMEOUT_MS = 90_000;
 const SETTLEMENT_TIMEOUT_MSG = "Payment initiated but not yet settled; you'll be notified when it completes.";
 
+// Thrown by awaitSettlementCharged when the settlement await times out — the payment is STILL IN
+// FLIGHT (not failed). Discriminated by IDENTITY (instanceof), never message text, so callers can
+// tell "still pending" from a definitive failure without a rewording silently changing behavior.
+class SettlementTimeoutError extends Error {}
+
 // Max standing NWC pairings. Each is a spend authority, so the count is bounded as hygiene against
 // unbounded growth (a runaway UI, abuse) — not a scaling limit (all pairings share one relay socket).
 // A person connects a handful of apps; 10 is generous while still a firm ceiling.
@@ -239,7 +244,7 @@ export class NwcManager {
    * discriminated by error IDENTITY (we made the object), never by message text.
    */
   private async awaitSettlementCharged(pairing: NwcConnection, amtSats: number, settled: Promise<string>): Promise<string> {
-    const timeoutError = new Error(SETTLEMENT_TIMEOUT_MSG);
+    const timeoutError = new SettlementTimeoutError(SETTLEMENT_TIMEOUT_MSG);
     try {
       return await this.awaitWithTimeout(settled, SETTLEMENT_TIMEOUT_MS, timeoutError);
     } catch (settleErr) {
@@ -831,7 +836,21 @@ export class NwcManager {
         // gate so the next queued request can start, instead of holding it through settlement.
         signalReserved();
 
-        const preimageHex = await this.awaitSettlementCharged(pairing, amtSats, promise);
+        let preimageHex: string;
+        try {
+          preimageHex = await this.awaitSettlementCharged(pairing, amtSats, promise);
+        } catch (settleErr) {
+          if (settleErr instanceof SettlementTimeoutError) {
+            // Payment is STILL IN FLIGHT (e.g. a browser node frozen in the background couldn't
+            // settle within the cap). Do NOT report a failure — an error here renders as "failed"
+            // in strict clients (Alby Go) even though the payment is pending and usually settles.
+            // handlePaymentSettled fires the payment_sent notification on the late settle, which is
+            // the reconciliation path; the charge is kept (anti-replay). Nothing to send now.
+            this.logger?.info(`[NWC] pay_invoice ${payInvoiceHashHex} still in flight after ${SETTLEMENT_TIMEOUT_MS}ms — client will be reconciled by the payment_sent notification.`);
+            return;
+          }
+          throw settleErr; // a definitive failure (already refunded) → outer catch reports it
+        }
 
         await this.sendResultResponse(event, "pay_invoice", { preimage: preimageHex }, relayUrl, rpcReq.id);
 

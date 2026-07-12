@@ -62,6 +62,36 @@ describe("createKeepAlive", () => {
     expect(ka.isActive()).toBe(false);
   });
 
+  it("needsActivation is true when wanted but blocked, false once playing", async () => {
+    // Blocked-play mock: play() rejects until a gesture "unlocks" it.
+    let unlocked = false;
+    (globalThis as any).Audio = class {
+      loop = false;
+      play() { return unlocked ? Promise.resolve() : Promise.reject(new Error("NotAllowed")); }
+      pause() {}
+      setAttribute() {}
+    };
+    const ka = createKeepAlive();
+    ka.start();
+    await Promise.resolve(); await Promise.resolve();
+    expect(ka.isActive()).toBe(false);
+    expect(ka.needsActivation()).toBe(true); // wanted, but iOS blocked it → hint should show
+    // A user gesture unlocks the element; unlock() while wanted activates it.
+    unlocked = true;
+    ka.unlock();
+    await Promise.resolve(); await Promise.resolve();
+    expect(ka.isActive()).toBe(true);
+    expect(ka.needsActivation()).toBe(false);
+  });
+
+  it("unlock() while NOT wanted primes the element without leaving it playing", async () => {
+    const ka = createKeepAlive();
+    ka.unlock(); // no start() yet → not wanted
+    await Promise.resolve(); await Promise.resolve();
+    expect(ka.isActive()).toBe(false);
+    expect(paused).toBe(1); // played to unlock, then paused
+  });
+
   it("reuses one audio element across start calls (no leak of elements)", async () => {
     const ka = createKeepAlive();
     ka.start();

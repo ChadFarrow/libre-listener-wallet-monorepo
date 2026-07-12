@@ -38,7 +38,7 @@ describe("start() single-node-lock conflict", () => {
       startNode: vi.fn().mockRejectedValue(new NodeAlreadyRunningError()),
       getPayments: vi.fn().mockResolvedValue([]),
     } as unknown as WalletController;
-    const ctx: AppContext = { controller, isRunning: () => false, keepAlive: { start() {}, stop() {}, isActive: () => false } };
+    const ctx: AppContext = { controller, isRunning: () => false, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 
     initScreens(ctx);
     await flush();

@@ -2,6 +2,7 @@
 // (see handlePushEvent) — it never boots a node — so the whole LDK/config/lock surface is gone from
 // this bundle, which also removes the "SW must bundle every dependency" hazard and shrinks it.
 import { cleanRedirect } from "./core/sw-redirect";
+import { shouldNotifyForPush } from "./core/push-notify";
 
 declare const self: any;
 
@@ -117,14 +118,20 @@ async function handlePushEvent(_payload: { walletPubkey: string; relayUrl: strin
   // the relay and completes the still-pending request (NWC requests are valid for 300s). Opening
   // the app is the safe, node-in-foreground path the user already relies on. iOS also REQUIRES a
   // visible notification for every push, so a single notification here also keeps the subscription
-  // alive. If a window is already open, the foreground node is handling it live — say nothing.
+  // alive.
+  //
+  // Suppress the notification ONLY when a window is actually VISIBLE (foreground node handling it
+  // live). A merely-existing window is NOT enough: a backgrounded iOS PWA is frozen — node
+  // suspended, relay socket dead — yet still lists as a window client, so the old "any client →
+  // return" check swallowed the notification AND nothing settled the boost until the user reopened.
   const clientsList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-  if (clientsList.length > 0) {
-    console.log("[SW] Active PWA window — the foreground node handles the request. No notification.");
+  const visibilityStates = clientsList.map((c: any) => c.visibilityState as string);
+  if (!shouldNotifyForPush(visibilityStates)) {
+    console.log("[SW] Visible PWA window — the foreground node handles the request. No notification.");
     return;
   }
 
-  console.log("[SW] Offline push — showing tap-to-open notification (no background node).");
+  console.log("[SW] No visible window (closed or backgrounded) — showing tap-to-open notification.");
   await self.registration.showNotification("Payment request", {
     body: "A Lightning payment is waiting. Tap to open your wallet and complete it.",
     tag: "nwc-payment-pending",

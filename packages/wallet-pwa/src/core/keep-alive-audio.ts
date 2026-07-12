@@ -25,7 +25,13 @@
 export interface KeepAlive {
   start(): void;
   stop(): void;
+  // Prime the audio element from within a user gesture so a later programmatic start() is allowed
+  // by iOS. Call from a first-tap handler — one tap anywhere then activates keep-alive.
+  unlock(): void;
   isActive(): boolean;
+  // True when keep-alive is WANTED (enabled + node running) but not yet playing — i.e. it's waiting
+  // for a user tap to satisfy iOS's autoplay gate. Drives a "tap to keep alive" UI hint.
+  needsActivation(): boolean;
 }
 
 // Peak amplitude of the keep-alive tone, in 16-bit PCM counts. 8/32768 ≈ -72 dBFS — a real signal
@@ -73,10 +79,20 @@ export function createKeepAlive(): KeepAlive {
   let audio: HTMLAudioElement | null = null;
   let armed = false;
   let active = false;
+  let wanted = false; // keep-alive is enabled + the node is running (so it SHOULD be playing)
+  let loggedBlocked = false; // log "blocked" once per episode, not on every controller event
 
+  const ensureAudio = (): HTMLAudioElement => {
+    if (!audio) {
+      audio = new Audio(inaudibleWavDataUri());
+      audio.loop = true;
+      audio.setAttribute("playsinline", ""); // iOS: don't force fullscreen playback
+    }
+    return audio;
+  };
   const onGesture = () => {
     detach();
-    if (audio) tryPlay();
+    tryPlay();
   };
   const armGesture = () => {
     if (armed) return;
@@ -90,41 +106,66 @@ export function createKeepAlive(): KeepAlive {
     window.removeEventListener("keydown", onGesture);
   };
   const tryPlay = () => {
-    if (!audio) return;
-    audio
+    ensureAudio()
       .play()
       .then(() => {
         active = true;
+        loggedBlocked = false;
         // Logged so a diagnostics export confirms the keep-alive is actually holding the page
         // alive (vs. silently blocked/suspended) — the page-lifecycle stamps tell the rest.
         console.log("[KeepAlive] playing inaudible tone — page kept alive while backgrounded");
       })
       .catch(() => {
-        // Blocked by the autoplay policy (no gesture yet) — retry on the first user interaction.
-        console.log("[KeepAlive] play blocked (no user gesture yet) — will retry on first interaction");
+        // iOS blocks play() outside a user gesture. Arm a first-interaction retry and say so ONCE
+        // (this path fires on every controller event, so guard the log to avoid flooding the trace).
+        if (!loggedBlocked) {
+          loggedBlocked = true;
+          console.log("[KeepAlive] play blocked — needs one screen tap to activate; armed first-tap retry");
+        }
         armGesture();
       });
   };
 
   return {
     start(): void {
-      if (!audio) {
-        audio = new Audio(inaudibleWavDataUri());
-        audio.loop = true;
-        audio.setAttribute("playsinline", ""); // iOS: don't force fullscreen playback
-      }
+      wanted = true;
       tryPlay();
     },
     stop(): void {
+      wanted = false;
       detach();
+      loggedBlocked = false;
       if (audio) {
         audio.pause();
         active = false;
         console.log("[KeepAlive] stopped");
       }
     },
+    unlock(): void {
+      // Called from the app's first user gesture (e.g. tapping "Start node"): play() inside the
+      // gesture so iOS marks the element "unlocked", then a later programmatic start() is allowed.
+      // If keep-alive is wanted right now, this doubles as the activating play; otherwise unlock and
+      // pause so the element is primed for when the node comes up.
+      const a = ensureAudio();
+      a.play()
+        .then(() => {
+          if (wanted) {
+            active = true;
+            loggedBlocked = false;
+            console.log("[KeepAlive] activated by user tap");
+          } else {
+            a.pause(); // primed only — nothing to keep alive yet
+          }
+        })
+        .catch(() => {
+          /* not a trusted gesture (e.g. programmatic call) — ignore; a real tap will prime it */
+        });
+    },
     isActive(): boolean {
       return active;
+    },
+    needsActivation(): boolean {
+      return wanted && !active;
     },
   };
 }

@@ -46,6 +46,22 @@ if (!isDemoMode()) {
     if (shouldKeepAlive({ enabled: keepAliveEnabled(), running: controller.isRunning(), demo: false })) keepAlive.start();
     else keepAlive.stop();
   });
+  // iOS blocks audio.play() outside a user gesture, so keep-alive can't self-start when the node
+  // comes up from a non-gesture path (auto-start, or the controller event a beat after the tap).
+  // Prime the audio element on the user's FIRST tap anywhere (e.g. tapping "Start node") so one tap
+  // activates it, instead of needing a tap at the exact moment the node is ready. Stays armed until
+  // the element is actually playing.
+  if (keepAliveEnabled()) {
+    const prime = () => {
+      keepAlive.unlock();
+      if (keepAlive.isActive()) {
+        window.removeEventListener("pointerdown", prime);
+        window.removeEventListener("keydown", prime);
+      }
+    };
+    window.addEventListener("pointerdown", prime);
+    window.addEventListener("keydown", prime);
+  }
 }
 
 if (isDemoMode()) {

@@ -38,7 +38,7 @@ function makeCtx(): AppContext {
     listPeers: vi.fn().mockResolvedValue([]),
     getChannels: vi.fn().mockResolvedValue([]),
   } as unknown as WalletController;
-  return { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, isActive: () => false } };
+  return { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 }
 
 describe("diagnostics card", () => {

@@ -61,6 +61,25 @@ describe("IndexedDBStorageProvider", () => {
     expect(await s.getItem("k")).toBeNull();
   });
 
+  // A mobile browser force-closes a backgrounded tab's IDB connection on freeze/discard. The cached
+  // handle then throws InvalidStateError ("the database connection is closing") on every subsequent
+  // transaction — which wedged all persistence until a full page reload (the live "Failed to persist
+  // channel_manager: … connection is closing" spam after a resume). The provider must transparently
+  // reopen and keep working.
+  it("reopens transparently after the cached connection is force-closed (frozen-tab recovery)", async () => {
+    const s = new IndexedDBStorageProvider("test-reopen");
+    await s.setItem("k", "v"); // opens + caches the connection
+    // Simulate the browser tearing the connection down while the tab was frozen.
+    (s as unknown as { db: IDBDatabase }).db.close();
+    // Reads and writes must recover rather than reject forever.
+    expect(await s.getItem("k")).toBe("v");
+    await s.setItem("k", "v2");
+    expect(await s.getItem("k")).toBe("v2");
+    // keys() shares the same recovery path.
+    (s as unknown as { db: IDBDatabase }).db.close();
+    expect(await s.keys()).toEqual(["k"]);
+  });
+
   // A read failure (DB open / transaction error) must REJECT, not resolve null.
   // Flattening it to null lets start() mistake a transiently-broken store for an
   // empty one and overwrite a funded wallet's seed. Absence still returns null.

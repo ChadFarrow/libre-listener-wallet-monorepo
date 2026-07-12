@@ -29,22 +29,33 @@ describe("inaudibleWavDataUri", () => {
 describe("createKeepAlive", () => {
   let played = 0;
   let paused = 0;
+  let lastAudio: any = null;
   const OriginalAudio = globalThis.Audio;
 
   beforeEach(() => {
     played = 0;
     paused = 0;
-    // Mock Audio: play() resolves (autoplay allowed), pause() counts.
+    lastAudio = null;
+    // Mock Audio: play() resolves (autoplay allowed) and fires nothing; pause() counts and fires
+    // registered "pause" listeners (mirrors how the browser notifies us of an audio-focus loss).
     (globalThis as any).Audio = class {
       loop = false;
+      listeners: Record<string, Array<() => void>> = {};
+      constructor() {
+        lastAudio = this;
+      }
       play() {
         played++;
         return Promise.resolve();
       }
       pause() {
         paused++;
+        (this.listeners.pause || []).forEach((cb) => cb());
       }
       setAttribute() {}
+      addEventListener(type: string, cb: () => void) {
+        (this.listeners[type] ||= []).push(cb);
+      }
     };
   });
   afterEach(() => {
@@ -70,6 +81,7 @@ describe("createKeepAlive", () => {
       play() { return unlocked ? Promise.resolve() : Promise.reject(new Error("NotAllowed")); }
       pause() {}
       setAttribute() {}
+      addEventListener() {}
     };
     const ka = createKeepAlive();
     ka.start();
@@ -82,6 +94,19 @@ describe("createKeepAlive", () => {
     await Promise.resolve(); await Promise.resolve();
     expect(ka.isActive()).toBe(true);
     expect(ka.needsActivation()).toBe(false);
+  });
+
+  it("goes inactive when the OS/another app pauses the tone (audio focus lost)", async () => {
+    const ka = createKeepAlive();
+    ka.start();
+    await Promise.resolve();
+    expect(ka.isActive()).toBe(true);
+    expect(ka.needsActivation()).toBe(false);
+    // Android pauses our tone when a podcast app grabs audio focus. We must notice — otherwise the
+    // chip keeps claiming "Background mode on" while the page is actually frozen.
+    lastAudio.pause();
+    expect(ka.isActive()).toBe(false);
+    expect(ka.needsActivation()).toBe(true); // wanted again but no longer playing → re-arm hint
   });
 
   it("unlock() while NOT wanted primes the element without leaving it playing", async () => {

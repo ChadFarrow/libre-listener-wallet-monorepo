@@ -87,6 +87,21 @@ export function createKeepAlive(): KeepAlive {
       audio = new Audio(inaudibleWavDataUri());
       audio.loop = true;
       audio.setAttribute("playsinline", ""); // iOS: don't force fullscreen playback
+      // The OS — or another app grabbing Android audio focus, e.g. a podcast player that's ALSO
+      // sending the V4V boost — can PAUSE our tone. Once paused, the page loses its "playing media"
+      // exemption and gets frozen, so boosts stop settling until the wallet is reopened. Mark
+      // ourselves inactive (so the chip + needsActivation() stop claiming we're holding the page
+      // alive) and log it, so a diagnostics export shows the interruption instead of a silent
+      // freeze. We deliberately do NOT auto-resume from here: re-grabbing audio focus would interrupt
+      // whatever took it (your podcast) — a fight a PWA <audio> can't win (there is no web
+      // "mix with others"). Re-arming happens on foreground resume, where it's harmless.
+      audio.addEventListener("pause", () => {
+        if (!wanted) return; // our own stop() paused it — not an external interruption
+        active = false;
+        console.log(
+          "[KeepAlive] tone paused (audio focus lost or page suspended) — node no longer kept alive in the background"
+        );
+      });
     }
     return audio;
   };

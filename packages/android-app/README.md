@@ -78,6 +78,15 @@ canonical source — copy them in):
    ```
 5. Confirm `applicationId` in `android/app/build.gradle` matches `appId` in `capacitor.config.ts`
    (`com.v4vmusic.librelistener`).
+6. **Generate the launcher icon** from the committed source (`assets/logo.png`, the 1024px Libre
+   logo-mark) — the Capacitor template ships a generic placeholder, and the generated icons land in
+   the gitignored `android/` tree so they must be regenerated on each fresh setup:
+   ```bash
+   npx @capacitor/assets generate --android
+   ```
+   Then set the adaptive-icon background to the logo green (it defaults to white, which shows white
+   corners under the launcher mask): edit
+   `android/app/src/main/res/values/ic_launcher_background.xml` → `<color name="ic_launcher_background">#17913F</color>`.
 
 ## Build → install → iterate
 

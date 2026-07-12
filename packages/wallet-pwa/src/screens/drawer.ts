@@ -3,6 +3,7 @@ import { onControllerEvent } from "../core/events";
 import { deleteDiagDb } from "../core/diag-store";
 import { isDemoMode, demoState } from "../core/demo-mode";
 import { driveConnected, driveConfigured, driveSyncPending } from "../drive-integration";
+import { nativeBackupAvailable, backupFolderConfigured } from "../core/native-backup";
 import { drawerBackupStatus } from "../core/drive-ui";
 import { confirmModal } from "../ui/confirm-modal";
 import { showScreenFromDrawer, resetToHome } from "../ui/nav";
@@ -25,12 +26,15 @@ export function initDrawer(ctx: AppContext): void {
       $("d-channels-val").textContent =
         s.channels != null ? `${s.usableChannels ?? 0}/${s.channels}` : "";
       $("d-peers-val").textContent = s.peers != null ? String(s.peers) : "";
+      // Native APK: backup is a chosen SAF folder (no live-token/reconnect concept), so a configured
+      // folder is both configured AND connected — otherwise the chip falsely reads "Off".
+      const native = nativeBackupAvailable();
       const bk = drawerBackupStatus({
         demo: isDemoMode(),
-        configured: isDemoMode() ? demoState.driveConfigured : driveConfigured(),
-        connected: isDemoMode() ? demoState.driveConfigured : driveConnected(),
+        configured: isDemoMode() ? demoState.driveConfigured : native ? backupFolderConfigured() : driveConfigured(),
+        connected: isDemoMode() ? demoState.driveConfigured : native ? backupFolderConfigured() : driveConnected(),
         running: !!s.running,
-        pendingSync: isDemoMode() ? false : driveSyncPending(),
+        pendingSync: isDemoMode() || native ? false : driveSyncPending(),
       });
       const bkVal = $("d-backup-val");
       bkVal.textContent = bk.label;

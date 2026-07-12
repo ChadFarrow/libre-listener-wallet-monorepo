@@ -103,6 +103,40 @@ plugin method to prompt for it). For testing you can grant it via adb:
 `adb shell appops set com.v4vmusic.librelistener SYSTEM_ALERT_WINDOW allow`. If boosts still stall in
 the background, set the app's battery usage to **Unrestricted**.
 
+## Signed release build
+
+The debug builds above are signed with the shared Android debug key. For a real install, sign with your
+OWN key so only you can ship updates. The signing config reads from a **gitignored** `keystore.properties`
+(so no secrets in the repo); it's already wired into `android/app/build.gradle` (guarded — absent
+properties → the release build is just unsigned).
+
+```bash
+# 1) One-time: generate a keystore OUTSIDE the repo. BACK IT UP — lose it and you can never update
+#    the installed app (Android requires the same key for updates); you'd have to uninstall (wiping
+#    the wallet) and restore from your backup folder.
+keytool -genkeypair -v -keystore ~/libre-android-release.keystore -alias librerelease \
+  -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Libre Listener Wallet, O=v4vmusic, C=US"
+
+# 2) One-time: write android/keystore.properties (gitignored — under the gitignored android/ tree):
+#      storeFile=/absolute/path/to/libre-android-release.keystore
+#      storePassword=...
+#      keyAlias=librerelease
+#      keyPassword=...
+
+# 3) Build the signed release APK:
+cd packages/android-app/android
+JAVA_HOME=/opt/homebrew/opt/openjdk@21/... ./gradlew assembleRelease
+#   → app/build/outputs/apk/release/app-release.apk
+
+# 4) Verify the signer:
+~/Library/Android/sdk/build-tools/*/apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk
+```
+
+**Switching a device from debug- to release-signed is destructive:** the signatures differ, so
+`adb install -r` over an existing debug install fails — you must **uninstall first** (which wipes the
+wallet), then install the release APK and **restore from your backup folder**. Pick one signing key up
+front for any device you care about. Keep the keystore + `keystore.properties` backed up together.
+
 ---
 
 ## Phase 0 — the de-risking spike (do this before building anything else out)

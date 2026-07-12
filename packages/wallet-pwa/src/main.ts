@@ -91,6 +91,10 @@ if (!isDemoMode()) {
       // iOS can also drop the push subscription while frozen — re-register it on resume so offline
       // wake keeps working (silent + best-effort; no-op unless wake was enabled).
       void refreshPushRegistration(ctx);
+      // The keep-alive tone is often paused while backgrounded (another app grabbed audio focus, or
+      // the OS suspended us). Re-arm it now we're foreground again so it's holding the page for the
+      // NEXT trip to the background. No-op if it's already playing; harmless while foreground.
+      if (keepAliveEnabled() && controller.isRunning()) keepAlive.start();
     } else {
       // Stopped on a stale single-node lock (a frozen sibling page iOS just reaped on resume) —
       // re-attempt the start instead of leaving a latched "already running" pill. No-op otherwise.

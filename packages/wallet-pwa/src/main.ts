@@ -241,5 +241,14 @@ registerServiceWorker();
 wireInstallPrompt();
 initScreens(ctx);
 
+// Native APK: backup goes to a local/SAF folder, not the cloud — relabel the drawer item + backup
+// screen so the copy matches (the browser PWA keeps "Cloud backup", which is accurate there).
+if (nativeBackupAvailable()) {
+  const drawerLabel = document.querySelector("#d-backup .grow");
+  if (drawerLabel) drawerLabel.textContent = "Local backup";
+  const backupTitle = document.querySelector("#screen-backup .title");
+  if (backupTitle) backupTitle.textContent = "Local backup";
+}
+
 // Auto-start (default on; a stateless non-created-here seed is a silent skip in the controller).
 void controller.autoStart(localStorage.getItem(AUTO_START_KEY)).finally(() => emitControllerEvent("state-changed"));

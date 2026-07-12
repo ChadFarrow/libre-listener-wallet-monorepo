@@ -10,10 +10,22 @@ export interface StatusPillInputs {
   startError?: string;
   lifecycle: ChannelLifecycle;
   driveConfigured: boolean;
+  // Whether Drive has a LIVE token this session. On an installed iOS PWA the silent reconnect can't
+  // fire (popups are blocked), so a configured wallet often sits disconnected after a restart with
+  // its auto-sync silently dead — surface that so the user can one-tap reconnect (the tap is the
+  // trusted gesture the interactive popup needs).
+  driveConnected: boolean;
   backedUp: boolean;
 }
 
-export type StatusPillTarget = "node" | "get-channel" | "channels" | "cloud-backup" | "recovery" | "sweep";
+export type StatusPillTarget =
+  | "node"
+  | "get-channel"
+  | "channels"
+  | "cloud-backup"
+  | "reconnect-drive"
+  | "recovery"
+  | "sweep";
 
 export interface StatusPill {
   level: "bad" | "warn" | "info";
@@ -50,6 +62,11 @@ export function statusPill(i: StatusPillInputs): StatusPill | null {
   }
   if (!i.driveConfigured) {
     return { level: "warn", text: "Turn on cloud backup", target: "cloud-backup" };
+  }
+  // Configured but the token isn't live (typically an iOS PWA where silent reconnect can't run) —
+  // auto-sync is dead until reconnected. Nag with a one-tap reconnect instead of failing silently.
+  if (!i.driveConnected) {
+    return { level: "warn", text: "Cloud backup disconnected — tap to reconnect", target: "reconnect-drive" };
   }
   return null;
 }

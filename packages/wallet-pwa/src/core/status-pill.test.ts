@@ -7,6 +7,7 @@ const HEALTHY = {
   running: true,
   lifecycle: "active" as ChannelLifecycle,
   driveConfigured: true,
+  driveConnected: true,
   backedUp: true,
 };
 
@@ -67,6 +68,22 @@ describe("statusPill", () => {
 
   it("Drive not configured → warn targeting cloud-backup", () => {
     expect(statusPill({ ...HEALTHY, driveConfigured: false })).toMatchObject({ level: "warn", target: "cloud-backup" });
+  });
+
+  it("Drive configured but disconnected → warn targeting reconnect-drive (the iOS one-tap nag)", () => {
+    const p = statusPill({ ...HEALTHY, driveConnected: false });
+    expect(p).toMatchObject({ level: "warn", target: "reconnect-drive" });
+    expect(p!.text).toMatch(/reconnect/i);
+  });
+
+  it("not-configured outranks disconnected (set up before reconnect)", () => {
+    expect(statusPill({ ...HEALTHY, driveConfigured: false, driveConnected: false })).toMatchObject({
+      target: "cloud-backup",
+    });
+  });
+
+  it("seed-backup outranks the drive-reconnect nag", () => {
+    expect(statusPill({ ...HEALTHY, backedUp: false, driveConnected: false })).toMatchObject({ target: "recovery" });
   });
 
   it("priority: closed states outrank backup drift", () => {

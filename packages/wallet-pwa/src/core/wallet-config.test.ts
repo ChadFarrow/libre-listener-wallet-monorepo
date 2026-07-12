@@ -9,8 +9,31 @@ import {
   DEFAULT_MAINNET_PEER,
   parsePeerString,
   formatPeerString,
+  resolveNodeAlias,
   type AppConfig,
 } from "./wallet-config";
+
+describe("resolveNodeAlias", () => {
+  it("prefers the dedicated (synced) key over the legacy ldk_config value", () => {
+    expect(resolveNodeAlias("From backup", "old legacy")).toBe("From backup");
+  });
+
+  it("falls back to the legacy value when the dedicated key is absent (pre-sync install)", () => {
+    expect(resolveNodeAlias(null, "Chad's phone")).toBe("Chad's phone");
+    expect(resolveNodeAlias(undefined, "Chad's phone")).toBe("Chad's phone");
+  });
+
+  it("returns undefined when neither is set", () => {
+    expect(resolveNodeAlias(null, undefined)).toBeUndefined();
+    expect(resolveNodeAlias("", "")).toBeUndefined();
+    expect(resolveNodeAlias("   ", "   ")).toBeUndefined();
+  });
+
+  it("trims and ignores whitespace-only values", () => {
+    expect(resolveNodeAlias("  Node  ", null)).toBe("Node");
+    expect(resolveNodeAlias("   ", "Legacy")).toBe("Legacy");
+  });
+});
 
 describe("defaultEsploraUrl", () => {
   it("returns a defined public endpoint for every network (never undefined → no SDK crash)", () => {

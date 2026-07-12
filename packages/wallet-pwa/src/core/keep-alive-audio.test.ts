@@ -1,16 +1,28 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { silentWavDataUri, createKeepAlive } from "./keep-alive-audio";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { inaudibleWavDataUri, KEEP_ALIVE_PEAK_AMPLITUDE, createKeepAlive } from "./keep-alive-audio";
 
-describe("silentWavDataUri", () => {
-  it("is a base64 WAV data URI with a valid RIFF/WAVE header of silence", () => {
-    const uri = silentWavDataUri();
+describe("inaudibleWavDataUri", () => {
+  it("is a base64 WAV data URI with a valid 16-bit PCM RIFF/WAVE header", () => {
+    const uri = inaudibleWavDataUri();
     expect(uri.startsWith("data:audio/wav;base64,")).toBe(true);
     const bin = atob(uri.slice("data:audio/wav;base64,".length));
     expect(bin.slice(0, 4)).toBe("RIFF");
     expect(bin.slice(8, 12)).toBe("WAVE");
-    // 8-bit PCM silence is 0x80; the sample region (after the 44-byte header) must be all silence.
-    expect(bin.charCodeAt(44)).toBe(128);
-    expect(bin.charCodeAt(bin.length - 1)).toBe(128);
+    expect(bin.charCodeAt(34)).toBe(16); // 16 bits per sample
+  });
+
+  it("carries a REAL non-zero signal (iOS suspends a pure-silence track) but keeps it sub-audible", () => {
+    const uri = inaudibleWavDataUri();
+    const bin = atob(uri.slice("data:audio/wav;base64,".length));
+    let peak = 0;
+    for (let off = 44; off + 1 < bin.length; off += 2) {
+      // little-endian signed 16-bit
+      let v = bin.charCodeAt(off) | (bin.charCodeAt(off + 1) << 8);
+      if (v >= 0x8000) v -= 0x10000;
+      peak = Math.max(peak, Math.abs(v));
+    }
+    expect(peak).toBeGreaterThan(0); // not pure silence — the whole point of the fix
+    expect(peak).toBeLessThanOrEqual(KEEP_ALIVE_PEAK_AMPLITUDE); // ~-72 dBFS, inaudible ("muted")
   });
 });
 

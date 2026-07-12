@@ -129,8 +129,11 @@ describe("storage contract: backup envelope is forward-restorable", () => {
 // NOT here — they're re-derivable (RGS re-sync) and bundling the ~20MB graph made
 // backups huge; older backups that contain them still restore (see the golden tests).
 // peer_addresses IS here (added 2026-07-11) so a restore auto-reconnects every channel
-// peer; it's additive + not fund-critical, and older backups without it still restore
-// (the frozen golden envelopes below have no peer_addresses and must keep decrypting).
+// peer; node_alias IS here (added 2026-07-12) so the node name syncs across devices;
+// nwc_wallet_private_key + nwc_connections are here (added 2026-07-12) so app pairings follow
+// the wallet (a restore keeps the same NWC pubkey + paired-app config). All are additive + not
+// fund-critical, and older backups without them still restore (the frozen golden envelopes below
+// have none of them and must keep decrypting).
 describe("storage contract: backup direct-key set", () => {
   it("includes the seed + every piece of irreplaceable channel state (and not the re-derivable graph/scorer)", () => {
     expect([...BACKUP_DIRECT_KEYS]).toEqual([
@@ -139,6 +142,9 @@ describe("storage contract: backup direct-key set", () => {
       "ldk_keys_index",
       "state_version",
       "peer_addresses",
+      "node_alias",
+      "nwc_wallet_private_key",
+      "nwc_connections",
     ]);
   });
 });

@@ -27,6 +27,9 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* Floor every focusable control at 16px — below it, iOS Safari auto-zooms the viewport on
+   focus and never restores it (the "PWA zooms in sometimes" bug). Component styles above 16px win. */
+input, textarea, select { font-size: 16px; }
 html, body { height: 100%; }
 body {
   background: var(--bg);
@@ -35,6 +38,9 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
   overscroll-behavior: none;
+  /* No zoom anywhere: `manipulation` disables double-tap-to-zoom while still allowing pans/scrolls
+     (the sheet drag + swipe-up). Pinch-zoom is off via the viewport meta + the no-zoom JS guard. */
+  touch-action: manipulation;
 }
 #app { position: fixed; inset: 0; background: var(--bg); overflow: hidden; }
 
@@ -181,7 +187,9 @@ body {
   font-family: inherit; font-size: 16px; outline: none;
 }
 .field:focus { border-color: var(--accent); }
-.field.mono { font-family: ui-monospace, Menlo, monospace; font-size: 13.5px; }
+/* 16px, not smaller: iOS Safari auto-zooms the viewport when a focused input/textarea/select
+   has font-size < 16px and never zooms back out — the "PWA zooms in sometimes" bug. */
+.field.mono { font-family: ui-monospace, Menlo, monospace; font-size: 16px; }
 textarea.field { resize: none; }
 .mono-box {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg);

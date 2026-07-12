@@ -15,6 +15,7 @@ import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { refreshPushRegistration } from "./web-push";
 import { createKeepAliveForPlatform, isNativeApp, ensureOverlayPermission } from "./core/native-bridge";
 import { nativeBackupAvailable, backupFolderConfigured, nativeBackupNow } from "./core/native-backup";
+import { applyNativeUiCopy } from "./core/native-ui";
 import {
   shouldKeepAlive,
   keepAliveEnabled,
@@ -269,33 +270,11 @@ registerServiceWorker();
 wireInstallPrompt();
 initScreens(ctx);
 
-// Native APK: backup goes to a local/SAF folder, not the cloud — relabel the drawer item + backup
-// screen so the copy matches (the browser PWA keeps "Cloud backup", which is accurate there).
-if (nativeBackupAvailable()) {
-  const drawerLabel = document.querySelector("#d-backup .grow");
-  if (drawerLabel) drawerLabel.textContent = "Local backup";
-  const backupTitle = document.querySelector("#screen-backup .title");
-  if (backupTitle) backupTitle.textContent = "Local backup";
-}
-
-// Native APK: the keep-alive control is a foreground service, not "iOS background audio" — relabel it
-// to "Background mode" so the copy is accurate. And remove the Web Push (offline wake) section: it
-// can't work in the APK (no FCM on GrapheneOS; the foreground service replaces it). The browser PWA
-// keeps both as-is (accurate/functional there). The home bg-mode chip is hidden via bgChipView.
-if (isNativeApp()) {
-  const kaDetails = document.getElementById("keepalive-toggle")?.closest("details");
-  if (kaDetails) {
-    const summary = kaDetails.querySelector("summary");
-    if (summary) summary.textContent = "Background mode";
-    const note = kaDetails.querySelector(".center-note");
-    if (note)
-      note.textContent =
-        "Keeps the node running in the background so boosts settle while the app is in the background.";
-    const label = document.getElementById("keepalive-toggle")?.parentElement;
-    if (label?.lastChild) label.lastChild.textContent = " Keep the node running in the background";
-  }
-  document.getElementById("push-enable")?.closest("details")?.remove();
-}
+// Native APK copy tweaks (all no-ops in the browser PWA): "Cloud backup" → "Local backup" (SAF
+// folder, not the cloud), the keep-alive control → "Background mode" (a foreground service, not "iOS
+// background audio"), and remove the dead Web Push section (no FCM on GrapheneOS). The home bg-mode
+// chip is hidden separately via bgChipView. See core/native-ui.ts.
+applyNativeUiCopy({ native: isNativeApp(), localBackup: nativeBackupAvailable() });
 
 // Auto-start (default on; a stateless non-created-here seed is a silent skip in the controller).
 void controller.autoStart(localStorage.getItem(AUTO_START_KEY)).finally(() => emitControllerEvent("state-changed"));

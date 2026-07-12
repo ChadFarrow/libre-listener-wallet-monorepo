@@ -4,6 +4,12 @@
 // push is the only way a "sleeping" wallet answers a pay/balance request. iOS fires push only when
 // the PWA is installed to the home screen (iOS 16.4+); Android is more reliable.
 import type { WalletController } from "./wallet-controller";
+import {
+  PUSH_WAKE_PREFS_KEY,
+  parsePushWakePrefs,
+  serializePushWakePrefs,
+  shouldRefreshPushRegistration,
+} from "./core/push-registration";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -38,11 +44,37 @@ export async function enablePush(
 ): Promise<void> {
   const reg = await swRegistration();
   if (!reg) throw new Error("Push notifications aren't supported in this browser.");
-  const walletPubkey = ctx.controller.walletPubkeyForPush();
-  if (!walletPubkey) throw new Error("Start the node first so it has an NWC identity to register.");
+  // Fail before prompting for notifications if there's no NWC identity to register.
+  if (!ctx.controller.walletPubkeyForPush()) {
+    throw new Error("Start the node first so it has an NWC identity to register.");
+  }
 
   const permission = await Notification.requestPermission();
   if (permission !== "granted") throw new Error("Notification permission was denied.");
+
+  await subscribeAndRegister(ctx, reg, gatewayUrl, relayUrl);
+
+  // Remember that the user wants wake, with the endpoints they chose, so the launch/resume refresh
+  // can heal a dropped subscription later without another manual toggle.
+  try {
+    localStorage.setItem(PUSH_WAKE_PREFS_KEY, serializePushWakePrefs({ gatewayUrl: gatewayUrl.trim(), relayUrl: relayUrl.trim() }));
+  } catch {
+    /* localStorage unavailable — the subscription still works this session */
+  }
+}
+
+// The shared subscribe → register core (no permission prompt; the caller ensures permission). Fetches
+// the gateway VAPID key, subscribes (idempotent — returns the existing subscription if one exists for
+// the same key), signs the push-auth, and registers the endpoint. The gateway upserts by endpoint, so
+// re-running this refreshes a stale record and re-adds this wallet's pubkey to the live relay sub.
+async function subscribeAndRegister(
+  ctx: { controller: WalletController },
+  reg: ServiceWorkerRegistration,
+  gatewayUrl: string,
+  relayUrl: string
+): Promise<void> {
+  const walletPubkey = ctx.controller.walletPubkeyForPush();
+  if (!walletPubkey) throw new Error("Start the node first so it has an NWC identity to register.");
 
   const base = gatewayUrl.trim().replace(/\/$/, "");
   const vapidRes = await fetch(`${base}/api/vapid-public-key`);
@@ -65,11 +97,46 @@ export async function enablePush(
   if (!regRes.ok) throw new Error("The gateway rejected the subscription.");
 }
 
+// Launch/resume re-registration. iOS silently invalidates the push subscription, after which the
+// gateway deletes the stale row on its next 410 and this device gets NO more wake notifications
+// until it re-registers — the "background wake stopped working" failure. Called on every node
+// start-transition and foreground resume: it re-subscribes (healing a dropped subscription) and
+// re-registers with the gateway, refreshing its record. Fully best-effort and SILENT — it never
+// prompts (permission must already be granted) and never throws into the caller. No-op unless the
+// user previously enabled wake and everything needed is in place.
+export async function refreshPushRegistration(ctx: { controller: WalletController }): Promise<void> {
+  const prefs = parsePushWakePrefs(localStorage.getItem(PUSH_WAKE_PREFS_KEY));
+  if (
+    !shouldRefreshPushRegistration({
+      prefs,
+      supported: await pushSupported(),
+      permission: typeof Notification !== "undefined" ? Notification.permission : "denied",
+      running: ctx.controller.isRunning(),
+    })
+  ) {
+    return;
+  }
+  try {
+    const reg = await swRegistration();
+    if (!reg) return;
+    await subscribeAndRegister(ctx, reg, prefs!.gatewayUrl, prefs!.relayUrl);
+    console.log("[Push] re-registered offline-wake subscription with the gateway");
+  } catch (e) {
+    console.warn("[Push] launch re-registration failed:", (e as Error)?.message || e);
+  }
+}
+
 export async function disablePush(
   ctx: { controller: WalletController },
   gatewayUrl: string,
   relayUrl: string
 ): Promise<void> {
+  // Clear the wake intent first so the launch/resume refresh can't silently re-register after this.
+  try {
+    localStorage.removeItem(PUSH_WAKE_PREFS_KEY);
+  } catch {
+    /* localStorage unavailable — best-effort */
+  }
   const reg = await swRegistration();
   if (!reg) return;
   const subscription = await reg.pushManager.getSubscription();

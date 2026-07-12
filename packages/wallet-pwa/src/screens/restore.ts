@@ -5,6 +5,7 @@ import { setSeedBackedUp } from "../core/onboarding";
 import { resolveSeedInput } from "../core/seed-input";
 import { guardedClick } from "../core/ui-helpers";
 import { driveRestore } from "../drive-integration";
+import { nativeBackupAvailable, nativeRestore, chooseBackupFolder, backupFolderConfigured } from "../core/native-backup";
 import { confirmModal } from "../ui/confirm-modal";
 import { registerScreen, showScreen, currentScreen, resetToHome } from "../ui/nav";
 import { $, setMsg } from "./util";
@@ -57,6 +58,19 @@ export function initRestoreScreen(ctx: AppContext): void {
     void (async () => {
       if (!secret()) {
         setMsg("restore-msg", "Enter your recovery seed first.", "err");
+        return;
+      }
+      // Native APK: restore from the chosen SAF folder (Drive sign-in is blocked in the WebView).
+      // If no folder is chosen yet, open the picker first, then read the backup from it.
+      if (nativeBackupAvailable()) {
+        setMsg("restore-msg", "Reading backup from your folder…");
+        try {
+          if (!backupFolderConfigured()) await chooseBackupFolder();
+          await nativeRestore(controller, secret());
+          done("Wallet restored from folder");
+        } catch (e) {
+          fail(e);
+        }
         return;
       }
       setMsg("restore-msg", "Fetching backup from Google Drive…");
@@ -149,7 +163,12 @@ export function initRestoreScreen(ctx: AppContext): void {
     }
   });
 
-  registerScreen("screen-restore", {});
+  registerScreen("screen-restore", {
+    onShow: () => {
+      // In the native APK the Drive button restores from a SAF folder — relabel it so the copy matches.
+      if (nativeBackupAvailable()) $("restore-drive").textContent = "Restore from folder";
+    },
+  });
   // The latch must survive refreshes: any state-changed while latched re-asserts this screen.
   onControllerEvent(() => {
     if (needsRestore && currentScreen() !== "screen-restore") {

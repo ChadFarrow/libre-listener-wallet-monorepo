@@ -14,6 +14,7 @@ import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { refreshPushRegistration } from "./web-push";
 import { createKeepAliveForPlatform, isNativeApp } from "./core/native-bridge";
+import { nativeBackupAvailable, backupFolderConfigured, nativeBackupNow } from "./core/native-backup";
 import { shouldKeepAlive, keepAliveEnabled } from "./core/keep-alive";
 import { installNoZoom } from "./core/no-zoom";
 import { initScreens } from "./screens";
@@ -169,6 +170,22 @@ onControllerEvent((event) => {
       // "drive-sync" (not "state-changed" — that would re-arm this debounce forever) so the
       // drawer re-reads driveSyncPending() and flips Syncing… → Synced ✓.
       .finally(() => emitControllerEvent("drive-sync"));
+  }, 5000);
+});
+
+// ---- Native (APK) SAF auto-backup (debounced on every state change) ----
+// Same hands-off guarantee as Drive auto-sync, but writes the encrypted envelope to the user's
+// chosen SAF folder (core/native-backup) instead of a Drive account — the only backup channel that
+// works without Play Services. Only when running inside the wrapper with a folder already chosen.
+let nativeBackupTimer: ReturnType<typeof setTimeout> | undefined;
+onControllerEvent((event) => {
+  if (event !== "state-changed" || isDemoMode()) return;
+  if (!nativeBackupAvailable() || !backupFolderConfigured() || !controller.isRunning()) return;
+  clearTimeout(nativeBackupTimer);
+  nativeBackupTimer = setTimeout(() => {
+    void nativeBackupNow(controller).catch((e) =>
+      console.warn("[NativeBackup] auto-backup failed:", (e as Error)?.message || e),
+    );
   }, 5000);
 });
 

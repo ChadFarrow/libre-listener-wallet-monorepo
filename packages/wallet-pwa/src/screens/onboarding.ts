@@ -3,6 +3,12 @@ import { onControllerEvent } from "../core/events";
 import { currentOnboardingStep, type OnboardingStep } from "../core/onboarding-flow";
 import { getSeedBackedUp, setSeedBackedUp } from "../core/onboarding";
 import { driveConfigured, ensureDriveConnected, driveBackupNow } from "../drive-integration";
+import {
+  nativeBackupAvailable,
+  backupFolderConfigured,
+  chooseBackupFolder,
+  nativeBackupNow,
+} from "../core/native-backup";
 import { isDriveForeignBackupError } from "../drive-backup";
 import { isDemoMode, demoState } from "../core/demo-mode";
 import { currentScreen, showScreen } from "../ui/nav";
@@ -38,7 +44,13 @@ export function initOnboarding(ctx: AppContext): void {
       const step = currentOnboardingStep({
         hasWallet: s.hasSeed || s.createdNew || s.hasChannelState,
         backedUp: isDemoMode() ? demoState.seedBackedUp : getSeedBackedUp(s.network),
-        driveConfigured: isDemoMode() ? demoState.driveConfigured : driveConfigured(),
+        // The mandatory-backup gate: in the native APK, Google sign-in is blocked in the WebView,
+        // so backup is a chosen SAF folder (core/native-backup), not a Drive account.
+        driveConfigured: isDemoMode()
+          ? demoState.driveConfigured
+          : nativeBackupAvailable()
+            ? backupFolderConfigured()
+            : driveConfigured(),
         // While stopped we can't count channels; existing channel state means this wallet
         // completed onboarding before — the status pill owns any post-onboarding gaps.
         channels: s.running ? (s.channels ?? 0) : s.hasChannelState ? 1 : 0,
@@ -203,6 +215,35 @@ export function initOnboarding(ctx: AppContext): void {
     }
 
     if (step === "drive") {
+      // Native APK: Google sign-in is blocked in the WebView, so back up to a SAF folder (local or
+      // Google Drive) instead of connecting a Drive account.
+      if (nativeBackupAvailable()) {
+        body.innerHTML = `${emblem(ICONS.cloud)}
+          <h1>Back up to<br/>a folder.</h1>
+          <p>Pick a folder — on your device or in Google Drive — and an encrypted copy of your wallet is saved there. Only your wallet seed unlocks it.</p>`;
+        foot(
+          button("Choose backup folder", "btn-primary", async () => {
+            setMsg("ob-msg", "Opening folder picker…");
+            try {
+              const { label } = await chooseBackupFolder();
+              if (controller.isRunning()) await nativeBackupNow(controller);
+              setMsg("ob-msg", `Backing up to ${label} ✓`, "ok");
+              await evaluate();
+            } catch (e) {
+              if (isDriveForeignBackupError(e)) {
+                setMsg("ob-msg", (e as Error).message, "err");
+                hideOverlay();
+                renderedStep = "";
+                showScreen("screen-restore");
+                return;
+              }
+              setMsg("ob-msg", `Couldn't set up backup: ${(e as Error).message}`, "err");
+              await evaluate();
+            }
+          }),
+        );
+        return;
+      }
       body.innerHTML = `${emblem(ICONS.cloud)}
         <h1>Back up to<br/>your cloud.</h1>
         <p>An encrypted copy of your wallet keeps your channel state safe. Only your wallet seed unlocks it — Google never sees your sats.</p>`;

@@ -12,6 +12,14 @@ import {
   driveBackupNow,
   driveDeleteBackups,
 } from "../drive-integration";
+import {
+  nativeBackupAvailable,
+  backupFolderConfigured,
+  backupTargetLabel,
+  chooseBackupFolder,
+  nativeBackupNow,
+  detectBackupTargets,
+} from "../core/native-backup";
 import { cloudBackupButtons } from "../core/drive-ui";
 import { guardedClick } from "../core/ui-helpers";
 import { confirmModal } from "../ui/confirm-modal";
@@ -36,7 +44,33 @@ export function initCloudBackupScreen(ctx: AppContext): void {
     }
   }
 
+  // Native APK: back up to a chosen SAF folder (local or Google Drive) instead of a Drive account.
+  // Repurposes the Drive controls — "Connect Drive" → "Choose folder", "Back up now" → SAF write.
+  async function refreshNative(): Promise<void> {
+    const configured = backupFolderConfigured();
+    const targets = await detectBackupTargets();
+    const state = $("backup-drive-state");
+    state.textContent = configured ? `${backupTargetLabel()} ✓` : "Not set up";
+    state.style.color = configured ? "var(--accent)" : "var(--warn)";
+    $("backup-account").textContent = targets.gdrive ? "Local storage or Google Drive" : "Local storage";
+    const connectBtn = $("drive-connect");
+    connectBtn.textContent = configured ? "Change folder" : "Choose backup folder";
+    connectBtn.className = configured ? "btn-ghost" : "btn-primary";
+    show(connectBtn, true);
+    const backupNow = $("drive-backup-now") as HTMLButtonElement;
+    backupNow.textContent = "Back up now";
+    backupNow.className = configured ? "btn-primary" : "btn-ghost";
+    backupNow.disabled = !ctx.isRunning() || !configured;
+    ($("export") as HTMLButtonElement).disabled = !ctx.isRunning();
+    show("auto-download-row", false);
+    show("drive-delete", false);
+  }
+
   function refresh(): void {
+    if (nativeBackupAvailable()) {
+      void refreshNative();
+      return;
+    }
     if (isDemoMode()) {
       const dv = cloudBackupButtons(demoState.driveConfigured, demoState.driveConfigured);
       $("backup-drive-state").textContent = demoState.driveConfigured ? "Connected (demo)" : "Not connected";
@@ -80,6 +114,18 @@ export function initCloudBackupScreen(ctx: AppContext): void {
 
   $("drive-connect").addEventListener("click", () => {
     void (async () => {
+      if (nativeBackupAvailable()) {
+        setMsg("backup-msg", "Opening folder picker…");
+        try {
+          const { label } = await chooseBackupFolder();
+          refresh();
+          setMsg("backup-msg", `Backing up to ${label}. Tap “Back up now” to save a copy.`, "ok");
+          void markSeedBackedUp();
+        } catch (e) {
+          setMsg("backup-msg", (e as Error).message, "err");
+        }
+        return;
+      }
       if (isDemoMode()) {
         demoState.driveConfigured = true;
         refresh();
@@ -105,6 +151,17 @@ export function initCloudBackupScreen(ctx: AppContext): void {
 
   $("drive-backup-now").addEventListener("click", () => {
     void (async () => {
+      if (nativeBackupAvailable()) {
+        setMsg("backup-msg", `Backing up to ${backupTargetLabel()}…`);
+        try {
+          const { network } = await nativeBackupNow(controller);
+          setMsg("backup-msg", `Backed up (${network}) to ${backupTargetLabel()}`, "ok");
+          void markSeedBackedUp();
+        } catch (e) {
+          setMsg("backup-msg", (e as Error).message, "err");
+        }
+        return;
+      }
       setMsg("backup-msg", "Backing up to Drive…");
       try {
         const { network } = await driveBackupNow(controller);

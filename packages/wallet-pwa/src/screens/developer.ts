@@ -157,6 +157,11 @@ export function initDeveloperScreen(ctx: AppContext): void {
     onShow: () => {
       void load();
       $<HTMLInputElement>("keepalive-toggle").checked = keepAliveEnabled();
+      // If keep-alive is enabled + running but iOS hasn't let the audio start (no tap yet), tell
+      // the user a single tap activates it — otherwise "enabled" reads as "working" when it isn't.
+      if (keepAliveEnabled() && ctx.keepAlive.needsActivation()) {
+        setMsg("keepalive-msg", "Enabled — tap the screen once to activate background audio (iOS needs a tap).", "err");
+      }
       void refreshDiagStats();
     },
   });

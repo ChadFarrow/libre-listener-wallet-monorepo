@@ -46,7 +46,7 @@ describe("receive screen payment confirmation", () => {
       getBalance: vi.fn().mockResolvedValue({ spendableSat: 20_000, receivableSat: 100_000 }),
       createInvoice: vi.fn().mockResolvedValue({ paymentRequest: "lnbc50u1invoicestub" }),
     } as unknown as WalletController;
-    return { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, isActive: () => false } };
+    return { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
   }
 
   beforeEach(() => {

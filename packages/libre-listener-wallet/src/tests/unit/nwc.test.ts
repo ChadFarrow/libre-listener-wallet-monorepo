@@ -618,8 +618,10 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       );
 
       const resp = await send("to-1");
-      // The client gets an error response (its request timed out) …
-      expect(resp.error).toBeDefined();
+      // The client gets NO failure response: the payment is still in flight, so reporting an error
+      // (which strict clients render as "failed") would be wrong — the payment_sent notification
+      // reconciles it on the late settle.
+      expect(resp).toBeNull();
       // … but the budget IS charged, so a replay/next request can't over-spend the cap.
       expect((await nwc.listConnections())[0].spentTodaySats).toBe(60);
 

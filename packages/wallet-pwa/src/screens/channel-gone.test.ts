@@ -40,7 +40,7 @@ function makeCtx(state: unknown): AppContext {
     getBalance: vi.fn().mockResolvedValue({ spendableSat: 0, receivableSat: 0 }),
     getChannels: vi.fn().mockResolvedValue([]),
   } as unknown as WalletController;
-  return { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, isActive: () => false } };
+  return { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 }
 
 describe("channel-gone UX", () => {

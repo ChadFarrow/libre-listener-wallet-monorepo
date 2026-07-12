@@ -46,7 +46,7 @@ describe("drawer → screen navigation", () => {
       getBalance: vi.fn().mockResolvedValue({ spendableSat: 0, receivableSat: 0 }),
       getChannels: vi.fn().mockResolvedValue([]),
     } as unknown as WalletController;
-    const ctx: AppContext = { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, isActive: () => false } };
+    const ctx: AppContext = { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 
     initScreens(ctx);
     await flush();
@@ -83,7 +83,7 @@ describe("drawer → screen navigation", () => {
       getChannels: vi.fn().mockResolvedValue([]),
       getConfig: vi.fn().mockResolvedValue({ network: "mainnet" }),
     } as unknown as WalletController;
-    const ctx: AppContext = { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, isActive: () => false } };
+    const ctx: AppContext = { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 
     initScreens(ctx);
     await flush();

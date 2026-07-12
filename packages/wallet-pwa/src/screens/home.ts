@@ -10,7 +10,7 @@ import { isDemoMode, demoState } from "../core/demo-mode";
 import { getUsdRate, satsToUsd } from "../core/fiat-rate";
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
 import { bgChipView } from "../core/bg-mode";
-import { ensureOverlayPermission, isNativeApp } from "../core/native-bridge";
+import { ensureOverlayPermission, overlayPermissionGranted, requestOverlayPermission, isNativeApp } from "../core/native-bridge";
 import { nativeBackupAvailable, backupFolderConfigured } from "../core/native-backup";
 import { registerScreen, showScreen, currentScreen, openDrawer } from "../ui/nav";
 import { $, show, fmtSats } from "./util";
@@ -26,6 +26,9 @@ const PILL_SCREEN: Record<StatusPillTarget, string | "drawer"> = {
   "reconnect-drive": "screen-backup",
   recovery: "screen-recovery",
   sweep: "screen-sweep",
+  // overlay is handled as an inline action (opens the system grant screen); developer settings is the
+  // fallback destination (where the Background mode toggle lives).
+  overlay: "screen-dev",
 };
 
 export function initHomeScreen(ctx: AppContext): void {
@@ -102,6 +105,11 @@ export function initHomeScreen(ctx: AppContext): void {
             ? backupFolderConfigured()
             : driveConnected(),
         backedUp: isDemoMode() ? demoState.seedBackedUp : getSeedBackedUp(s.network),
+        // Native APK only: warn (and let the user one-tap re-grant) when background mode is on but the
+        // overlay permission is missing — the reliability gap behind "boosts stop settling in the
+        // background." Re-checked every refresh, so a later revocation resurfaces.
+        backgroundNeedsOverlay:
+          !isDemoMode() && isNativeApp() && keepAliveEnabled() ? !(await overlayPermissionGranted()) : false,
       });
       const pillEl = $("status-pill");
       show(pillEl, !!pill);
@@ -125,6 +133,12 @@ export function initHomeScreen(ctx: AppContext): void {
     // reconnect can't). On success the auto-sync resumes; on failure fall back to the backup screen.
     if (pillTarget === "reconnect-drive") {
       void reconnectDrive();
+      return;
+    }
+    // One-tap overlay re-grant: open the system "draw over other apps" screen. On return, the next
+    // refresh re-checks the permission and clears the pill once it's granted.
+    if (pillTarget === "overlay") {
+      void requestOverlayPermission();
       return;
     }
     const dest = PILL_SCREEN[pillTarget];

@@ -130,6 +130,35 @@ export async function ensureOverlayPermission(): Promise<void> {
   }
 }
 
+// Whether the overlay ("draw over other apps") permission is currently granted. Returns true when it's
+// granted OR the concept doesn't apply (not native, or a wrapper build without the overlay methods) —
+// callers use this to WARN when it's MISSING, so "unknown" must never read as missing (no false nag).
+export async function overlayPermissionGranted(): Promise<boolean> {
+  if (!isNativeApp()) return true;
+  const svc = getNativeForegroundService();
+  if (!svc?.hasOverlayPermission) return true;
+  try {
+    const res = await svc.hasOverlayPermission();
+    return res?.granted === true;
+  } catch {
+    return true; // couldn't determine → don't nag
+  }
+}
+
+// Open the system "draw over other apps" grant screen. Unlike ensureOverlayPermission (which only opens
+// it when missing, on first enable), this always opens it — for the tap-to-fix warning, where the
+// caller has already established the permission is missing. Best-effort; no-op in a plain PWA.
+export async function requestOverlayPermission(): Promise<void> {
+  if (!isNativeApp()) return;
+  const svc = getNativeForegroundService();
+  if (!svc?.requestOverlayPermission) return;
+  try {
+    await svc.requestOverlayPermission();
+  } catch (e) {
+    console.warn("[native] overlay permission request failed:", (e as Error)?.message || e);
+  }
+}
+
 // Choose the background-liveness strategy for the current platform. In the native wrapper a
 // foreground service holds the process alive far more reliably than the PWA's inaudible audio tone
 // and needs no user gesture — so prefer it when the plugin is present. Falls back to the audio tone

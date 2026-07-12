@@ -16,6 +16,11 @@ export interface StatusPillInputs {
   // trusted gesture the interactive popup needs).
   driveConnected: boolean;
   backedUp: boolean;
+  // Native APK only: background mode is ON but the "draw over other apps" overlay permission is
+  // missing, so background boosts will stall (the overlay is what keeps the occluded WebView renderer
+  // alive). Undefined/false everywhere else. Lowest-priority rung — only nags an otherwise-set-up
+  // wallet, and re-checks every refresh so a later revocation resurfaces.
+  backgroundNeedsOverlay?: boolean;
 }
 
 export type StatusPillTarget =
@@ -25,7 +30,8 @@ export type StatusPillTarget =
   | "cloud-backup"
   | "reconnect-drive"
   | "recovery"
-  | "sweep";
+  | "sweep"
+  | "overlay";
 
 export interface StatusPill {
   level: "bad" | "warn" | "info";
@@ -67,6 +73,10 @@ export function statusPill(i: StatusPillInputs): StatusPill | null {
   // auto-sync is dead until reconnected. Nag with a one-tap reconnect instead of failing silently.
   if (!i.driveConnected) {
     return { level: "warn", text: "Cloud backup disconnected — tap to reconnect", target: "reconnect-drive" };
+  }
+  // Lowest priority: only nag about background reliability once the wallet is otherwise fully set up.
+  if (i.backgroundNeedsOverlay) {
+    return { level: "warn", text: 'Background mode needs "Display over other apps" — tap to allow', target: "overlay" };
   }
   return null;
 }

@@ -90,4 +90,22 @@ describe("statusPill", () => {
     const p = statusPill({ ...HEALTHY, lifecycle: "closed-needs-address", backedUp: false, driveConfigured: false });
     expect(p!.target).toBe("sweep");
   });
+
+  it("background mode needing overlay → warn targeting overlay (the native background nag)", () => {
+    const p = statusPill({ ...HEALTHY, backgroundNeedsOverlay: true });
+    expect(p).toMatchObject({ level: "warn", target: "overlay" });
+    expect(p!.text).toMatch(/display over other apps/i);
+  });
+
+  it("overlay nag is LOWEST priority — any setup gap outranks it", () => {
+    expect(statusPill({ ...HEALTHY, backgroundNeedsOverlay: true, backedUp: false })).toMatchObject({ target: "recovery" });
+    expect(statusPill({ ...HEALTHY, backgroundNeedsOverlay: true, driveConnected: false })).toMatchObject({
+      target: "reconnect-drive",
+    });
+  });
+
+  it("overlay granted (or non-native) never nags", () => {
+    expect(statusPill({ ...HEALTHY, backgroundNeedsOverlay: false })).toBeNull();
+    expect(statusPill(HEALTHY)).toBeNull(); // undefined behaves as false
+  });
 });

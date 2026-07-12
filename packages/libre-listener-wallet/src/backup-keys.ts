@@ -25,6 +25,17 @@
 // older backups simply lack the key and restore fine (the golden envelopes below have no
 // node_alias and must keep decrypting).
 //
+// `nwc_wallet_private_key` + `nwc_connections` (the NWC wallet-service identity apps pair to, and
+// the paired-app list with per-connection secret/permissions/budget) are included so app pairings
+// follow the wallet across devices: a restore keeps the SAME NWC wallet pubkey, so already-paired
+// apps (Alby Go, stablekraft, …) reach the restored device WITHOUT re-pairing, with the same
+// permission/budget config. These are spend-authority secrets, but the backup is seed-encrypted
+// and already carries the seed itself (full fund control) — they're the same class of secret,
+// encrypted identically, so this doesn't widen the trust boundary (guardrails §"key isolation":
+// secrets leave only inside a locally-encrypted backup). Additive + backward-compatible: an older
+// backup lacks them and restores fine (init() then mints a fresh NWC identity, as it does today).
+// MAX_NWC_CONNECTIONS caps nwc_connections at 10 entries, so it stays tiny.
+//
 // NOTE on payment history: the `tx_*` records (PaymentLogger, one per payment) are NOT listed
 // here — they're dynamic, unbounded keys, so like the channel-monitor keys they're ENUMERATED
 // and appended at export time (exportState, gated on storage.keys()). Additive + not fund-
@@ -37,4 +48,6 @@ export const BACKUP_DIRECT_KEYS = [
   "state_version",
   "peer_addresses",
   "node_alias",
+  "nwc_wallet_private_key",
+  "nwc_connections",
 ] as const;

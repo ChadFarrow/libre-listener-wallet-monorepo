@@ -51,8 +51,7 @@ class LibreForegroundServicePlugin : Plugin() {
     fun stop(call: PluginCall) {
         ForegroundService.stop(context)
         residencyEnabled = false
-        // If we're currently in the overlay, pull back to the activity so nothing is left detached.
-        bridge?.webView?.let { residency?.moveToActivity(it) }
+        exitOverlay() // pull back to the activity so nothing is left detached
         call.resolve()
     }
 
@@ -80,17 +79,23 @@ class LibreForegroundServicePlugin : Plugin() {
     override fun handleOnPause() {
         super.handleOnPause()
         keepTimersRunning()
-        if (residencyEnabled) bridge?.webView?.let { residency?.moveToOverlay(it) }
+        if (residencyEnabled) enterOverlay()
     }
 
     override fun handleOnResume() {
         super.handleOnResume()
-        bridge?.webView?.let { residency?.moveToActivity(it) }
+        exitOverlay()
         keepTimersRunning()
     }
 
-    private fun pinRendererPriority() {
-        val webView = bridge?.webView ?: return
+    private inline fun withWebView(action: (WebView) -> Unit) {
+        bridge?.webView?.let(action)
+    }
+
+    private fun enterOverlay() = withWebView { residency?.moveToOverlay(it) }
+    private fun exitOverlay() = withWebView { residency?.moveToActivity(it) }
+
+    private fun pinRendererPriority() = withWebView { webView ->
         webView.post {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
@@ -98,8 +103,7 @@ class LibreForegroundServicePlugin : Plugin() {
         }
     }
 
-    private fun keepTimersRunning() {
-        val webView = bridge?.webView ?: return
+    private fun keepTimersRunning() = withWebView { webView ->
         webView.post { webView.resumeTimers() }
     }
 }

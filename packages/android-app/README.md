@@ -171,6 +171,53 @@ resident/visible from the service so Chromium doesn't suspend the renderer) and/
 the renderer can be woken to process the bytes, which points back to Arm B. Full native-LDK is the
 heavy fallback.
 
+### Real-app reproduction (same session, real money) — CONFIRMS the maintainer's normal experience
+
+After funding a channel (25k inbound from the maintainer's own node; ~1,646 spendable seeded by a 2k
+receive) and pairing an NWC client, a **real V4V boost with splits was sent from stablekraft.app on the
+same phone**. Result, verified in logcat and **confirmed by the maintainer as "what has normally been
+happening"**:
+
+- While the wallet was **occluded by stablekraft (screen ON)**, the boost's `pay_keysend` split
+  requests **queued on the relay unprocessed** — stablekraft reported all splits timed out. No `[NWC]`
+  activity in logcat during that window. The foreground service was up the whole time (`isForeground=true`).
+- The instant the maintainer **switched back to the wallet**, the renderer thawed and the **entire
+  backlog drained in one burst** (`[NWC] response → pay_keysend …`, `PaymentSent … sent!`).
+
+**Two things this sharpens:**
+1. The freeze happens on **occlusion, not just screen-off** — the screen was ON, the wallet was merely
+   behind stablekraft, and it still froze. So "keep the screen on" is not an escape, and Arm B's
+   "keep the WebView visible" cannot apply while another app is genuinely on top. This makes the fix
+   harder than a screen-off-only problem.
+2. **The native foreground-service wrapper did NOT change the outcome vs. the plain PWA** — same
+   queue-and-timeout the maintainer always sees. Target-B-as-scaffolded (foreground service only) does
+   not solve the core problem.
+
+**Separate, unrelated issue observed:** of the splits that *did* process (once foreground), most failed
+`Failed to find route for payment` — a routing/liquidity problem (single channel to the maintainer's
+own node, no network path to most V4V recipients), independent of the background question. Would fail
+the same on desktop; fix with better-connected channel liquidity.
+
+### Fix direction (open — the background problem is NOT yet solved)
+
+The requests **queue and drain on foreground rather than being lost**, so the problem is "wake/keep the
+renderer running while occluded," not data loss. Candidate fixes, roughly increasing effort/robustness:
+
+- **A. WebView renderer-residency (Arm B, native):** `WebView.setRendererPriorityPolicy(RENDERER_
+  PRIORITY_IMPORTANT, waivedWhenNotVisible=false)` + host the node's WebView in the **foreground
+  service** attached via `WindowManager` (off-screen), so occlusion of the *activity* doesn't hide the
+  *node* WebView. Cheapest to try; **uncertain** it defeats Chromium's page-freeze on occlusion.
+- **B. Native relay socket + renderer wake:** a Kotlin WebSocket to the Nostr relay stays alive in the
+  service; on an inbound NWC event it must un-freeze the renderer to process — only works if (A)'s
+  keep-resident works, so (A) is the prerequisite experiment.
+- **C. Native LDK node (`ldk-node` Kotlin):** run the node natively, no WebView freeze at all. Robust,
+  but a large rewrite that diverges from the shared TS SDK. This is what native wallets (Phoenix,
+  Breez) do, and pairs with push for inbound.
+- **Interim that works today:** run the always-on node on a desktop/server/always-on box and use the
+  phone apps (incl. this one) as **NWC clients** — sidesteps mobile renderer freezing entirely.
+
+Next experiment: build (A) and re-run the real-app boost test.
+
 **Still open (definitive end-to-end):** the above measures *timer* freeze. The airtight test is an
 actual keysend boost sent to the wallet's NWC while backgrounded/screen-off (needs the channel usable
 + an NWC pairing + a second device) — the exact protocol above. Timer-freeze makes the expected result

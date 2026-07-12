@@ -10,6 +10,7 @@ import { getUsdRate, satsToUsd } from "../core/fiat-rate";
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
 import { bgChipView } from "../core/bg-mode";
 import { ensureOverlayPermission } from "../core/native-bridge";
+import { nativeBackupAvailable, backupFolderConfigured } from "../core/native-backup";
 import { registerScreen, showScreen, currentScreen, openDrawer } from "../ui/nav";
 import { $, show, fmtSats } from "./util";
 
@@ -82,9 +83,20 @@ export function initHomeScreen(ctx: AppContext): void {
         running: s.running,
         startError: s.startError,
         lifecycle,
-        driveConfigured: isDemoMode() ? demoState.driveConfigured : driveConfigured(),
+        // In the native APK, "cloud backup" is a chosen SAF folder (core/native-backup), not a Drive
+        // account — and SAF has no live-token/reconnect concept, so a chosen folder is both
+        // "configured" AND "connected" (no false "disconnected — reconnect" nag).
+        driveConfigured: isDemoMode()
+          ? demoState.driveConfigured
+          : nativeBackupAvailable()
+            ? backupFolderConfigured()
+            : driveConfigured(),
         // Demo has no real token; treat a configured demo wallet as connected so the nag never shows.
-        driveConnected: isDemoMode() ? demoState.driveConfigured : driveConnected(),
+        driveConnected: isDemoMode()
+          ? demoState.driveConfigured
+          : nativeBackupAvailable()
+            ? backupFolderConfigured()
+            : driveConnected(),
         backedUp: isDemoMode() ? demoState.seedBackedUp : getSeedBackedUp(s.network),
       });
       const pillEl = $("status-pill");

@@ -9,6 +9,7 @@ import {
   parsePushWakePrefs,
   serializePushWakePrefs,
   shouldRefreshPushRegistration,
+  effectivePushPrefs,
 } from "./core/push-registration";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
@@ -105,20 +106,33 @@ async function subscribeAndRegister(
 // prompts (permission must already be granted) and never throws into the caller. No-op unless the
 // user previously enabled wake and everything needed is in place.
 export async function refreshPushRegistration(ctx: { controller: WalletController }): Promise<void> {
-  const prefs = parsePushWakePrefs(localStorage.getItem(PUSH_WAKE_PREFS_KEY));
-  if (
-    !shouldRefreshPushRegistration({
-      prefs,
-      supported: await pushSupported(),
-      permission: typeof Notification !== "undefined" ? Notification.permission : "denied",
-      running: ctx.controller.isRunning(),
-    })
-  ) {
-    return;
+  const supported = await pushSupported();
+  const permission = typeof Notification !== "undefined" ? Notification.permission : "denied";
+  if (!supported || permission !== "granted" || !ctx.controller.isRunning()) return;
+
+  const reg = await swRegistration();
+  if (!reg) return;
+
+  // Resolve prefs: stored wins; else backfill the ship defaults if a live subscription proves wake
+  // was enabled on a pre-prefs build (legacy migration). Persist a backfill so it's a one-time thing.
+  let prefs = parsePushWakePrefs(localStorage.getItem(PUSH_WAKE_PREFS_KEY));
+  if (!prefs) {
+    const hasLiveSubscription = !!(await reg.pushManager.getSubscription());
+    const backfilled = effectivePushPrefs({ stored: null, hasLiveSubscription });
+    if (backfilled) {
+      prefs = backfilled;
+      try {
+        localStorage.setItem(PUSH_WAKE_PREFS_KEY, serializePushWakePrefs(prefs));
+      } catch {
+        /* localStorage unavailable — proceed with the in-memory backfill this session */
+      }
+      console.log("[Push] backfilled offline-wake prefs from a pre-prefs install");
+    }
   }
+
+  if (!shouldRefreshPushRegistration({ prefs, supported, permission, running: true })) return;
+
   try {
-    const reg = await swRegistration();
-    if (!reg) return;
     await subscribeAndRegister(ctx, reg, prefs!.gatewayUrl, prefs!.relayUrl);
     console.log("[Push] re-registered offline-wake subscription with the gateway");
   } catch (e) {

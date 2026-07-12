@@ -3,6 +3,9 @@ import {
   parsePushWakePrefs,
   serializePushWakePrefs,
   shouldRefreshPushRegistration,
+  effectivePushPrefs,
+  DEFAULT_PUSH_GATEWAY_URL,
+  DEFAULT_PUSH_RELAY_URL,
   type PushWakePrefs,
 } from "./push-registration";
 
@@ -49,5 +52,22 @@ describe("shouldRefreshPushRegistration", () => {
 
   it("skips when the node isn't running (can't sign the gateway auth)", () => {
     expect(shouldRefreshPushRegistration({ ...base, running: false })).toBe(false);
+  });
+});
+
+describe("effectivePushPrefs (legacy migration)", () => {
+  it("returns stored prefs when present, ignoring the subscription", () => {
+    expect(effectivePushPrefs({ stored: prefs, hasLiveSubscription: false })).toEqual(prefs);
+  });
+
+  it("backfills ship defaults for a pre-prefs install with a live subscription", () => {
+    expect(effectivePushPrefs({ stored: null, hasLiveSubscription: true })).toEqual({
+      gatewayUrl: DEFAULT_PUSH_GATEWAY_URL,
+      relayUrl: DEFAULT_PUSH_RELAY_URL,
+    });
+  });
+
+  it("returns null when wake was never enabled (no prefs, no subscription)", () => {
+    expect(effectivePushPrefs({ stored: null, hasLiveSubscription: false })).toBeNull();
   });
 });

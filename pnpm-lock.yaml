@@ -30,6 +30,8 @@ importers:
         specifier: ^8.62.1
         version: 8.62.1(eslint@9.39.4)(typescript@5.9.3)
 
+  packages/android-app: {}
+
   packages/browser-extension:
     dependencies:
       '@libre/listener-wallet':

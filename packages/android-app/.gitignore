@@ -1,0 +1,9 @@
+# The native project is generated on a machine with the Android SDK (`pnpm cap:add`) — not committed.
+# The canonical native source lives in native/ and is copied into android/ during setup (see README).
+/android/
+/node_modules/
+/dist/
+*.apk
+*.aab
+*.keystore
+.gradle/

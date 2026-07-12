@@ -1,0 +1,23 @@
+<!--
+  Merge these into the GENERATED android/app/src/main/AndroidManifest.xml after `cap add android`.
+  (This file is a snippet, not a full manifest — do not use it verbatim.)
+-->
+
+<!-- 1) Permissions: place inside <manifest>, above <application>. -->
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+<uses-permission android:name="android.permission.WAKE_LOCK" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+<uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+<!--
+  2) Service: place inside <application>.
+  foregroundServiceType="dataSync" fits "staying synced with the Lightning network."
+  NOTE (validate on-device): Android 15 caps cumulative dataSync foreground-service runtime at ~6h/day.
+  If that bites an always-on wallet, evaluate a "mediaPlayback" type driven by a real MediaSession
+  (the wallet already generates a sub-audible keep-alive tone) or "connectedDevice". Decide in Phase 3/4.
+-->
+<service
+    android:name=".ForegroundService"
+    android:exported="false"
+    android:foregroundServiceType="dataSync" />

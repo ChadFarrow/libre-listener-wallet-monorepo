@@ -6,9 +6,11 @@ background. This is the one thing a browser tab can't do, and it's what lets NWC
 the app is backgrounded / the screen is off. Pure AOSP (no Firebase / Google Play Services), so it
 works on **GrapheneOS**.
 
-> **Status: scaffold — not yet built.** The native project is generated on a machine with the Android
-> SDK; it can't be built or tested in CI or a headless Linux box. The steps below run on your Mac with
-> a real GrapheneOS device attached. Everything here is unverified until you build it on-device.
+> **Status: APK builds (2026-07-12), on-device behavior unverified.** The full runbook below has been
+> executed on the maintainer's Mac and produces a working `app-debug.apk` (plugin classes in the dex,
+> service + permissions in the manifest, wallet assets incl. the LDK WASM packaged). It can't be built
+> in CI or a headless Linux box. Everything about *runtime* behavior is unverified until the Phase 0
+> spike runs on a real GrapheneOS device.
 
 Approved plan & rationale: `Target B` in `ai/reference/this-monorepo/libre-listener-wallet-architecture.md`.
 The web-side seam already lives in `packages/wallet-pwa/src/core/native-bridge.ts` (chooses the native
@@ -18,7 +20,11 @@ foreground service over the audio keep-alive when running in this wrapper).
 
 ## Prerequisites (macOS)
 
-- Node + pnpm (repo already uses `pnpm@10`), and **Android Studio** with the Android SDK + platform-tools.
+- Node + pnpm (repo already uses `pnpm@10`), and the **Android SDK** + platform-tools (Android Studio
+  is optional — a plain `~/Library/Android/sdk` + gradle CLI build works fine).
+- **JDK 21** (Capacitor 7's Android library compiles with `--release 21`; JDK 17 fails with
+  `invalid source release: 21`). `brew install openjdk@21`, then pass it as `JAVA_HOME` (see the build
+  step below) — Android Studio users get a bundled JDK and can skip this.
 - A **GrapheneOS device** with Developer options → USB debugging on, connected over USB (`adb devices` shows it).
 
 ## One-time setup
@@ -27,11 +33,15 @@ foreground service over the audio keep-alive when running in this wrapper).
 # from the repo root
 pnpm install
 
-# add Capacitor to THIS package (kept out of the committed lockfile on purpose — added on the Mac)
+# add Capacitor to THIS package (kept out of the committed lockfile on purpose — added on the Mac).
+# NOTE: this rewrites package.json + pnpm-lock.yaml locally — do NOT commit those changes (CI's
+# frozen-lockfile install and the no-committed-deps design depend on them staying out).
 pnpm --filter @libre/android-app add @capacitor/core @capacitor/cli @capacitor/android
 
-# build the PWA the wrapper will host (produces packages/wallet-pwa/dist)
-pnpm --filter @libre/wallet-pwa build
+# build the PWA the wrapper will host (produces packages/wallet-pwa/dist).
+# The VITE_LSPS1_MOCK_URL= override is MANDATORY (same rule as the Cloudflare deploy): a gitignored
+# .env.local sets it for dev, and without the override the dev mock LSP gets baked into the APK.
+VITE_LSPS1_MOCK_URL= pnpm --filter @libre/wallet-pwa build
 
 # generate the native android/ project (gitignored)
 pnpm --filter @libre/android-app cap:add
@@ -41,31 +51,45 @@ Then wire the foreground-service plugin into the generated project (the `native/
 canonical source — copy them in):
 
 1. Copy `native/ForegroundService.kt` and `native/LibreForegroundServicePlugin.kt` into
-   `android/app/src/main/java/com/v4vmusic/librelistener/` (create the package dirs).
-2. Merge `native/AndroidManifest.snippet.xml` into `android/app/src/main/AndroidManifest.xml`.
-3. In `android/app/src/main/java/.../MainActivity.kt`, register the plugin:
-   ```kotlin
-   class MainActivity : BridgeActivity() {
-       override fun onCreate(savedInstanceState: Bundle?) {
-           registerPlugin(LibreForegroundServicePlugin::class.java)
-           super.onCreate(savedInstanceState)
+   `android/app/src/main/java/com/v4vmusic/librelistener/` (the package dir already exists — it holds
+   the generated `MainActivity.java`).
+2. **Enable Kotlin** — the Capacitor template generates a Java-only project, so the `.kt` sources
+   won't compile until you:
+   - add `classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21'` to the `buildscript`
+     dependencies in `android/build.gradle`, and
+   - add `apply plugin: 'org.jetbrains.kotlin.android'` under `apply plugin: 'com.android.application'`
+     in `android/app/build.gradle`.
+3. Merge `native/AndroidManifest.snippet.xml` into `android/app/src/main/AndroidManifest.xml`
+   (permissions inside `<manifest>`, the `<service>` inside `<application>`).
+4. In the generated `android/app/src/main/java/.../MainActivity.java` (the template is Java, not
+   Kotlin), register the plugin:
+   ```java
+   public class MainActivity extends BridgeActivity {
+       @Override
+       public void onCreate(Bundle savedInstanceState) {
+           registerPlugin(LibreForegroundServicePlugin.class);
+           super.onCreate(savedInstanceState);
        }
    }
    ```
-4. Confirm `applicationId` in `android/app/build.gradle` matches `appId` in `capacitor.config.ts`
+5. Confirm `applicationId` in `android/app/build.gradle` matches `appId` in `capacitor.config.ts`
    (`com.v4vmusic.librelistener`).
 
 ## Build → install → iterate
 
 ```bash
 # after any change to the web app: rebuild the PWA, then copy it into the native project
-pnpm --filter @libre/wallet-pwa build
+VITE_LSPS1_MOCK_URL= pnpm --filter @libre/wallet-pwa build
 pnpm --filter @libre/android-app cap:sync
 
-# open in Android Studio to build/run, or sideload a debug APK directly:
-pnpm --filter @libre/android-app open
-# ...or:
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+# build the debug APK from the CLI (JDK 21 — see Prerequisites):
+cd packages/android-app/android
+JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew assembleDebug
+
+# ...or open in Android Studio instead: pnpm --filter @libre/android-app open
+
+# sideload it:
+adb install -r packages/android-app/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 On first launch, grant the **notification** permission (Android 13+) and, if boosts still stall in the

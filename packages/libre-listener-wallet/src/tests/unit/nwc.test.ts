@@ -654,6 +654,11 @@ describe("Nostr Wallet Connect (NWC) Unit Tests", () => {
       const resp = await send("init-1");
       expect(resp.error).toBeDefined();
       expect((await nwc.listConnections())[0].spentTodaySats).toBe(0);
+      // The noted-pending history record must be finalized FAILED, not stranded at "pending"
+      // forever: a pre-send RouteNotFound fires no LDK event, so nothing else finalizes it.
+      const records = await wallet.getPayments();
+      expect(records.some((r) => r.status === "pending")).toBe(false);
+      expect(records.some((r) => r.status === "failed")).toBe(true);
     });
   });
 

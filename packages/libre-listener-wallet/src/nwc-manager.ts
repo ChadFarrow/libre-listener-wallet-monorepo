@@ -804,6 +804,11 @@ export class NwcManager {
         // settlement-pending semantics).
         await this.debitBudget(pairing, spentToday, amtSats, now);
 
+        // Wait out a brief peer-reconnect window (resume-from-background) so the pay doesn't fail
+        // RouteNotFound before the channel is usable again. pay_keysend gets this via
+        // sendKeysendPayment; pay_invoice calls send_payment directly, so it needs the wait here.
+        await this.wallet.waitForUsableChannel();
+
         const sendRes = this.wallet.getChannelManager()!.send_payment(
           paymentHash,
           onionFields,
@@ -815,6 +820,9 @@ export class NwcManager {
         if (!sendRes.is_ok()) {
           this.pendingPayments.delete(payInvoiceHashHex);
           this.paymentContexts.delete(payInvoiceHashHex);
+          // Nothing left the node → NO LDK event will fire. Finalize the noted-pending record as
+          // failed here, or it strands at "pending" forever in history (the stuck-PENDING bug).
+          this.wallet.recordFailedPayment(payInvoiceHashHex);
           await this.refundBudget(pairing, amtSats); // never left the wallet — reverse the debit
           throw new Error(`LDK send_payment failed: ${(sendRes as any).err?.toString() || "Route not found"}`);
         }

@@ -1,73 +1,107 @@
 # Libre Listener Wallet Monorepo
 
 > [!WARNING]
-> **Active Development**: This project is in active development and is **not yet functional**. Do not attempt to run this in production.
+> **Experimental / active development.** This is a research project exploring several ways to ship a browser-based Lightning wallet. Interfaces, packages, and deployments change often and things break.
 
 > [!CAUTION]
-> **Experimental Software**: This software is experimental. **Loss of Bitcoin is highly likely.** Use at your own risk.
+> **Loss of Bitcoin is highly likely.** Do not put in more than you are willing to lose. Use at your own risk.
 
 ---
 
-The **Libre Listener Wallet** is a zero-infrastructure, non-custodial Bitcoin Lightning Network implementation. It is designed to run directly inside browser/PWA sandboxes and native mobile wrappers, bringing friction-free Lightning payments to the Podcasting 2.0 and Value-for-Value (`v4vmusic.com`) music streaming ecosystem.
+The **Libre Listener Wallet** is a **non-custodial** Bitcoin Lightning wallet built for the Podcasting 2.0 / Value-for-Value (`v4vmusic.com`) ecosystem. It wraps **LDK (Lightning Development Kit) WASM**, keeps node state in IndexedDB, opens just-in-time channels through LSP protocols, and sends V4V "boost" payments as keysend with bLIP-10 TLV metadata.
 
-## Expected User Experience
+This repo is an **ongoing experiment, not a finished product.** It probes several parallel ways to run the same wallet engine — as a **PWA**, a **WebLN browser extension**, and a **native Android app** — and the direction is still open. The PWA is the surface getting the most attention right now, but none of the three is "the" blessed client yet.
 
-1.  **Onboarding ("Give me a wallet")**: The user clicks the button. Locally in the browser sandbox, the SDK generates a new BIP39 seed phrase and initializes the LDK WASM client node (state is persisted in IndexedDB). The user now has a fully sovereign wallet with a `0 sat` balance.
-2.  **Funding (First Deposit)**: The user requests an invoice to fund their new wallet. Since they have no open channels, the SDK requests routing hints from a whitelisted LSP (sourced from the `.well-known` providers registry) using the **LSPS2 JIT Channel** protocol.
-3.  **Automatic Liquidity**: The user pays the invoice from an external service (e.g., Strike, Cash App). The LSP intercepts the payment, opens a zero-confirmation channel to the browser node, deducts the channel fee atomically, and routes the remaining balance.
-4.  **Instant Spendability**: The channel is instantly active. The user now has sovereign control of their sats directly in their browser.
-5.  **V4V Streaming & Boostagrams**: When playing a song or podcast, the user clicks "Boost". The browser node constructs a Keysend payment, injects the custom bLIP-10 metadata (TLV record `7629169` for Boost data and `7629175` for the Feed GUID), signs it locally, and routes it instantly.
+**On "non-custodial":** the seed, private keys, and unclaimed preimages never leave the client sandbox. A couple of small hosted relays exist to make browser Lightning possible (a WebSocket→TCP bridge and a Nostr push gateway), but **they hold no keys and no funds** — they route blind, encrypted envelopes and proxy bytes. See [`CUSTODY.md`](CUSTODY.md) for the full custody model.
 
-## Workspace Packages
+## How it works (the intended flow)
 
-The repository is structured as a TypeScript monorepo managed by `pnpm` and Turborepo:
+1. **Onboarding** — the app generates a BIP39 seed locally and initializes an LDK WASM node (state persisted in IndexedDB). You have a sovereign wallet with a `0 sat` balance.
+2. **Funding** — you request an invoice; with no channel yet, the wallet gets inbound liquidity from an LSP (LSPS2 JIT interception, or an LSPS1-REST channel purchase).
+3. **Liquidity** — the LSP opens a channel to the browser node and the channel becomes spendable.
+4. **V4V boosts** — playing music/podcasts, "Boost" constructs a keysend payment with bLIP-10 metadata (TLV `7629169` boost data, `7629175` feed GUID), signed locally and routed instantly.
 
-*   **[`packages/shared`](packages/shared)**: Common types, request schemas, and serializations shared between the SDK and push gateway.
-*   **[`packages/libre-listener-wallet`](packages/libre-listener-wallet)**: The client-side SDK wrapping LDK (Lightning Development Kit) WASM. Now includes `IndexedDBStorageProvider` for context-isolated state sharing.
-*   **[`packages/libre-nwc-push-gateway`](packages/libre-nwc-push-gateway)**: The server-side, stateless notification gateway used to wake up offline PWAs for Nostr Wallet Connect (NWC) requests. Exposes Express endpoints and manages Nostr relay listener subscriptions backed by SQLite.
-*   **[`packages/example-app`](packages/example-app)**: A Vite-based PWA client playground demonstrating JIT channel opens, keysend audio splits, NWC dashboard pairing, and Web Push offline wakeups.
+## Workspace packages
 
----
+A TypeScript monorepo managed by `pnpm` + Turborepo. Every package's own README is current — follow the links for detail.
 
-## Developer & AI Agent Orientation
+**Apps (parallel client experiments)**
+| Package | What it is |
+|---|---|
+| [`packages/wallet-pwa`](packages/wallet-pwa) (`@libre/wallet-pwa`) | Installable, mobile-first PWA that hosts the LDK node in one persistent page. **Most active surface.** |
+| [`packages/browser-extension`](packages/browser-extension) (`@libre/browser-extension`) | MV3 extension (Chrome/Brave) that injects a `window.webln` provider so any web app drives the wallet. |
+| [`packages/android-app`](packages/android-app) (`@libre/android-app`) | Capacitor wrapper of the PWA; a foreground service keeps the node alive in the background. Play-Services-free / GrapheneOS-friendly. |
+| [`packages/example-app`](packages/example-app) (`@libre/example-app`) | Vite dev playground/testbed for the SDK against a local regtest sandbox. |
 
-If you are a developer or an AI coding assistant working on this codebase:
-*   Read the project contracts and design roadmap located in the [**`ai/`**](ai/reference/this-monorepo/libre-listener-wallet-roadmap.md) directory.
-*   Refer to the [**`ai/prompts/primer-prompt.md`**](ai/prompts/primer-prompt.md) onboarding prompt to understand critical security constraints, port configurations, and testing rules.
+**Libraries**
+| Package | What it is |
+|---|---|
+| [`packages/libre-listener-wallet`](packages/libre-listener-wallet) (`@libre/listener-wallet`) | The core client SDK wrapping LDK WASM — peers, channels, payments, NWC, encrypted backup/recovery. |
+| [`packages/shared`](packages/shared) (`@libre/shared`) | Protocol types, Zod schemas, and pure calc utilities shared by the SDK and gateway (single source of truth for LSPS/NWC shapes). |
 
----
+**Servers (hold no keys)**
+| Package | What it is |
+|---|---|
+| [`packages/libre-nwc-push-gateway`](packages/libre-nwc-push-gateway) (`@libre/nwc-push-gateway`) | Stateless Nostr→Web Push relay that wakes offline PWAs for NWC requests; also a CORS-enabled RGS gossip proxy. |
+| [`ws-bridge`](ws-bridge) (`@libre/ws-bridge`) | Allowlisted WebSocket→TCP bridge so a browser node (no raw TCP) can reach Lightning peers. |
 
-## Quick Start
+**Dev / regtest tools**
+| Package | What it is |
+|---|---|
+| [`packages/libre-lsps2-server`](packages/libre-lsps2-server) (`@libre/lsps2-server`) | Regtest-only dev LSP with real HTLC-interception JIT channel opens. |
+| [`packages/libre-lsps1-mock-server`](packages/libre-lsps1-mock-server) (`@libre/lsps1-mock-server`) | Mock mainnet LSPS1-REST provider for building the "get a channel from an LSP" flow offline (no node, money, or docker). |
 
-### 1. Build and Compile Workspaces
-Installs dependencies and runs the compiler pipelines (`tsup`) to build code targets:
+## Deployments & live URLs
+
+The one place to see what's live and where it deploys from.
+
+| Surface | Live URL | Deploys from |
+|---|---|---|
+| PWA (most active) | `https://libre-wallet-pwa.pages.dev` | `.github/workflows/deploy-wallet-pwa.yml` → Cloudflare Pages (gated on repo var `CLOUDFLARE_DEPLOY_ENABLED`) |
+| Example-app playground | `https://chadfarrow.github.io/libre-listener-wallet-monorepo/` | `.github/workflows/deploy-pages.yml` → GitHub Pages |
+| NWC push gateway (+ RGS proxy) | `https://nwc-push-gateway-production.up.railway.app` | Railway, root `railway.json` |
+| ws-bridge | `wss://ws-bridge-production-9e2f.up.railway.app` | Railway, `ws-bridge/railway.json` |
+| Browser extension (rolling build) | GitHub Releases → `browser-extension-latest` asset | `.github/workflows/release-extension-latest.yml` |
+| Android APK (signed) | GitHub Releases | Built on a Mac per [`packages/android-app/README.md`](packages/android-app/README.md) |
+
+> Pinned rollback: the pre-redesign PWA UI stays reachable at `https://62281737.libre-wallet-pwa.pages.dev`.
+
+## Developer & AI-agent orientation
+
+- The authoritative contracts and design docs live in [**`ai/`**](ai/reference/this-monorepo/libre-listener-wallet-roadmap.md) — read the roadmap and the `ai/contracts/` rules before non-trivial changes.
+- [**`ai/prompts/primer-prompt.md`**](ai/prompts/primer-prompt.md) covers the security constraints, ports, and testing rules.
+- [`CLAUDE.md`](CLAUDE.md) is the living, detailed engineering log (architecture, gotchas, invariants).
+
+## Quick start
+
 ```bash
-pnpm install
-pnpm build
+pnpm install                 # install workspace deps
+pnpm build                   # turbo: build shared, then SDK + servers
+pnpm test                    # turbo: vitest across all packages
 ```
 
-### 2. Run Test Suites
-Executes Vitest tests across all packages:
+**Run the PWA (the main app):**
 ```bash
-pnpm test
+pnpm --filter @libre/wallet-pwa dev     # http://127.0.0.1:5173  (append ?demo for a zero-setup fake wallet)
 ```
 
-### 3. Spin Up Local Regtest Sandbox
-Runs local integration testing services (`bitcoind`, `electrs` indexer, `lnd` mock LSP, and `websockify` TCP bridge proxy):
+**Run the SDK playground:**
 ```bash
-docker compose up -d
-```
-All ports are bound strictly to `127.0.0.1` for local safety.
-
-### 4. Run the Push Gateway Daemon
-Starts the offline background notifications relay daemon on port `3001`:
-```bash
-pnpm --filter @libre/nwc-push-gateway dev
+pnpm --filter @libre/example-app dev    # http://localhost:5173
 ```
 
-### 5. Run the PWA Example Client
-Starts the Vite development server for the interactive dashboard:
+**Local regtest sandbox** (for integration tests; all ports bound to `127.0.0.1`):
 ```bash
-pnpm --filter @libre/example-app dev
+docker compose up -d         # bitcoind, electrs (esplora), lnd LSP, websockify bridge
 ```
-Open `http://localhost:5173` in your browser. Start the node, connect to the LSP node, configure NWC pairings, and enable Web Push notifications to test offline background wake-ups.
+
+**Push gateway daemon:**
+```bash
+pnpm --filter @libre/nwc-push-gateway dev    # port 3001
+```
+
+See [`how-to-deploy.md`](how-to-deploy.md) and [`how-to-integrate.md`](how-to-integrate.md) for more.
+
+## License
+
+[MIT](LICENSE).

@@ -107,6 +107,27 @@ describe("diagnostics card", () => {
     vi.unstubAllGlobals();
   });
 
+  it("copy writes the recorded log to the clipboard", async () => {
+    console.log("[DiagTest] copy marker");
+    await diagFlushNow();
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { clipboard: { writeText } }));
+
+    initScreens(makeCtx());
+    await flushDom();
+    showScreen("screen-dev");
+    await flushDom();
+
+    document.getElementById("diag-copy")!.dispatchEvent(new Event("click"));
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+    expect(writeText.mock.calls[0][0]).toContain("[DiagTest] copy marker");
+    expect(document.getElementById("diag-msg")!.textContent).toMatch(/Copied to clipboard/);
+
+    vi.unstubAllGlobals();
+  });
+
   it("clear empties the buffer and updates the readout", async () => {
     console.log("[DiagTest] to be cleared");
     await diagFlushNow();

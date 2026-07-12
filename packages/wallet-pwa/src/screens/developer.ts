@@ -162,6 +162,29 @@ export function initDeveloperScreen(ctx: AppContext): void {
     })();
   });
 
+  // Copy-to-clipboard: the bulletproof export. Works in every secure context (browser, iOS PWA, and
+  // the Android WebView, where file download/share don't) — the user pastes the log into a note or
+  // email. No native plugin or download handler needed.
+  $("diag-copy").addEventListener("click", () => {
+    void (async () => {
+      try {
+        const text = await diagExportText();
+        if (!text) {
+          setMsg("diag-msg", "Nothing recorded yet.");
+          return;
+        }
+        if (!navigator.clipboard?.writeText) {
+          setMsg("diag-msg", "Clipboard unavailable here — use Export instead.", "err");
+          return;
+        }
+        await navigator.clipboard.writeText(text);
+        setMsg("diag-msg", "Copied to clipboard.", "ok");
+      } catch (e) {
+        setMsg("diag-msg", (e as Error).message, "err");
+      }
+    })();
+  });
+
   $("diag-clear").addEventListener("click", () => {
     void (async () => {
       await diagClear();

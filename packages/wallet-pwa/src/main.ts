@@ -13,7 +13,7 @@ import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, 
 import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { refreshPushRegistration } from "./web-push";
-import { createKeepAlive } from "./core/keep-alive-audio";
+import { createKeepAliveForPlatform, isNativeApp } from "./core/native-bridge";
 import { shouldKeepAlive, keepAliveEnabled } from "./core/keep-alive";
 import { installNoZoom } from "./core/no-zoom";
 import { initScreens } from "./screens";
@@ -35,7 +35,9 @@ installDiagTap();
 const controller = isDemoMode()
   ? (new DemoController((event, payload) => emitControllerEvent(event, payload)) as unknown as WalletController)
   : new WalletController((event, payload) => emitControllerEvent(event, payload));
-const keepAlive = createKeepAlive();
+// Native wrapper (Capacitor Android) → a foreground service holds the node alive in the background;
+// plain browser/PWA → the inaudible audio keep-alive. Same KeepAlive interface either way.
+const keepAlive = createKeepAliveForPlatform();
 const ctx: AppContext = { controller, isRunning: () => controller.isRunning(), keepAlive };
 
 // ---- Background keep-alive (silent audio) ----
@@ -51,8 +53,9 @@ if (!isDemoMode()) {
   // comes up from a non-gesture path (auto-start, or the controller event a beat after the tap).
   // Prime the audio element on the user's FIRST tap anywhere (e.g. tapping "Start node") so one tap
   // activates it, instead of needing a tap at the exact moment the node is ready. Stays armed until
-  // the element is actually playing.
-  if (keepAliveEnabled()) {
+  // the element is actually playing. Native wrapper has no autoplay gate (foreground service, not
+  // audio), so skip the gesture arming there.
+  if (keepAliveEnabled() && !isNativeApp()) {
     const prime = () => {
       keepAlive.unlock();
       if (keepAlive.isActive()) {
@@ -89,8 +92,9 @@ if (!isDemoMode()) {
         .refreshPeerConnections()
         .catch((e) => console.warn("[Resume] peer refresh failed:", (e as Error)?.message || e));
       // iOS can also drop the push subscription while frozen — re-register it on resume so offline
-      // wake keeps working (silent + best-effort; no-op unless wake was enabled).
-      void refreshPushRegistration(ctx);
+      // wake keeps working (silent + best-effort; no-op unless wake was enabled). Native wrapper
+      // doesn't use web push (a foreground service holds the node alive; GrapheneOS has no FCM).
+      if (!isNativeApp()) void refreshPushRegistration(ctx);
       // The keep-alive tone is often paused while backgrounded (another app grabbed audio focus, or
       // the OS suspended us). Re-arm it now we're foreground again so it's holding the page for the
       // NEXT trip to the background. No-op if it's already playing; harmless while foreground.
@@ -203,7 +207,8 @@ armDriveGestureReconnect();
 // row, this device stops getting wake notifications until it re-registers. So re-register on every
 // node start-transition (covers cold launch + a manual restart). refreshPushRegistration is silent +
 // best-effort and no-ops unless the user actually enabled wake, so this is safe to fire each time.
-if (!isDemoMode()) {
+// Skipped in the native wrapper (foreground service replaces web push; GrapheneOS has no FCM).
+if (!isDemoMode() && !isNativeApp()) {
   let pushWasRunning = false;
   onControllerEvent(() => {
     const running = controller.isRunning();

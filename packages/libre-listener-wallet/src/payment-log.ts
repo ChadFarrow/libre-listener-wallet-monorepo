@@ -23,17 +23,24 @@ const BOOST_TLV_KEY = 7629169;
 export interface PaymentLoggerDeps {
   storage: SecureStorageProvider;
   logger?: Logger;
+  // Fired synchronously after any record mutation (pending/settled/failed/received) so the UI can
+  // refresh live. NOT called during load() — rehydration isn't a change. Best-effort; a throwing
+  // callback must never break a payment path (it's caught here). This is what makes a freshly-noted
+  // NWC pending payment appear in the transaction list without an app switch.
+  onChange?: () => void;
 }
 
 export class PaymentLogger {
   private storage: SecureStorageProvider;
   private logger?: Logger;
+  private onChange?: () => void;
   private records: Map<string, PaymentRecord> = new Map();
   private loaded = false;
 
   constructor(deps: PaymentLoggerDeps) {
     this.storage = deps.storage;
     this.logger = deps.logger;
+    this.onChange = deps.onChange;
   }
 
   /** Rehydrate the in-memory list from every persisted `tx_*` key. Best-effort. */
@@ -122,6 +129,13 @@ export class PaymentLogger {
     void this.storage.setItem(txKey(rec.id), JSON.stringify(rec)).catch((e) => {
       this.logger?.error?.(`[PaymentLog] persist ${rec.id} failed: ${e instanceof Error ? e.message : e}`);
     });
+    // Signal the UI to refresh (the in-memory record is already updated). Guard against a throwing
+    // subscriber — history is non-critical and must never break a payment path.
+    try {
+      this.onChange?.();
+    } catch (e) {
+      this.logger?.error?.(`[PaymentLog] onChange listener error: ${e instanceof Error ? e.message : e}`);
+    }
   }
 
   /** Whether load() has run (used by callers to lazily load on first read). */

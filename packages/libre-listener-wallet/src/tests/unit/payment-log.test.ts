@@ -112,6 +112,43 @@ describe("PaymentLogger", () => {
     log.notePending({ id: "h1", direction: "sent", status: "pending", amountSats: 1000, timestamp: 1 });
     expect(log.getRecords()[0].status).toBe("settled");
   });
+
+  it("fires onChange for every mutation so the UI can refresh live (the pending-payment sync fix)", () => {
+    let changes = 0;
+    const log = new PaymentLogger({ storage: new MemStorage(), onChange: () => changes++ });
+    // A freshly-noted pending payment (e.g. an NWC boost from Castamatic) must signal the UI
+    // immediately — otherwise it only appears after an incidental state-change or an app switch.
+    log.notePending({ id: "h1", direction: "sent", status: "pending", amountSats: 1000, timestamp: 1 });
+    expect(changes).toBe(1);
+    log.recordSent("h1", 1); // pending → settled
+    expect(changes).toBe(2);
+    log.recordReceived("in1", 42); // inbound claimed
+    expect(changes).toBe(3);
+  });
+
+  it("does not fire onChange for a no-op mutation", () => {
+    let changes = 0;
+    const log = new PaymentLogger({ storage: new MemStorage(), onChange: () => changes++ });
+    log.recordFailed("unknown"); // no matching record → nothing changes
+    expect(changes).toBe(0);
+    log.notePending({ id: "h1", direction: "sent", status: "pending", amountSats: 1, timestamp: 1 });
+    log.recordSent("h1", 0);
+    changes = 0;
+    log.notePending({ id: "h1", direction: "sent", status: "pending", amountSats: 1, timestamp: 1 }); // already settled
+    expect(changes).toBe(0);
+  });
+
+  it("does not fire onChange while load() rehydrates existing records", async () => {
+    const s = new MemStorage();
+    const seed = new PaymentLogger({ storage: s });
+    seed.notePending({ id: "h1", direction: "sent", status: "pending", amountSats: 10, timestamp: 1 });
+    await flush();
+    let changes = 0;
+    const log = new PaymentLogger({ storage: s, onChange: () => changes++ });
+    await log.load();
+    expect(changes).toBe(0);
+    expect(log.getRecords()).toHaveLength(1);
+  });
 });
 
 describe("boostNoteFromCustomRecords", () => {

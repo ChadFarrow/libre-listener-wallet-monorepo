@@ -4,6 +4,7 @@ import {
   isAutoStartEnabled,
   autoStartPlan,
   connectWithRetry,
+  shouldReconnectPeer,
   PEER_CONNECT_DELAYS_MS,
 } from "./auto-start";
 
@@ -126,5 +127,20 @@ describe("connectWithRetry", () => {
 
   it("boot schedule is 2s/4s/8s/16s/30s", () => {
     expect([...PEER_CONNECT_DELAYS_MS]).toEqual([2000, 4000, 8000, 16000, 30000]);
+  });
+});
+
+describe("shouldReconnectPeer (post-start empty/lost-state guard)", () => {
+  it("only auto-dials when the wallet actually holds a channel", () => {
+    expect(shouldReconnectPeer(1)).toBe(true);
+    expect(shouldReconnectPeer(2)).toBe(true);
+    // The incident: an empty/lost-state copy (0 channels) must NOT dial, or it force-closes the
+    // channel the peer still holds.
+    expect(shouldReconnectPeer(0)).toBe(false);
+  });
+
+  it("treats junk counts as 'do not dial' (fail safe)", () => {
+    expect(shouldReconnectPeer(NaN)).toBe(false);
+    expect(shouldReconnectPeer(-1)).toBe(false);
   });
 });

@@ -90,6 +90,22 @@ canonical source — copy them in):
 
 ## Build → install → iterate
 
+> **The APK bundles a FROZEN snapshot of `wallet-pwa/dist` — it does NOT load from `pages.dev`.** A
+> Cloudflare/web deploy updates the PWA only; the installed APK keeps running whatever build it was
+> compiled with until you rebuild + reinstall (below). So any `wallet-pwa` fix reaches Android only
+> on the next APK build.
+>
+> **Pending fix to pick up on the next build (from PR #73, merged 2026-07-13, PWA-live but NOT yet in
+> any APK):** the force-close guard `shouldReconnectPeer` (`wallet-pwa/src/core/auto-start.ts`) — the
+> app no longer auto-dials the channel peer when the wallet holds **0 channels**, so a copy that came
+> up without its channel state can't reconnect and force-close a live channel. This is platform-
+> independent and applies to the APK too; a plain `cap:sync` + rebuild pulls it in (no native code
+> change). The other two PR-#73 fixes are PWA/iOS-only: the **backup-ahead start guard** is wired for
+> the Google Drive path and deliberately skipped on native (Android backs up via the SAF folder, not
+> Drive), and the **iOS Drive redirect** doesn't apply on Android. If you want the backup-ahead guard
+> to cover Android too, extend the injected backup fetcher (`main.ts` `setBackupFetcher`, currently
+> `!isNativeApp()`) to read the SAF backup via `core/native-backup.ts`.
+
 ```bash
 # after any change to the web app: rebuild the PWA, then copy it into the native project
 VITE_LSPS1_MOCK_URL= pnpm --filter @libre/wallet-pwa build

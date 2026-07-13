@@ -146,10 +146,12 @@ export async function connect(clientId: string, opts: { silent?: boolean; hint?:
 
 // ---- Redirect OAuth flow (installed iOS PWA: the GIS popup is blocked) ----
 
-// The registered Authorized redirect URI: the app's own origin root. MUST be added to the OAuth
+// The registered Authorized redirect URI: the app's own origin (NO trailing slash — Google matches
+// redirect URIs by exact string, and the console's origin field rejects a trailing slash, so we
+// register the bare origin `https://<host>` and must send exactly that). MUST be added to the OAuth
 // client's "Authorized redirect URIs" in the Google Cloud console (see README/PR notes).
 function driveRedirectUri(): string {
-  return `${location.origin}/`;
+  return location.origin;
 }
 
 function randomState(): string {

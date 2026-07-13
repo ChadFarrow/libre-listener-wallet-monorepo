@@ -26,7 +26,7 @@ import {
   CONFIG_KEY,
   type ExtensionConfig,
 } from "../core/wallet-config";
-import { autoStartPlan, connectWithRetry } from "../core/auto-start";
+import { autoStartPlan, connectWithRetry, shouldReconnectPeer } from "../core/auto-start";
 import { createWebSocketStreamProvider } from "../core/ws-provider";
 import { PaymentTracker } from "./payment-tracker";
 import { payBolt11 } from "./pay-invoice";
@@ -247,6 +247,16 @@ export class WalletHost implements WalletRpc {
       }
       await this.startNode();
       if (!plan.connectPeer) return;
+      // Empty/lost-state guard (the 2026-07-13 mainnet force-close): NEVER auto-dial a peer from a
+      // wallet that holds no channels. plan.connectPeer keys on hasChannelState = "channel_manager
+      // blob present", which is TRUE even for an empty manager (0 channels/monitors) — so an
+      // incomplete restore, evicted storage, or the same seed running elsewhere would otherwise
+      // connect, and LDK (no record of the channel the peer still holds) sends a channel-closure
+      // ChannelReestablish → force-close. The live channel count is the ground truth.
+      if (!this.wallet || !shouldReconnectPeer(this.wallet.getChannels().length)) {
+        console.warn("[AutoStart] wallet holds no channels — skipping auto peer connect (empty/lost-state guard)");
+        return;
+      }
 
       const cfg = await this.getConfig();
       const savedPeer = cfg.peer;

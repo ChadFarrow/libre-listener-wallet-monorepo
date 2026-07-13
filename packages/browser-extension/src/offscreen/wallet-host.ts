@@ -7,7 +7,14 @@ import {
   type ChannelInfo,
   type PaymentRecord,
 } from "@libre/listener-wallet";
-import { zeroConfTrustedPubkeys, acquireWebNodeLock, nodeLockName } from "@libre/shared";
+import {
+  zeroConfTrustedPubkeys,
+  acquireWebNodeLock,
+  nodeLockName,
+  autoStartPlan,
+  connectWithRetry,
+  shouldReconnectPeer,
+} from "@libre/shared";
 import type { BudgetRenewal, NwcMethod } from "@libre/shared";
 import {
   dbNameForNetwork,
@@ -26,7 +33,6 @@ import {
   CONFIG_KEY,
   type ExtensionConfig,
 } from "../core/wallet-config";
-import { autoStartPlan, connectWithRetry, shouldReconnectPeer } from "../core/auto-start";
 import { createWebSocketStreamProvider } from "../core/ws-provider";
 import { PaymentTracker } from "./payment-tracker";
 import { payBolt11 } from "./pay-invoice";

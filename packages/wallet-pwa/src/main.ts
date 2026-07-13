@@ -5,7 +5,7 @@ import { DemoController } from "./core/demo-controller";
 import { enterDemoFromUrl, isDemoMode, exitDemo, applyDemoManifest } from "./core/demo-mode";
 import type { AppContext } from "./core/app-context";
 import { emitControllerEvent, onControllerEvent } from "./core/events";
-import { AUTO_START_KEY } from "./core/auto-start";
+import { AUTO_START_KEY } from "@libre/shared";
 import { registerServiceWorker, wireInstallPrompt } from "./register-sw";
 import { downloadBackupName } from "./core/backup-name";
 import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync } from "./core/backup-policy";

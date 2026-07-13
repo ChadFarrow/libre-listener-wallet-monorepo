@@ -6,7 +6,7 @@ import {
   connectWithRetry,
   shouldReconnectPeer,
   PEER_CONNECT_DELAYS_MS,
-} from "./auto-start";
+} from "./auto-start-policy";
 
 describe("isAutoStartEnabled", () => {
   it("defaults ON: unset and '1' are enabled, only an explicit '0' disables", () => {

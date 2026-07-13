@@ -15,7 +15,7 @@ import {
   pickRestoreNetwork,
   fetchAccountEmail,
 } from "./core/drive-rest";
-import { AUTO_START_KEY, isAutoStartEnabled } from "./core/auto-start";
+import { AUTO_START_KEY, isAutoStartEnabled } from "@libre/shared";
 import { buildIconSet } from "./core/action-icon";
 
 // The background service worker is a THIN, restartable router + permission gate. It never hosts

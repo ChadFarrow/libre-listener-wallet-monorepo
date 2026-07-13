@@ -1,10 +1,12 @@
-// Auto-start decision logic for the offscreen wallet host. Pure and chrome-free so it is
-// unit-testable; the host supplies the storage markers and executes the plan.
+// Auto-start decision logic shared by every app that hosts the wallet SDK (wallet-pwa's
+// controller, the browser-extension's offscreen host, and — via the frozen wallet-pwa bundle —
+// the android APK). Pure and platform-free (no window/chrome/storage access) so it is
+// unit-testable in one place; each host supplies the storage markers and executes the plan.
 //
 // The critical row: a seed with NO channel state that was NOT created brand-new here must
 // NEVER auto-start — an unattended empty ChannelManager that connects the peer replies
 // "unknown channel" to channel_reestablish and force-closes the real channel (the documented
-// mainnet failure). That case is a silent skip here AND stays a hard error in startNode().
+// mainnet failure). That case is a silent skip here AND stays a hard error in the host's start.
 
 export const AUTO_START_KEY = "auto_start";
 
@@ -14,7 +16,7 @@ export function isAutoStartEnabled(raw: string | null): boolean {
 }
 
 export interface AutoStartInputs {
-  flagRaw: string | null; // raw chrome.storage.local value under AUTO_START_KEY
+  flagRaw: string | null; // raw stored value under AUTO_START_KEY (chrome.storage.local / localStorage)
   hasSeed: boolean;
   hasChannelState: boolean; // channel_manager key present
   createdNew: boolean; // wallet_created_new provenance marker
@@ -40,8 +42,8 @@ export function autoStartPlan(i: AutoStartInputs): AutoStartPlan {
       reason: "seed has no channel state and was not created here — restore from backup first",
     };
   }
-  // A brand-new unfunded wallet starts but never auto-dials (mirrors the PWA's gating: only a
-  // wallet with existing channel state keeps its peer alive automatically).
+  // A brand-new unfunded wallet starts but never auto-dials (only a wallet with existing channel
+  // state keeps its peer alive automatically; the first channel is opened via the explicit flow).
   return { start: true, connectPeer: i.hasChannelState };
 }
 
@@ -51,10 +53,10 @@ export function autoStartPlan(i: AutoStartInputs): AutoStartPlan {
 // its channel state (an incomplete seed-only restore, evicted storage, or the same seed running in
 // another context) therefore passed the storage gate, auto-dialed the peer, and — having no record
 // of the channel the peer still holds — made LDK send a channel-closure ChannelReestablish →
-// force-close (the mainnet PWA incident, 2026-07-13; the extension shares this gap). The ground
-// truth is the live channel COUNT after start: only reconnect the peer when the wallet actually
-// holds a channel. An empty wallet has nothing to reconnect for (the first channel is opened via the
-// explicit Connect-peer / LSP flow, not this auto-dial).
+// force-close (the mainnet incident, 2026-07-13). The ground truth is the live channel COUNT after
+// start: only reconnect the peer when the wallet actually holds a channel. An empty wallet has
+// nothing to reconnect for (the first channel is opened via the explicit Connect-peer / LSP flow,
+// not this auto-dial).
 export function shouldReconnectPeer(channelCount: number): boolean {
   return Number.isFinite(channelCount) && channelCount > 0;
 }

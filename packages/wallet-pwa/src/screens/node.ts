@@ -1,7 +1,11 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
-import { isChannelStateRegressionError, isNodeAlreadyRunningError } from "@libre/shared";
-import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
+import {
+  isChannelStateRegressionError,
+  isNodeAlreadyRunningError,
+  AUTO_START_KEY,
+  isAutoStartEnabled,
+} from "@libre/shared";
 import { isBackupAheadError, BACKUP_AHEAD_MSG } from "../core/backup-ahead";
 import { registerScreen, currentScreen } from "../ui/nav";
 import { forceRestoreScreen, clearRestoreLatch } from "./restore";

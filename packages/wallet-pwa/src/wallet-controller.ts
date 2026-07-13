@@ -12,7 +12,15 @@ import {
   type ChannelInfo,
   type ChannelCloseRecord,
 } from "@libre/listener-wallet";
-import { zeroConfTrustedPubkeys, acquireWebNodeLock, nodeLockName, isNodeAlreadyRunningError } from "@libre/shared";
+import {
+  zeroConfTrustedPubkeys,
+  acquireWebNodeLock,
+  nodeLockName,
+  isNodeAlreadyRunningError,
+  autoStartPlan,
+  connectWithRetry,
+  shouldReconnectPeer,
+} from "@libre/shared";
 import { nodeLockRetryPlan } from "./core/start-retry";
 import type { BudgetRenewal, NwcMethod, PaymentRecord } from "@libre/shared";
 import { classifySendInput } from "./core/send-input";
@@ -39,7 +47,6 @@ import {
   type AppConfig,
 } from "./core/wallet-config";
 import { resolveActiveNetwork } from "./core/sw-config";
-import { autoStartPlan, connectWithRetry, shouldReconnectPeer } from "./core/auto-start";
 import { createWebSocketStreamProvider } from "./core/ws-provider";
 import { restoreBlockReason } from "./core/restore-guard";
 import { addressToScriptPubKey } from "./core/address-script";

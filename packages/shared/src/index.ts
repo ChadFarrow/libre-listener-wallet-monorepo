@@ -320,4 +320,5 @@ export * from "./channel-regression";
 export * from "./single-node-lock";
 export * from "./device-lease";
 export * from "./lnurl-pay";
+export * from "./auto-start-policy";
 

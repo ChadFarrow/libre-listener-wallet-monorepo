@@ -3,6 +3,7 @@
 // remembered-account hint in one place.
 import {
   connect as driveConnect,
+  beginDriveRedirect,
   isConnected,
   getConnectedEmail,
   uploadBackup,
@@ -14,6 +15,7 @@ import {
 } from "./drive-backup";
 import type { WalletController } from "./wallet-controller";
 import { isDemoMode } from "./core/demo-mode";
+import { isStandaloneDisplay } from "./core/display-mode";
 
 const CLIENT_ID_KEY = "libre_google_client_id";
 const HINT_KEY = "libre_drive_hint";
@@ -60,6 +62,16 @@ export async function ensureDriveConnected(opts: { silent?: boolean } = {}): Pro
     const clientId = googleClientId();
     if (!clientId) throw new Error("No Google Client ID configured — set one under Backup → advanced.");
     const hint = localStorage.getItem(HINT_KEY) || undefined;
+    // Installed iOS PWA: Safari blocks the GIS popup (popup_failed_to_open), so an INTERACTIVE
+    // connect uses a full-page OAuth redirect instead (returns via the URL fragment on next boot —
+    // see completeDriveRedirect in main.ts). This navigates away and never resolves. A SILENT
+    // reconnect must NOT redirect (it would yank the user to Google unprompted) — it stays on the
+    // popup path, which simply fails on iOS, leaving Drive to connect on the next interactive tap.
+    if (interactive && isStandaloneDisplay()) {
+      beginDriveRedirect(clientId, hint);
+      await new Promise<void>(() => {}); // hangs until the browser navigates to Google
+      return;
+    }
     await driveConnect(clientId, { silent: opts.silent, hint });
     const email = getConnectedEmail();
     if (email) localStorage.setItem(HINT_KEY, email);
@@ -118,6 +130,30 @@ export async function driveBackupNow(controller: WalletController): Promise<{ ne
   // clears any pending auto-sync debt too (the uploaded state is the current state).
   pendingSync = false;
   return { network: net };
+}
+
+// Best-effort fetch of the off-device backup envelope for the backup-ahead START GUARD (the
+// controller compares its state_version against local). Never throws and never disrupts: returns
+// null whenever Drive isn't reachable, so the guard reads "can't compare → don't block". Only a
+// SILENT reconnect is attempted (a redirect/popup on every start would be far too aggressive); on
+// standalone iOS that silent attempt just fails, so the guard is dormant there until the user
+// connects Drive interactively — then it runs on the next start.
+export async function peekBackupEnvelope(network: string): Promise<string | null> {
+  if (isDemoMode()) return null;
+  if (!isConnected()) {
+    if (!driveConfigured()) return null; // never set up Drive → nothing to compare against
+    try {
+      await ensureDriveConnected({ silent: true });
+    } catch {
+      return null;
+    }
+    if (!isConnected()) return null;
+  }
+  try {
+    return await downloadBackup(network);
+  } catch {
+    return null;
+  }
 }
 
 // Fetch the backup from Drive (auto-detecting the network) and restore it with the given secret.

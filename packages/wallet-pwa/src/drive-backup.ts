@@ -3,12 +3,17 @@
 // `drive.appdata` folder. Stores exactly one encrypted backup file. The access token
 // is short-lived and kept only in memory (never persisted).
 
+import { buildDriveAuthUrl, parseDriveOAuthFragment } from "./core/drive-redirect";
+
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
 // 'email' lets us read the account address after consent and reuse it as a
 // login_hint for silent reconnect on later loads (so the user isn't re-prompted
 // every session). Scopes are space-separated for the GIS token client.
 const AUTH_SCOPES = `${DRIVE_SCOPE} email`;
 const GIS_SRC = "https://accounts.google.com/gsi/client";
+// sessionStorage nonce for the redirect flow's CSRF `state` — survives the round-trip to Google in
+// the same tab. A soft check: if it's lost, the token (bound to our client + redirect_uri) still works.
+const OAUTH_STATE_KEY = "libre_drive_oauth_state";
 
 let connectedEmail: string | null = null;
 
@@ -137,6 +142,69 @@ export async function connect(clientId: string, opts: { silent?: boolean; hint?:
     });
     tokenClient.requestAccessToken();
   });
+}
+
+// ---- Redirect OAuth flow (installed iOS PWA: the GIS popup is blocked) ----
+
+// The registered Authorized redirect URI: the app's own origin root. MUST be added to the OAuth
+// client's "Authorized redirect URIs" in the Google Cloud console (see README/PR notes).
+function driveRedirectUri(): string {
+  return `${location.origin}/`;
+}
+
+function randomState(): string {
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
+// Begin the full-page OAuth redirect. Navigates AWAY to Google; the token returns in the URL
+// fragment on the way back (consumed by completeDriveRedirect on boot). Does not return meaningfully.
+export function beginDriveRedirect(clientId: string, hint?: string): void {
+  if (!clientId) throw new Error("Missing Google Client ID");
+  const state = randomState();
+  try {
+    sessionStorage.setItem(OAUTH_STATE_KEY, state);
+  } catch {
+    /* private mode / storage disabled — CSRF check degrades to best-effort; token still valid */
+  }
+  const url = buildDriveAuthUrl({
+    clientId,
+    redirectUri: driveRedirectUri(),
+    scope: AUTH_SCOPES,
+    state,
+    loginHint: hint,
+  });
+  location.assign(url);
+}
+
+// Consume an OAuth redirect return from the URL fragment (called once on boot). Stores the token if
+// present and the CSRF state matches; kicks off a best-effort email learn. Returns what happened so
+// the caller can strip the fragment and surface an error. No-op (ok:false, no error) on a normal load.
+export function completeDriveRedirect(hash: string): { ok: boolean; error?: string } {
+  const parsed = parseDriveOAuthFragment(hash);
+  if (!parsed) return { ok: false };
+  let expected: string | null = null;
+  try {
+    expected = sessionStorage.getItem(OAUTH_STATE_KEY);
+    sessionStorage.removeItem(OAUTH_STATE_KEY);
+  } catch {
+    /* best-effort */
+  }
+  if (parsed.error) return { ok: false, error: parsed.error };
+  if (!parsed.accessToken) return { ok: false };
+  // CSRF: only reject on a definite mismatch (both sides present). A missing stored state (lost
+  // across the redirect) still accepts — the implicit token is bound to our client + redirect_uri.
+  if (expected && parsed.state && parsed.state !== expected) return { ok: false, error: "state_mismatch" };
+  accessToken = parsed.accessToken;
+  fetchAccountEmail(parsed.accessToken)
+    .then((email) => {
+      if (email) connectedEmail = email;
+    })
+    .catch(() => {
+      /* best-effort email hint */
+    });
+  return { ok: true };
 }
 
 async function driveFetch(url: string, init: RequestInit): Promise<Response> {

@@ -1769,6 +1769,11 @@ export class LibreListenerWallet {
     hasSeed: boolean;
     seedMatches?: boolean;
     entryKeys: string[];
+    // The backup's monotonic `state_version` counter (0 if the envelope predates the key), so a
+    // caller can detect "this backup is AHEAD of my local storage" before starting — the guard
+    // against a device whose IndexedDB was evicted/rolled back to an older but self-consistent
+    // snapshot (which the local channel-state-regression check can't see). Absent when ok:false.
+    stateVersion?: number;
     error?: string;
   }> {
     try {
@@ -1778,12 +1783,14 @@ export class LibreListenerWallet {
       // the seedMatches comparison below works for both phrase and raw-hex input.
       const resolvedSecret = normalizeBackupSecret(secret);
       const isHex = /^[0-9a-fA-F]{64}$/.test(resolvedSecret);
+      const versionRaw = payload.entries["state_version"];
       return {
         ok: true,
         network: payload.network,
         hasSeed: !!seedInBackup,
         seedMatches: isHex ? seedInBackup?.toLowerCase() === resolvedSecret.toLowerCase() : undefined,
         entryKeys: Object.keys(payload.entries),
+        stateVersion: versionRaw ? parseInt(versionRaw, 10) || 0 : 0,
       };
     } catch (e) {
       return { ok: false, hasSeed: false, entryKeys: [], error: e instanceof Error ? e.message : String(e) };

@@ -39,7 +39,7 @@ import {
   type AppConfig,
 } from "./core/wallet-config";
 import { resolveActiveNetwork } from "./core/sw-config";
-import { autoStartPlan, connectWithRetry } from "./core/auto-start";
+import { autoStartPlan, connectWithRetry, shouldReconnectPeer } from "./core/auto-start";
 import { createWebSocketStreamProvider } from "./core/ws-provider";
 import { restoreBlockReason } from "./core/restore-guard";
 import { addressToScriptPubKey } from "./core/address-script";
@@ -493,6 +493,17 @@ export class WalletController {
   // saved/default peer back online; a channel with a different peer (e.g. an LSP) still needs a
   // manual Connect-peer, which the peers screen surfaces.
   private async connectSavedOrDefaultPeer(network: string): Promise<void> {
+    // Empty/lost-state guard (the 2026-07-13 phone force-close): NEVER auto-dial a peer from a
+    // wallet that holds no channels. A copy that started without its channel state (an incomplete
+    // seed-only restore, or evicted IndexedDB — a channel_manager blob can be present yet empty, so
+    // the storage-level hasChannelState check is fooled) would otherwise connect, and LDK — having
+    // no record of the channel the peer still holds — sends a channel-closure ChannelReestablish →
+    // force-close. The live channel count is the ground truth; an empty wallet has nothing to
+    // reconnect for (the first channel is opened via the explicit Connect-peer / LSP flow).
+    if (!this.wallet || !shouldReconnectPeer(this.wallet.getChannels().length)) {
+      console.warn("[Peer] wallet holds no channels — skipping auto peer connect (empty/lost-state guard)");
+      return;
+    }
     const cfg = await this.getConfig();
     const savedPeer = cfg.peer;
     const peerStr = savedPeer || defaultPeer(network);

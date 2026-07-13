@@ -5,6 +5,7 @@ import {
   createNativeKeepAlive,
   createKeepAliveForPlatform,
   ensureOverlayPermission,
+  ensureBatteryOptimizationExemption,
   type NativeForegroundService,
 } from "./native-bridge";
 
@@ -247,6 +248,100 @@ describe("ensureOverlayPermission", () => {
       },
     };
     await expect(ensureOverlayPermission()).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe("ensureBatteryOptimizationExemption", () => {
+  beforeEach(clearNativeGlobals);
+  afterEach(clearNativeGlobals);
+
+  it("is a no-op in a plain browser/PWA (not native)", async () => {
+    let called = false;
+    g.Capacitor = {
+      Plugins: {
+        LibreForegroundService: {
+          start: () => {},
+          stop: () => {},
+          isIgnoringBatteryOptimizations: async () => {
+            called = true;
+            return { granted: false };
+          },
+          requestIgnoreBatteryOptimizations: async () => {},
+        },
+      },
+    };
+    await ensureBatteryOptimizationExemption();
+    expect(called).toBe(false);
+  });
+
+  it("requests the exemption when native + not granted", async () => {
+    const calls: string[] = [];
+    g.__LIBRE_NATIVE__ = true;
+    g.Capacitor = {
+      Plugins: {
+        LibreForegroundService: {
+          start: () => {},
+          stop: () => {},
+          isIgnoringBatteryOptimizations: async () => {
+            calls.push("check");
+            return { granted: false };
+          },
+          requestIgnoreBatteryOptimizations: async () => {
+            calls.push("request");
+          },
+        },
+      },
+    };
+    await ensureBatteryOptimizationExemption();
+    expect(calls).toEqual(["check", "request"]);
+  });
+
+  it("does NOT request when already exempt", async () => {
+    const calls: string[] = [];
+    g.__LIBRE_NATIVE__ = true;
+    g.Capacitor = {
+      Plugins: {
+        LibreForegroundService: {
+          start: () => {},
+          stop: () => {},
+          isIgnoringBatteryOptimizations: async () => {
+            calls.push("check");
+            return { granted: true };
+          },
+          requestIgnoreBatteryOptimizations: async () => {
+            calls.push("request");
+          },
+        },
+      },
+    };
+    await ensureBatteryOptimizationExemption();
+    expect(calls).toEqual(["check"]);
+  });
+
+  it("is a safe no-op when native but the plugin lacks the methods (older wrapper)", async () => {
+    g.__LIBRE_NATIVE__ = true;
+    g.Capacitor = { Plugins: { LibreForegroundService: { start: () => {}, stop: () => {} } } };
+    await expect(ensureBatteryOptimizationExemption()).resolves.toBeUndefined();
+  });
+
+  it("swallows a rejection from the check without throwing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    g.__LIBRE_NATIVE__ = true;
+    g.Capacitor = {
+      Plugins: {
+        LibreForegroundService: {
+          start: () => {},
+          stop: () => {},
+          isIgnoringBatteryOptimizations: async () => {
+            throw new Error("bridge error");
+          },
+          requestIgnoreBatteryOptimizations: async () => {},
+        },
+      },
+    };
+    await expect(ensureBatteryOptimizationExemption()).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

@@ -14,7 +14,12 @@ import { completeDriveRedirect } from "./drive-backup";
 import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { refreshPushRegistration } from "./web-push";
-import { createKeepAliveForPlatform, isNativeApp, ensureOverlayPermission } from "./core/native-bridge";
+import {
+  createKeepAliveForPlatform,
+  isNativeApp,
+  ensureOverlayPermission,
+  ensureBatteryOptimizationExemption,
+} from "./core/native-bridge";
 import { nativeBackupAvailable, backupFolderConfigured, nativeBackupNow } from "./core/native-backup";
 import { applyNativeUiCopy } from "./core/native-ui";
 import {
@@ -109,16 +114,18 @@ if (!isDemoMode()) {
   }
 }
 
-// Native APK: with background mode default-on, prompt for the "draw over other apps" overlay
-// permission once, when the node first comes up — that overlay is what keeps the WebView (and the
-// LDK node) alive while occluded, so boosts settle in the background. Self-limiting:
-// ensureOverlayPermission() no-ops once granted. No-op in a browser PWA (isNativeApp() false).
+// Native APK: with background mode default-on, prompt once (when the node first comes up) for the two
+// permissions that keep the node alive in the background. The overlay ("draw over other apps") stops
+// Chromium freezing the occluded renderer; the battery-optimization exemption stops Doze suspending
+// the CPU/network when the phone is UNPLUGGED (without it the node dies off-charger — the 2026-07-13
+// report). Both are self-limiting: each ensure* no-ops once granted. No-op in a browser PWA.
 if (isNativeApp() && !isDemoMode()) {
-  let overlayPrompted = false;
+  let permsPrompted = false;
   onControllerEvent(() => {
-    if (!overlayPrompted && controller.isRunning()) {
-      overlayPrompted = true;
+    if (!permsPrompted && controller.isRunning()) {
+      permsPrompted = true;
       void ensureOverlayPermission();
+      void ensureBatteryOptimizationExemption();
     }
   });
 }

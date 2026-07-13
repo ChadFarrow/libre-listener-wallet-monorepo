@@ -155,6 +155,9 @@ describe("export/import v2 (passphrase + seed)", () => {
     expect(res.hasSeed).toBe(true);
     expect(res.network).toBe("regtest");
     expect(res.entryKeys).toContain("channel_manager");
+    // The backup's monotonic state_version is surfaced so a caller can detect a backup that's
+    // AHEAD of local storage (the iOS-eviction / stale-snapshot start guard).
+    expect(res.stateVersion).toBe(5);
     expect(probe.has("ldk_seed")).toBe(false);
   });
 

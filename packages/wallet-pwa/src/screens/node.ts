@@ -2,6 +2,7 @@ import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
 import { isChannelStateRegressionError, isNodeAlreadyRunningError } from "@libre/shared";
 import { AUTO_START_KEY, isAutoStartEnabled } from "../core/auto-start";
+import { isBackupAheadError, BACKUP_AHEAD_MSG } from "../core/backup-ahead";
 import { registerScreen, currentScreen } from "../ui/nav";
 import { forceRestoreScreen, clearRestoreLatch } from "./restore";
 import { $, setMsg, copyText } from "./util";
@@ -36,6 +37,13 @@ export function initNodeScreen(ctx: AppContext): void {
       if (isChannelStateRegressionError(e)) {
         setMsg("node-msg", "");
         forceRestoreScreen();
+        return;
+      }
+      // The cloud backup is newer than local storage (this device was rolled back / iOS-evicted) —
+      // starting would force-close. Route to the same forced-restore screen with the reason.
+      if (isBackupAheadError(e)) {
+        setMsg("node-msg", "");
+        forceRestoreScreen(BACKUP_AHEAD_MSG);
         return;
       }
       if (isNodeAlreadyRunningError(e)) {

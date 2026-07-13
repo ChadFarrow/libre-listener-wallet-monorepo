@@ -9,7 +9,8 @@ import { AUTO_START_KEY } from "./core/auto-start";
 import { registerServiceWorker, wireInstallPrompt } from "./register-sw";
 import { downloadBackupName } from "./core/backup-name";
 import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync } from "./core/backup-policy";
-import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail, markDriveSyncPending } from "./drive-integration";
+import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail, markDriveSyncPending, peekBackupEnvelope } from "./drive-integration";
+import { completeDriveRedirect } from "./drive-backup";
 import { shouldArmGestureReconnect } from "./core/drive-ui";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { refreshPushRegistration } from "./web-push";
@@ -39,6 +40,22 @@ enterDemoFromUrl(location.search, location.hash);
 // Local-only ring buffer; export lives in Developer settings. Spec: 2026-07-11-diag-log-design.md.
 installDiagTap();
 
+// Google Drive OAuth redirect return (installed iOS PWA flow, where the popup is blocked): if we
+// came back from Google with a token in the URL fragment, capture it and strip the fragment so it
+// doesn't linger, get logged, or re-trigger. Runs before any Drive use / the demo hash parse below.
+if (!isDemoMode()) {
+  const redirect = completeDriveRedirect(location.hash);
+  if (redirect.ok || redirect.error) {
+    try {
+      history.replaceState(null, "", location.pathname + location.search);
+    } catch {
+      /* best-effort fragment strip */
+    }
+  }
+  if (redirect.ok) console.log("[Drive] connected via redirect");
+  else if (redirect.error) console.warn("[Drive] redirect returned an error:", redirect.error);
+}
+
 // The single LDK node owner (or its demo stand-in). Its emit callback fans out to any screen.
 const controller = isDemoMode()
   ? (new DemoController((event, payload) => emitControllerEvent(event, payload)) as unknown as WalletController)
@@ -47,6 +64,14 @@ const controller = isDemoMode()
 // plain browser/PWA → the inaudible audio keep-alive. Same KeepAlive interface either way.
 const keepAlive = createKeepAliveForPlatform();
 const ctx: AppContext = { controller, isRunning: () => controller.isRunning(), keepAlive };
+
+// Backup-ahead start guard: give the controller a Drive-backed way to peek the off-device backup so
+// it can refuse to start on a rolled-back / iOS-evicted local snapshot (which would force-close the
+// channel). Best-effort — peekBackupEnvelope returns null whenever Drive isn't reachable. Not wired
+// in demo (no real backups) or native (SAF backup + the foreground-service residency cover it).
+if (!isDemoMode() && !isNativeApp()) {
+  controller.setBackupFetcher((network) => peekBackupEnvelope(network || "mainnet"));
+}
 
 // Native APK: keeping the node alive in the background (a foreground service, not battery-costly
 // audio) is the whole reason the wrapper exists, so default it ON. Seed the toggle once, before the

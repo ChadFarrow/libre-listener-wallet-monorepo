@@ -45,6 +45,19 @@ export function autoStartPlan(i: AutoStartInputs): AutoStartPlan {
   return { start: true, connectPeer: i.hasChannelState };
 }
 
+// POST-START gate for the automatic peer dial (distinct from autoStartPlan, which decides from
+// storage BEFORE the node runs). `hasChannelState` there only means "a channel_manager blob
+// exists" — which is TRUE even for an EMPTY manager (0 channels / 0 monitors). A copy that came up
+// without its channel state (an incomplete seed-only restore, or evicted IndexedDB) therefore
+// passed the storage gate, auto-dialed the peer, and — having no record of the channel the peer
+// still holds — made LDK send a channel-closure ChannelReestablish → force-close (the mainnet phone
+// incident, 2026-07-13). The ground truth is the live channel COUNT after start: only reconnect the
+// peer when the wallet actually holds a channel. An empty wallet has nothing to reconnect for
+// (opening the first channel uses the explicit Connect-peer / LSP flow, not this auto-dial).
+export function shouldReconnectPeer(channelCount: number): boolean {
+  return Number.isFinite(channelCount) && channelCount > 0;
+}
+
 // Boot-time peer dial schedule: the bridge may not be reachable the instant the browser
 // launches. After one successful connect the SDK's own auto-reconnect owns the link.
 export const PEER_CONNECT_DELAYS_MS: readonly number[] = [2_000, 4_000, 8_000, 16_000, 30_000];

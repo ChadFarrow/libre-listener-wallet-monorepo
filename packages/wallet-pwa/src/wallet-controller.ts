@@ -39,15 +39,17 @@ import {
   type AppConfig,
 } from "./core/wallet-config";
 import { resolveActiveNetwork } from "./core/sw-config";
-import { autoStartPlan, connectWithRetry } from "./core/auto-start";
+import { autoStartPlan, connectWithRetry, shouldReconnectPeer } from "./core/auto-start";
 import { createWebSocketStreamProvider } from "./core/ws-provider";
 import { restoreBlockReason } from "./core/restore-guard";
 import { addressToScriptPubKey } from "./core/address-script";
 import { smoothUsable, type UsableSmootherState } from "./core/usable-smoothing";
+import { backupAheadOfLocal, BackupAheadError } from "./core/backup-ahead";
 
 // Keys the SDK / app persist that this controller reasons about.
 const CHANNEL_MANAGER_KEY = "channel_manager";
 const SEED_KEY = "ldk_seed";
+const STATE_VERSION_KEY = "state_version"; // SDK's monotonic per-wallet state counter (also in the backup)
 const CREATED_NEW_KEY = "wallet_created_new"; // provenance marker: this seed was created fresh here
 const SWEEP_ADDRESS_KEY = "libre_sweep_address"; // on-chain address to recover force-closed funds
 
@@ -62,6 +64,10 @@ export class WalletController {
   private meta: SecureStorageProvider;
   private emit: ControllerEvent;
   private restoring = false; // serializes restoreWallet against a concurrent (double-click) call
+  // Injected fetcher for the off-device backup envelope (app wires this to Google Drive, guarded by
+  // connectivity/demo). Kept OUT of the controller so it stays Drive-agnostic; used only by the
+  // backup-ahead start guard. Returns null when no backup is reachable/applicable.
+  private backupEnvelopeFetcher?: (network: string) => Promise<string | null>;
 
   constructor(emit: ControllerEvent = () => {}) {
     this.meta = new IndexedDBStorageProvider(META_DB_NAME);
@@ -70,6 +76,12 @@ export class WalletController {
 
   isRunning(): boolean {
     return !!this.wallet && this.wallet.status() === "Running";
+  }
+
+  // Wire the off-device backup source used by the backup-ahead start guard (see doStartNode). The
+  // app injects a Drive-backed fetcher; kept behind a setter so the controller never imports Drive.
+  setBackupFetcher(fetcher: (network: string) => Promise<string | null>): void {
+    this.backupEnvelopeFetcher = fetcher;
   }
 
   // The NWC wallet-service pubkey the push gateway registers a subscription against.
@@ -386,6 +398,12 @@ export class WalletController {
       );
     }
     const wallet = await this.buildWallet();
+    // Backup-ahead guard (iOS-eviction / rolled-back-storage protection): if the off-device backup
+    // is NEWER than local storage, refuse to start — starting + reconnecting would present stale
+    // channel state to the peer and force-close (LDK "we have fallen behind"). The local channel-
+    // state-regression halt can't see this: an evicted IndexedDB reloads self-consistent but behind.
+    // Runs BEFORE this.wallet is assigned so a thrown BackupAheadError leaves nothing half-built.
+    await this.assertNotBehindBackup(wallet, network, storage);
     this.wallet = wallet;
     try {
       // start() already brings NWC up (nwc.init()+start()) — do NOT init it again here, or a second
@@ -405,6 +423,41 @@ export class WalletController {
     void wallet.syncGossip().catch((e) => console.warn("[Gossip] initial sync failed:", e?.message || e));
     this.emit("state-changed");
     return this.currentNode();
+  }
+
+  // Compare local `state_version` against the off-device backup's and throw BackupAheadError if the
+  // backup is ahead (local storage regressed). Best-effort by design: no injected fetcher, no
+  // reachable backup, an undecryptable envelope, or any read hiccup all SKIP the check — it must
+  // never block a legitimate start, only halt a demonstrably-stale one. `wallet` is built but not
+  // yet started; verifyBackup is decrypt-only and safe to call on it (no node/lock needed).
+  private async assertNotBehindBackup(
+    wallet: LibreListenerWallet,
+    network: string,
+    storage: SecureStorageProvider,
+  ): Promise<void> {
+    if (!this.backupEnvelopeFetcher) return;
+    let envelope: string | null = null;
+    try {
+      envelope = await this.backupEnvelopeFetcher(network);
+    } catch {
+      return; // backup unreachable (Drive offline / not connected) — can't compare, don't block
+    }
+    if (!envelope) return;
+    const seedHex = await storage.getItem(SEED_KEY);
+    if (!seedHex) return;
+    let backupVersion: number | null = null;
+    try {
+      const v = await wallet.verifyBackup(envelope, seedHex);
+      if (v.ok && typeof v.stateVersion === "number") backupVersion = v.stateVersion;
+    } catch {
+      return; // an envelope that won't decrypt with our seed isn't ours to compare against
+    }
+    if (backupVersion == null) return;
+    const localRaw = await storage.getItem(STATE_VERSION_KEY);
+    const localVersion = localRaw ? parseInt(localRaw, 10) || 0 : 0;
+    if (backupAheadOfLocal(localVersion, backupVersion)) {
+      throw new BackupAheadError(localVersion, backupVersion);
+    }
   }
 
   // Load-time auto-start. NEVER throws — a failed or skipped auto-start leaves the controller
@@ -440,6 +493,17 @@ export class WalletController {
   // saved/default peer back online; a channel with a different peer (e.g. an LSP) still needs a
   // manual Connect-peer, which the peers screen surfaces.
   private async connectSavedOrDefaultPeer(network: string): Promise<void> {
+    // Empty/lost-state guard (the 2026-07-13 phone force-close): NEVER auto-dial a peer from a
+    // wallet that holds no channels. A copy that started without its channel state (an incomplete
+    // seed-only restore, or evicted IndexedDB — a channel_manager blob can be present yet empty, so
+    // the storage-level hasChannelState check is fooled) would otherwise connect, and LDK — having
+    // no record of the channel the peer still holds — sends a channel-closure ChannelReestablish →
+    // force-close. The live channel count is the ground truth; an empty wallet has nothing to
+    // reconnect for (the first channel is opened via the explicit Connect-peer / LSP flow).
+    if (!this.wallet || !shouldReconnectPeer(this.wallet.getChannels().length)) {
+      console.warn("[Peer] wallet holds no channels — skipping auto peer connect (empty/lost-state guard)");
+      return;
+    }
     const cfg = await this.getConfig();
     const savedPeer = cfg.peer;
     const peerStr = savedPeer || defaultPeer(network);

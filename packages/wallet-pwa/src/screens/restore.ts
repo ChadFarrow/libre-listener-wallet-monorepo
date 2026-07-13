@@ -19,10 +19,17 @@ const REGRESSION_MSG =
   "This wallet's channel state is behind what it durably reached — starting now would " +
   "force-close your channels. Restore from your latest backup to continue.";
 
-export function forceRestoreScreen(): void {
+// The message shown while the latch is active. Held so the latch re-assert (on every controller
+// event) keeps whatever reason forced the screen — regression vs. backup-ahead — not a fixed one.
+let latchMsg = REGRESSION_MSG;
+
+// Force the restore screen and latch it. `msg` lets a caller state WHY (channel-state regression by
+// default, or the backup-ahead guard's own wording) — the reason must survive the latch re-assert.
+export function forceRestoreScreen(msg: string = REGRESSION_MSG): void {
   needsRestore = true;
+  latchMsg = msg;
   showScreen("screen-restore");
-  setMsg("restore-msg", REGRESSION_MSG, "err");
+  setMsg("restore-msg", msg, "err");
 }
 
 export function clearRestoreLatch(): void {
@@ -169,11 +176,12 @@ export function initRestoreScreen(ctx: AppContext): void {
       if (nativeBackupAvailable()) $("restore-drive").textContent = "Restore from folder";
     },
   });
-  // The latch must survive refreshes: any state-changed while latched re-asserts this screen.
+  // The latch must survive refreshes: any state-changed while latched re-asserts this screen with
+  // the reason it was raised for (regression or backup-ahead).
   onControllerEvent(() => {
     if (needsRestore && currentScreen() !== "screen-restore") {
       showScreen("screen-restore");
-      setMsg("restore-msg", REGRESSION_MSG, "err");
+      setMsg("restore-msg", latchMsg, "err");
     }
   });
 }

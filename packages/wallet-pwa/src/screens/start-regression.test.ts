@@ -27,6 +27,15 @@ class RegressionError extends Error {
   }
 }
 
+// Mirrors the app's BackupAheadError shape (message token + .code) — the discriminator
+// core/backup-ahead's isBackupAheadError checks.
+class BackupAheadStub extends Error {
+  code = "BACKUP_AHEAD";
+  constructor() {
+    super("cloud backup newer than local [BACKUP_AHEAD]");
+  }
+}
+
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -79,5 +88,37 @@ describe("start() channel-state regression → forced restore screen", () => {
     await flush();
     await flush();
     expect(isCurrent("screen-restore")).toBe(true);
+  });
+
+  it("routes a backup-ahead start error to the restore screen without leaking the code", async () => {
+    const controller = {
+      getState: vi.fn().mockResolvedValue({
+        network: "mainnet",
+        running: false,
+        hasSeed: true,
+        hasChannelState: true,
+        createdNew: false,
+      }),
+      startNode: vi.fn().mockRejectedValue(new BackupAheadStub()),
+      getPayments: vi.fn().mockResolvedValue([]),
+    } as unknown as WalletController;
+    const ctx: AppContext = { controller, isRunning: () => false, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
+
+    initScreens(ctx);
+    await flush();
+    await flush();
+
+    showScreen("screen-node");
+    document.getElementById("node-toggle")!.dispatchEvent(new Event("click"));
+    await flush();
+    await flush();
+
+    expect(controller.startNode).toHaveBeenCalled();
+    expect(isCurrent("screen-restore")).toBe(true);
+    const msg = document.getElementById("restore-msg")!.textContent || "";
+    expect(msg).toMatch(/backup/i);
+    expect(msg).toMatch(/force-close/i);
+    expect(msg).not.toMatch(/BACKUP_AHEAD/); // raw code never leaks to the UI
+    expect(document.getElementById("node-msg")!.textContent).not.toMatch(/BACKUP_AHEAD/);
   });
 });

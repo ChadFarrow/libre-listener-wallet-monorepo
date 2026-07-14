@@ -26,6 +26,12 @@ export interface NativeForegroundService {
   // falls back to a ~60s renderer-priority grace window. Prompt for it when background mode is enabled.
   hasOverlayPermission?(): Promise<{ granted: boolean }>;
   requestOverlayPermission?(): Promise<void>;
+  // Optional — present in wrapper builds that request the battery-optimization (Doze) exemption.
+  // Without the exemption, deep Doze on BATTERY defers the foreground service and cuts its network,
+  // so the relay socket drops when the phone is unplugged and the screen is off — even with a wake
+  // lock held. Prompt for it (once) when background mode is enabled, same as the overlay permission.
+  isIgnoringBatteryOptimizations?(): Promise<{ granted: boolean }>;
+  requestIgnoreBatteryOptimizations?(): Promise<void>;
 }
 
 interface CapacitorGlobal {
@@ -127,6 +133,25 @@ export async function ensureOverlayPermission(): Promise<void> {
     if (!res?.granted) await svc.requestOverlayPermission();
   } catch (e) {
     console.warn("[native] overlay permission check failed:", (e as Error)?.message || e);
+  }
+}
+
+// Ensure the battery-optimization (Doze) exemption that keeps the foreground service — and thus the
+// node + relay socket — alive on BATTERY while occluded. Called alongside ensureOverlayPermission
+// when background mode comes up: if the wrapper exposes the methods and the app isn't exempt yet,
+// open the system grant prompt once. No-op in a plain PWA, or a wrapper build without the methods.
+// Distinct from the overlay permission: the overlay stops Chromium freezing a hidden renderer; this
+// stops Doze suspending the CPU/network when the phone is unplugged (the two must BOTH hold for
+// background boosts to settle unplugged — see ForegroundService.USE_WAKE_LOCK).
+export async function ensureBatteryOptimizationExemption(): Promise<void> {
+  if (!isNativeApp()) return;
+  const svc = getNativeForegroundService();
+  if (!svc?.isIgnoringBatteryOptimizations || !svc.requestIgnoreBatteryOptimizations) return;
+  try {
+    const res = await svc.isIgnoringBatteryOptimizations();
+    if (!res?.granted) await svc.requestIgnoreBatteryOptimizations();
+  } catch (e) {
+    console.warn("[native] battery-optimization exemption check failed:", (e as Error)?.message || e);
   }
 }
 

@@ -79,12 +79,18 @@ class ForegroundService : Service() {
         const val CHANNEL_ID = "libre_node_keepalive"
         const val NOTIFICATION_ID = 4242
 
-        // The 1x1 overlay (WebViewResidency) alone keeps the node alive with the screen OFF — PROVEN
-        // on-device 2026-07-12: a 2s heartbeat held perfect cadence across 120s occluded + screen off
-        // with NO wake lock (69/69 beacons, zero freezes, visibilityState stayed "visible"). So the
-        // PARTIAL_WAKE_LOCK is redundant; dropping it saves battery (the CPU isn't force-held awake).
-        // Kept as an easily-flipped fallback in case some device/OS Dozes the renderer harder.
-        const val USE_WAKE_LOCK = false
+        // Hold a PARTIAL_WAKE_LOCK to keep the CPU running while the screen is OFF. REQUIRED on
+        // BATTERY: the earlier "overlay alone is enough" result (2026-07-12, 120s occluded + screen
+        // off, 69/69 beacons) was measured while the phone was PLUGGED IN, where Android SUPPRESSES
+        // Doze — so the CPU never slept and the overlay's renderer-keep-alive looked sufficient. Once
+        // UNPLUGGED, Doze suspends the CPU a few minutes after the screen goes off and the in-WebView
+        // LDK node + relay socket stop (reported 2026-07-13: "APK stopped working once no longer
+        // plugged in"). The overlay only stops Chromium freezing a `hidden` renderer; it does nothing
+        // against Doze CPU suspension. This wake lock, held by the foreground service, is what keeps
+        // the node alive on battery (the same FGS + wake-lock pattern native wallets use). Pair it
+        // with the battery-optimization exemption (see LibreForegroundServicePlugin) so deep Doze
+        // doesn't defer the service between maintenance windows.
+        const val USE_WAKE_LOCK = true
 
         fun start(context: Context) {
             val intent = Intent(context, ForegroundService::class.java)

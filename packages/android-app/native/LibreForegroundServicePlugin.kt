@@ -1,8 +1,10 @@
 package com.v4vmusic.librelistener
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.webkit.WebView
 import com.getcapacitor.JSObject
@@ -73,6 +75,49 @@ class LibreForegroundServicePlugin : Plugin() {
             context.startActivity(intent)
         }
         call.resolve()
+    }
+
+    /** True when this app is exempt from battery optimization (Doze/App Standby). Without the
+     *  exemption, deep Doze on BATTERY defers the foreground service between maintenance windows and
+     *  cuts its network — the wallet's relay socket drops even with a wake lock held. */
+    @PluginMethod
+    fun isIgnoringBatteryOptimizations(call: PluginCall) {
+        val res = JSObject()
+        res.put("granted", isExemptFromBatteryOptimization())
+        call.resolve(res)
+    }
+
+    /** Ask the OS to exempt this app from battery optimization. This app is sideloaded (GitHub
+     *  Releases / F-Droid-style, never Play Store), so the direct ACTION_REQUEST_IGNORE_BATTERY_
+     *  OPTIMIZATIONS dialog — the one-tap "Allow" prompt — is permitted; fall back to the full
+     *  settings list if that intent can't be resolved on this ROM. */
+    @PluginMethod
+    fun requestIgnoreBatteryOptimizations(call: PluginCall) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !isExemptFromBatteryOptimization()) {
+            val direct = Intent(
+                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:${context.packageName}"),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(direct)
+            } catch (_: Exception) {
+                // Some ROMs don't expose the direct request dialog — open the exemption list instead.
+                val list = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                    context.startActivity(list)
+                } catch (_: Exception) {
+                    /* nothing to open — best-effort */
+                }
+            }
+        }
+        call.resolve()
+    }
+
+    private fun isExemptFromBatteryOptimization(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        return pm.isIgnoringBatteryOptimizations(context.packageName)
     }
 
     // Occluded/backgrounded: hold the renderer resident so the node keeps running.

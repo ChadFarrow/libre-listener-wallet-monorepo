@@ -8,9 +8,9 @@ works on **GrapheneOS**.
 
 > **Status: APK builds (2026-07-12), on-device behavior unverified.** The full runbook below has been
 > executed on the maintainer's Mac and produces a working `app-debug.apk` (plugin classes in the dex,
-> service + permissions in the manifest, wallet assets incl. the LDK WASM packaged). It can't be built
-> in CI or a headless Linux box. Everything about *runtime* behavior is unverified until the Phase 0
-> spike runs on a real GrapheneOS device.
+> service + permissions in the manifest, wallet assets incl. the LDK WASM packaged). Builds in CI on
+> ubuntu-latest via `scripts/prepare-android.sh` (see "Auto-build (CI)" below). Everything about
+> *runtime* behavior is unverified until the Phase 0 spike runs on a real GrapheneOS device.
 
 Approved plan & rationale: `Target B` in `ai/reference/this-monorepo/libre-listener-wallet-architecture.md`.
 The web-side seam already lives in `packages/wallet-pwa/src/core/native-bridge.ts` (chooses the native
@@ -53,46 +53,19 @@ VITE_LSPS1_MOCK_URL= pnpm --filter @libre/wallet-pwa build
 pnpm --filter @libre/android-app cap:add
 ```
 
-Then wire the foreground-service plugin into the generated project (the `native/` files are the
-canonical source — copy them in):
+Then wire the foreground-service plugin into the generated project — copy the `native/` files in,
+enable Kotlin, merge the manifest, register the plugin, and generate the launcher icon, all
+idempotently, via one script:
 
-1. Copy `native/ForegroundService.kt`, `native/LibreForegroundServicePlugin.kt`,
-   `native/WebViewResidency.kt`, and `native/LibreBackupStoragePlugin.kt` into
-   `android/app/src/main/java/com/v4vmusic/librelistener/` (the package dir already exists — it holds
-   the generated `MainActivity.java`). The backup-storage plugin (SAF off-device backup) also needs
-   `implementation "androidx.documentfile:documentfile:1.0.1"` added to `android/app/build.gradle`'s
-   `dependencies { }`.
-2. **Enable Kotlin** — the Capacitor template generates a Java-only project, so the `.kt` sources
-   won't compile until you:
-   - add `classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21'` to the `buildscript`
-     dependencies in `android/build.gradle`, and
-   - add `apply plugin: 'org.jetbrains.kotlin.android'` under `apply plugin: 'com.android.application'`
-     in `android/app/build.gradle`.
-3. Merge `native/AndroidManifest.snippet.xml` into `android/app/src/main/AndroidManifest.xml`
-   (permissions inside `<manifest>`, the `<service>` inside `<application>`).
-4. In the generated `android/app/src/main/java/.../MainActivity.java` (the template is Java, not
-   Kotlin), register the plugin:
-   ```java
-   public class MainActivity extends BridgeActivity {
-       @Override
-       public void onCreate(Bundle savedInstanceState) {
-           registerPlugin(LibreForegroundServicePlugin.class);
-           registerPlugin(LibreBackupStoragePlugin.class);
-           super.onCreate(savedInstanceState);
-       }
-   }
-   ```
-5. Confirm `applicationId` in `android/app/build.gradle` matches `appId` in `capacitor.config.ts`
-   (`com.v4vmusic.librelistener`).
-6. **Generate the launcher icon** from the committed source (`assets/logo.png`, the 1024px Libre
-   logo-mark) — the Capacitor template ships a generic placeholder, and the generated icons land in
-   the gitignored `android/` tree so they must be regenerated on each fresh setup:
-   ```bash
-   npx @capacitor/assets generate --android
-   ```
-   Then set the adaptive-icon background to the logo green (it defaults to white, which shows white
-   corners under the launcher mask): edit
-   `android/app/src/main/res/values/ic_launcher_background.xml` → `<color name="ic_launcher_background">#17913F</color>`.
+```bash
+# from the repo root — reproduces the full android/ wiring idempotently:
+pnpm --filter @libre/android-app prepare:android
+# then build:
+cd packages/android-app/android
+JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew assembleRelease
+```
+
+The exact wiring lives in `scripts/prepare-android.sh` (unit-tested in `prepare-android.test.sh`).
 
 ## Build → install → iterate
 
@@ -167,6 +140,24 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@21/... ./gradlew assembleRelease
 `adb install -r` over an existing debug install fails — you must **uninstall first** (which wipes the
 wallet), then install the release APK and **restore from your backup folder**. Pick one signing key up
 front for any device you care about. Keep the keystore + `keystore.properties` backed up together.
+
+---
+
+## Auto-build (CI)
+
+`.github/workflows/build-android-apk.yml` builds a **signed** APK on every master push touching
+`wallet-pwa` / `shared` / `libre-listener-wallet` / `android-app`, and publishes it to the rolling
+**`android-latest`** GitHub Release. Stable download:
+`https://github.com/ChadFarrow/libre-listener-wallet-monorepo/releases/download/android-latest/libre-listener-wallet.apk`
+
+Install/update in place (same key preserves the wallet): `adb install -r libre-listener-wallet.apk`.
+
+**One-time secrets** (repo → Settings → Secrets and variables → Actions), from your EXISTING release
+keystore so CI builds install over your current app:
+- `ANDROID_KEYSTORE_BASE64` = `base64 -i ~/libre-android-release.keystore | pbcopy`
+- `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`
+
+Until the secrets exist the workflow fails fast (it refuses to publish an unsigned APK).
 
 ---
 

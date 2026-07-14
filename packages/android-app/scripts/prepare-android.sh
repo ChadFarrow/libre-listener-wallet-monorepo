@@ -34,6 +34,59 @@ ensure_kotlin_gradle() {
   log "kotlin gradle wiring ok"
 }
 
+# Add the SAF dep + a keystore.properties-driven release signing config to app/build.gradle.
+ensure_app_deps_signing() {
+  local android="$1" app="$1/app/build.gradle"
+  [ -f "$app" ] || die "missing $app"
+  grep -qE '^\s*android\s*\{' "$app" || die "no android{} in $app"
+  grep -qE '^\s*dependencies\s*\{' "$app" || die "no dependencies{} in $app"
+
+  # 1) documentfile dependency
+  if ! grep -qF "androidx.documentfile:documentfile:1.0.1" "$app"; then
+    awk '
+      !done && /^[[:space:]]*dependencies[[:space:]]*\{/ {
+        print; print "    implementation \"androidx.documentfile:documentfile:1.0.1\""; done=1; next
+      } { print }
+    ' "$app" > "$app.tmp" && mv "$app.tmp" "$app"
+  fi
+
+  # 2) signingConfigs block as the first thing inside android { }
+  if ! grep -qF "signingConfigs {" "$app"; then
+    awk '
+      !done && /^[[:space:]]*android[[:space:]]*\{/ {
+        print
+        print "    signingConfigs {"
+        print "        release {"
+        print "            def kf = rootProject.file(\"keystore.properties\")"
+        print "            if (kf.exists()) {"
+        print "                def kp = new Properties(); kf.withInputStream { kp.load(it) }"
+        print "                storeFile file(kp[\"storeFile\"])"
+        print "                storePassword kp[\"storePassword\"]"
+        print "                keyAlias kp[\"keyAlias\"]"
+        print "                keyPassword kp[\"keyPassword\"]"
+        print "            }"
+        print "        }"
+        print "    }"
+        done=1; next
+      } { print }
+    ' "$app" > "$app.tmp" && mv "$app.tmp" "$app"
+  fi
+
+  # 3) apply the release signing config inside buildTypes.release (only if keystore present at build)
+  if ! grep -qF "signingConfig rootProject.file" "$app"; then
+    awk '
+      !done && /^[[:space:]]*release[[:space:]]*\{/ && inbuild {
+        print
+        print "            signingConfig rootProject.file(\"keystore.properties\").exists() ? signingConfigs.release : null"
+        done=1; next
+      }
+      /buildTypes[[:space:]]*\{/ { inbuild=1 }
+      { print }
+    ' "$app" > "$app.tmp" && mv "$app.tmp" "$app"
+  fi
+  log "app gradle deps + signing ok"
+}
+
 main() {
   die "main not implemented yet"  # replaced in Task 6
 }

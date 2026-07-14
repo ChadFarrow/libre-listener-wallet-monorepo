@@ -49,4 +49,45 @@ if ( ensure_kotlin_gradle "$bad" ) >/dev/null 2>&1; then
   echo "FAIL: ensure_kotlin_gradle should die when buildscript dependencies{} is missing"; fail=1
 fi
 
+# --- ensure_app_deps_signing ---
+mk_app_fixture() {
+  mkdir -p "$1/app"
+  cat > "$1/app/build.gradle" <<'EOF'
+apply plugin: 'com.android.application'
+android {
+    namespace "com.v4vmusic.librelistener"
+    defaultConfig {
+        applicationId "com.v4vmusic.librelistener"
+        versionCode 1
+        versionName "1.0"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
+dependencies {
+    implementation project(':capacitor-android')
+}
+EOF
+}
+d="$TMP/app"; mk_app_fixture "$d"
+ensure_app_deps_signing "$d"
+a="$d/app/build.gradle"
+assert_contains "$a" "androidx.documentfile:documentfile:1.0.1" "documentfile dep added"
+assert_contains "$a" "signingConfigs {" "signingConfigs block added"
+assert_contains "$a" "keystore.properties" "reads keystore.properties"
+assert_contains "$a" "signingConfig" "release signingConfig set"
+ensure_app_deps_signing "$d"
+assert_count "$a" "androidx.documentfile:documentfile:1.0.1" 1 "documentfile not duplicated"
+assert_count "$a" "signingConfigs {" 1 "signingConfigs not duplicated"
+
+# --- ensure_app_deps_signing: fail-loud on missing anchor ---
+bad="$TMP/app-bad"; mkdir -p "$bad/app"
+printf 'plugins {}\n' > "$bad/app/build.gradle"   # no android{} / dependencies{}
+if ( ensure_app_deps_signing "$bad" ) >/dev/null 2>&1; then
+  echo "FAIL: ensure_app_deps_signing should die when android{} is missing"; fail=1
+fi
+
 if [ "$fail" = 0 ]; then echo "ALL TESTS PASSED"; else echo "TESTS FAILED"; exit 1; fi

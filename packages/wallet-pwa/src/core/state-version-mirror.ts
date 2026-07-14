@@ -16,6 +16,8 @@
 // origin wipe clears the mirror too — that case is covered by the auto-start deferral (refuse to
 // auto-start a Drive-configured wallet whose freshness can't be verified). The two layers compose.
 
+import { backupAheadOfLocal } from "./backup-ahead";
+
 export const STATE_ROLLBACK_CODE = "STATE_ROLLBACK";
 
 // localStorage key holding the high-water state_version mirror for a network. Kept per-network to
@@ -73,3 +75,29 @@ export function isStateRollbackError(e: unknown): boolean {
 export const STATE_ROLLBACK_MSG =
   "This device's wallet storage was rolled back. Starting now would force-close your channel. " +
   "Restore from your backup to continue.";
+
+// ---- Recover-or-halt decision ----
+// When a start detects that local storage regressed (via the offline mirror OR the off-device
+// backup), the best outcome is to SELF-HEAL: silently restore from the cloud backup instead of
+// prompting the user, whenever that backup is reachable and provably newer. This is the pure decision
+// behind that: given local state_version, the offline mirror, and the backup's version (null when the
+// backup is unreachable or wasn't decryptable with our own seed), pick the action.
+//
+//  - "proceed": no rollback — start normally.
+//  - "recover": a newer, same-wallet backup is in hand → auto-restore from it (no user prompt).
+//  - "halt":    storage rolled back but no usable backup to recover from → halt for a manual restore.
+export type RecoveryAction = "proceed" | "recover" | "halt";
+
+export function recoveryDecision(i: {
+  localVersion: number;
+  mirrorVersion: number;
+  backupVersion: number | null; // null ⇒ backup unreachable / not ours to recover from
+}): RecoveryAction {
+  const mirrorAhead = localStateRolledBack(i.localVersion, i.mirrorVersion);
+  const backupAhead = i.backupVersion != null && backupAheadOfLocal(i.localVersion, i.backupVersion);
+  if (!mirrorAhead && !backupAhead) return "proceed";
+  // A newer same-wallet backup is recoverable regardless of which signal fired — prefer self-heal.
+  if (backupAhead) return "recover";
+  // Mirror says we rolled back but the backup can't help (unreachable, or not strictly newer) → halt.
+  return "halt";
+}

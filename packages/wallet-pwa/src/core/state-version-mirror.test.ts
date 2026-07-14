@@ -5,6 +5,7 @@ import {
   StateRollbackError,
   isStateRollbackError,
   mirrorKeyForNetwork,
+  recoveryDecision,
   STATE_ROLLBACK_CODE,
 } from "./state-version-mirror";
 
@@ -46,6 +47,29 @@ describe("localStateRolledBack", () => {
     expect(localStateRolledBack(NaN, 3)).toBe(true); // local unknown, mirror has state → treat local as 0
     expect(localStateRolledBack(3, NaN)).toBe(false); // mirror unknown → never halt
     expect(localStateRolledBack("90", "113")).toBe(true);
+  });
+});
+
+describe("recoveryDecision", () => {
+  it("proceeds when nothing regressed", () => {
+    expect(recoveryDecision({ localVersion: 113, mirrorVersion: 113, backupVersion: 113 })).toBe("proceed");
+    expect(recoveryDecision({ localVersion: 113, mirrorVersion: 0, backupVersion: null })).toBe("proceed"); // fresh mirror, no backup
+    expect(recoveryDecision({ localVersion: 5, mirrorVersion: 3, backupVersion: 4 })).toBe("proceed"); // both behind local
+  });
+
+  it("recovers whenever a strictly-newer (same-wallet) backup is in hand", () => {
+    // The incident: on-disk v90 rolled back, backup holds v113 and is reachable.
+    expect(recoveryDecision({ localVersion: 90, mirrorVersion: 113, backupVersion: 113 })).toBe("recover");
+    // Whole-origin rollback: both local AND mirror rolled back together, but the backup is ahead.
+    expect(recoveryDecision({ localVersion: 90, mirrorVersion: 90, backupVersion: 113 })).toBe("recover");
+    // Backup only somewhat newer still beats staying on the rolled-back copy.
+    expect(recoveryDecision({ localVersion: 90, mirrorVersion: 113, backupVersion: 100 })).toBe("recover");
+  });
+
+  it("halts when the mirror shows a rollback but no usable backup is available", () => {
+    expect(recoveryDecision({ localVersion: 90, mirrorVersion: 113, backupVersion: null })).toBe("halt"); // unreachable
+    expect(recoveryDecision({ localVersion: 90, mirrorVersion: 113, backupVersion: 90 })).toBe("halt"); // backup also stale
+    expect(recoveryDecision({ localVersion: 90, mirrorVersion: 113, backupVersion: 88 })).toBe("halt"); // backup older
   });
 });
 

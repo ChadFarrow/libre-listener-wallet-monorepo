@@ -107,7 +107,7 @@ describe("WalletController rolled-back-storage guard (offline mirror)", () => {
     localStorage.clear();
   });
 
-  it("halts start() when the offline mirror is ahead of on-disk state_version (no WASM built)", async () => {
+  it("halts start() when the mirror is ahead and no backup is available to recover from", async () => {
     const storage = new IndexedDBStorageProvider(DB);
     // A funded wallet whose IndexedDB was rolled back to v90 while the localStorage mirror holds v113.
     await storage.setItem("ldk_seed", seedHex);
@@ -116,6 +116,20 @@ describe("WalletController rolled-back-storage guard (offline mirror)", () => {
     localStorage.setItem(mirrorKey, "113");
 
     const controller = new WalletController();
+    await expect(controller.startNode()).rejects.toThrow(/\[STATE_ROLLBACK\]/);
+    expect(controller.isRunning()).toBe(false);
+  });
+
+  it("still halts (never recovers) when the backup is configured but unreachable at start", async () => {
+    const storage = new IndexedDBStorageProvider(DB);
+    await storage.setItem("ldk_seed", seedHex);
+    await storage.setItem("channel_manager", "deadbeef");
+    await storage.setItem("state_version", "90");
+    localStorage.setItem(mirrorKey, "113");
+
+    const controller = new WalletController();
+    // Drive configured but the fetch returns null (offline) → no version to compare → can't recover.
+    controller.setBackupFetcher(async () => null);
     await expect(controller.startNode()).rejects.toThrow(/\[STATE_ROLLBACK\]/);
     expect(controller.isRunning()).toBe(false);
   });

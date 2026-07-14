@@ -7,6 +7,7 @@
     "build": "node -e \"console.log('[android-app] The native APK builds on a machine with the Android SDK. See packages/android-app/README.md: pnpm cap:add (once), then build wallet-pwa, then pnpm cap:sync, then open in Android Studio.')\"",
     "cap:add": "cap add android",
     "cap:sync": "cap sync android",
-    "open": "cap open android"
+    "open": "cap open android",
+    "prepare:android": "bash scripts/prepare-android.sh"
   }
 }

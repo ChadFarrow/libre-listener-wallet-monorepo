@@ -187,8 +187,65 @@ register_plugins() {
   log "plugins registered"
 }
 
+# Repo-root-relative paths.
+PKG="packages/android-app"
+ANDROID="$PKG/android"
+NATIVE="$PKG/native"
+PKG_JAVA="$ANDROID/app/src/main/java/com/v4vmusic/librelistener"
+
+copy_native() {
+  [ -d "$NATIVE" ] || die "missing $NATIVE"
+  mkdir -p "$PKG_JAVA"
+  local f
+  for f in ForegroundService.kt LibreForegroundServicePlugin.kt WebViewResidency.kt LibreBackupStoragePlugin.kt; do
+    [ -f "$NATIVE/$f" ] || die "missing $NATIVE/$f"
+    cp "$NATIVE/$f" "$PKG_JAVA/$f"
+  done
+  log "native kotlin copied"
+}
+
+set_icon_background() {
+  local f="$ANDROID/app/src/main/res/values/ic_launcher_background.xml"
+  [ -f "$f" ] || { log "no ic_launcher_background.xml (skipping color set)"; return; }
+  sed -E -i.bak 's|(<color name="ic_launcher_background">)[^<]*(</color>)|\1#17913F\2|' "$f"
+  rm -f "$f.bak"
+}
+
 main() {
-  die "main not implemented yet"  # replaced in Task 6
+  local cap="${CAP_VERSION:-7.4.3}"
+  local vcode="${ANDROID_VERSION_CODE:-1}"
+  local vname="${ANDROID_VERSION_NAME:-0.0.0-dev}"
+  [ -f "pnpm-workspace.yaml" ] || die "run from the repo root"
+
+  log "installing Capacitor deps (not committed)"
+  pnpm --filter @libre/android-app add \
+    "@capacitor/core@$cap" "@capacitor/cli@$cap" "@capacitor/android@$cap" \
+    "@capacitor/share@$cap" "@capacitor/filesystem@$cap"
+
+  log "building wallet-pwa (mock LSP override enforced)"
+  VITE_LSPS1_MOCK_URL= pnpm --filter @libre/wallet-pwa build
+
+  if [ -d "$ANDROID" ]; then
+    log "android/ exists → cap sync"
+    pnpm --filter @libre/android-app exec cap sync android
+  else
+    log "generating android/ → cap add"
+    pnpm --filter @libre/android-app exec cap add android
+  fi
+
+  copy_native
+  ensure_kotlin_gradle "$ANDROID"
+  ensure_app_deps_signing "$ANDROID"
+  stamp_version "$ANDROID" "$vcode" "$vname"
+  merge_manifest "$NATIVE/AndroidManifest.snippet.xml" "$ANDROID/app/src/main/AndroidManifest.xml"
+  register_plugins "$PKG_JAVA/MainActivity.java"
+
+  log "generating launcher icons"
+  ( cd "$PKG" && npx --yes @capacitor/assets generate --android ) \
+    || log "icon generation skipped (assets tool unavailable — keeps template placeholder)"
+  set_icon_background
+
+  log "DONE — android/ ready. Build: (cd $ANDROID && ./gradlew assembleRelease)"
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi

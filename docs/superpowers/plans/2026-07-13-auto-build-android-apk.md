@@ -486,28 +486,36 @@ Claude-Session: https://claude.ai/code/session_0181hjeMiV5pC68XAuXTxDTW"
 - Modify: `packages/android-app/scripts/prepare-android.test.sh`
 
 **Interfaces:**
-- Produces: `register_plugins <mainactivity_java>` — inserts `registerPlugin(LibreForegroundServicePlugin.class);` and `registerPlugin(LibreBackupStoragePlugin.class);` into `onCreate` before `super.onCreate`. The plugins live in the same package as `MainActivity`, so no plugin imports are needed. Idempotent. If the generated `MainActivity` has no `onCreate` override (the Capacitor default), it synthesizes one using the fully-qualified `android.os.Bundle` (so no import edit is required — avoids non-portable sed).
+- Produces: `register_plugins <mainactivity_java>` — inserts `registerPlugin(LibreForegroundServicePlugin.class);` and `registerPlugin(LibreBackupStoragePlugin.class);` into `onCreate` before `super.onCreate`. The plugins live in the same package as `MainActivity`, so no plugin imports are needed. Idempotent; `die`s if there is no `class MainActivity`. If the generated `MainActivity` has no `onCreate` override, it synthesizes one using the fully-qualified `android.os.Bundle` (no import edit → portable).
+
+**Implementation note (validated in bash against 3 forms):** Capacitor 7 commonly generates the empty body on ONE line — `public class MainActivity extends BridgeActivity {}` — not a lone `}` on its own line. The implementation therefore normalizes a same-line `{}` body to multi-line first, then injects, so it handles all three real forms: `{}` one-line, `{`…`}` multi-line, and an existing `onCreate` (inject before `super.onCreate`). This exact code + a two-form test were run and verified.
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `prepare-android.test.sh`:
+Append to `prepare-android.test.sh`. Cover BOTH empty-body forms (`{}` one-line — the likely real Capacitor output — and the multi-line `}`):
 ```bash
 # --- register_plugins ---
-d="$TMP/act"; mkdir -p "$d"
-# Capacitor's default MainActivity has NO onCreate override:
-cat > "$d/MainActivity.java" <<'EOF'
-package com.v4vmusic.librelistener;
-import com.getcapacitor.BridgeActivity;
-public class MainActivity extends BridgeActivity {
+rp_check() { # <file> <label>
+  local j="$1" label="$2"
+  register_plugins "$j"; register_plugins "$j"   # run twice → idempotent
+  assert_contains "$j" "registerPlugin(LibreForegroundServicePlugin.class)" "$label: fg plugin registered"
+  assert_contains "$j" "registerPlugin(LibreBackupStoragePlugin.class)" "$label: backup plugin registered"
+  assert_contains "$j" "super.onCreate(savedInstanceState)" "$label: onCreate synthesized"
+  assert_count "$j" "registerPlugin(LibreForegroundServicePlugin.class)" 1 "$label: fg not duplicated"
+  assert_count "$j" "super.onCreate" 1 "$label: single super.onCreate"
 }
-EOF
-register_plugins "$d/MainActivity.java"
-j="$d/MainActivity.java"
-assert_contains "$j" "registerPlugin(LibreForegroundServicePlugin.class)" "fg plugin registered"
-assert_contains "$j" "registerPlugin(LibreBackupStoragePlugin.class)" "backup plugin registered"
-assert_contains "$j" "onCreate" "onCreate present"
-register_plugins "$j"
-assert_count "$j" "registerPlugin(LibreForegroundServicePlugin.class)" 1 "fg not duplicated"
+d="$TMP/act"; mkdir -p "$d"
+# Form A: empty body on ONE line (common Capacitor 7 output)
+printf 'package com.v4vmusic.librelistener;\nimport com.getcapacitor.BridgeActivity;\npublic class MainActivity extends BridgeActivity {}\n' > "$d/A.java"
+rp_check "$d/A.java" "oneline"
+# Form B: empty body, closing brace on its own line
+printf 'package com.v4vmusic.librelistener;\nimport com.getcapacitor.BridgeActivity;\npublic class MainActivity extends BridgeActivity {\n}\n' > "$d/B.java"
+rp_check "$d/B.java" "multiline"
+# fail-loud when there is no MainActivity class
+printf 'package x;\n' > "$d/none.java"
+if ( register_plugins "$d/none.java" ) >/dev/null 2>&1; then
+  echo "FAIL: register_plugins should die without a MainActivity class"; fail=1
+fi
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -517,16 +525,19 @@ Expected: FAIL — `register_plugins: command not found`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `prepare-android.sh`:
+Add to `prepare-android.sh` (this exact code was validated in bash against all three MainActivity forms):
 ```bash
-# Register the two native plugins in MainActivity.onCreate. Handles the default (no onCreate) template
-# by injecting a full onCreate override before the class's closing brace.
+# Register the two native plugins in MainActivity.onCreate. Handles all Capacitor MainActivity shapes:
+# an existing onCreate (inject before super.onCreate), a multi-line empty body, and — the common
+# Capacitor 7 output — an empty body on ONE line ("... {}"), which is normalized to multi-line first.
+# Synthesized onCreate uses fully-qualified android.os.Bundle so no import edit is needed (portable).
 register_plugins() {
   local j="$1"
   [ -f "$j" ] || die "missing $j"
   if grep -qF "registerPlugin(LibreForegroundServicePlugin.class)" "$j"; then
     log "plugins already registered"; return
   fi
+  grep -qF "class MainActivity" "$j" || die "no MainActivity class in $j"
 
   if grep -qF "super.onCreate" "$j"; then
     # existing onCreate: insert registerPlugin lines before super.onCreate
@@ -538,13 +549,19 @@ register_plugins() {
       } { print }
     ' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
   else
-    # no onCreate override (Capacitor default): synthesize one before the class's final closing brace.
-    # Use fully-qualified android.os.Bundle so no import edit is needed (keeps this portable).
+    # no onCreate: normalize a same-line "... {}" body to multi-line, then inject onCreate before the
+    # class's final lone "}".
     awk '
       { lines[NR]=$0 }
       END {
-        last=0; for (i=1;i<=NR;i++) if (lines[i] ~ /^}[[:space:]]*$/) last=i
-        for (i=1;i<=NR;i++) {
+        emptyline=0
+        for (i=1;i<=NR;i++)
+          if (lines[i] ~ /class MainActivity[^{]*\{\}[[:space:]]*$/) { sub(/\{\}[[:space:]]*$/,"{",lines[i]); emptyline=i }
+        n=0
+        for (i=1;i<=NR;i++) { n++; arr[n]=lines[i]; if (i==emptyline) { n++; arr[n]="}" } }
+        last=0; for (i=1;i<=n;i++) if (arr[i] ~ /^}[[:space:]]*$/) last=i
+        if (last==0) { print "register_plugins: no injection point in " FILENAME > "/dev/stderr"; exit 3 }
+        for (i=1;i<=n;i++) {
           if (i==last) {
             print "    @Override"
             print "    public void onCreate(android.os.Bundle savedInstanceState) {"
@@ -553,10 +570,11 @@ register_plugins() {
             print "        super.onCreate(savedInstanceState);"
             print "    }"
           }
-          print lines[i]
+          print arr[i]
         }
       }
-    ' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
+    ' "$j" > "$j.tmp" || die "register_plugins: could not inject onCreate into $j"
+    mv "$j.tmp" "$j"
   fi
   log "plugins registered"
 }

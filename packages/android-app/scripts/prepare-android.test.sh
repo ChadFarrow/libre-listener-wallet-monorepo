@@ -4,6 +4,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/prepare-android.sh"
+set +e  # the sourced script sets `set -e`; the test harness manages its own error handling
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fail=0
@@ -39,5 +40,13 @@ assert_contains "$d/app/build.gradle" "apply plugin: 'org.jetbrains.kotlin.andro
 ensure_kotlin_gradle "$d"
 assert_count "$d/build.gradle" "kotlin-gradle-plugin:2.0.21" 1 "kotlin classpath not duplicated"
 assert_count "$d/app/build.gradle" "org.jetbrains.kotlin.android" 1 "kotlin plugin not duplicated"
+
+# --- ensure_kotlin_gradle: fail-loud on missing anchor ---
+bad="$TMP/kt-bad"; mkdir -p "$bad/app"
+printf 'buildscript {\n}\n' > "$bad/build.gradle"                       # no dependencies{} anchor
+printf "apply plugin: 'com.android.application'\n" > "$bad/app/build.gradle"
+if ( ensure_kotlin_gradle "$bad" ) >/dev/null 2>&1; then
+  echo "FAIL: ensure_kotlin_gradle should die when buildscript dependencies{} is missing"; fail=1
+fi
 
 if [ "$fail" = 0 ]; then echo "ALL TESTS PASSED"; else echo "TESTS FAILED"; exit 1; fi

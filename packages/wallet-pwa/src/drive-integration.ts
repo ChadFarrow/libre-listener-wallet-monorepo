@@ -12,13 +12,13 @@ import {
   pickRestoreNetwork,
   deleteAllBackups,
   DriveForeignBackupError,
+  DRIVE_HINT_KEY as HINT_KEY,
 } from "./drive-backup";
 import type { WalletController } from "./wallet-controller";
 import { isDemoMode } from "./core/demo-mode";
 import { isStandaloneDisplay } from "./core/display-mode";
 
 const CLIENT_ID_KEY = "libre_google_client_id";
-const HINT_KEY = "libre_drive_hint";
 
 // Baked build var (same as the extension/PWA ship) with an optional user override.
 export function googleClientId(): string {
@@ -72,9 +72,9 @@ export async function ensureDriveConnected(opts: { silent?: boolean } = {}): Pro
       await new Promise<void>(() => {}); // hangs until the browser navigates to Google
       return;
     }
+    // driveConnect persists the learned account itself (rememberEmail), so both this popup path and
+    // the iOS redirect path remember Drive across a full app close — no write needed here.
     await driveConnect(clientId, { silent: opts.silent, hint });
-    const email = getConnectedEmail();
-    if (email) localStorage.setItem(HINT_KEY, email);
   })();
   connectInFlight = { interactive, p };
   try {

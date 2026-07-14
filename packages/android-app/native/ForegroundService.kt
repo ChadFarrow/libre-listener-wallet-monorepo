@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 
 /**
  * Keeps the app process — and therefore the WebView's LDK WASM node + Nostr relay WebSocket — alive
@@ -26,10 +27,37 @@ class ForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // startForeground() can THROW (e.g. ForegroundServiceStartNotAllowedException when a
+        // time-limited FGS type has exhausted its daily budget, or SecurityException on a
+        // type/permission mismatch). An uncaught throw here crashes the whole process — and with
+        // START_STICKY the OS just restarts and re-throws, producing a crash LOOP that takes the
+        // in-WebView node down all night (observed 2026-07-14 with the old dataSync type). Catch it,
+        // stop cleanly, and DON'T auto-restart so we never loop; the JS layer (native-bridge.ts) will
+        // start us again when the node next runs.
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        } catch (t: Throwable) {
+            Log.e(TAG, "startForeground failed; stopping instead of crash-looping", t)
+            releaseWakeLock()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (USE_WAKE_LOCK) acquireWakeLock()
         // START_STICKY: if the OS kills us under memory pressure, restart so the node keeps running.
         return START_STICKY
+    }
+
+    /**
+     * Called by the framework (Android 14+) when a TIME-LIMITED foreground service type hits its
+     * daily cap. With the specialUse type this should never fire, but if the type ever regresses to a
+     * capped one, handle it gracefully (release the wake lock + stop) instead of letting the follow-up
+     * startForeground() throw and crash the process. Overriding a method added in API 34 is safe: it
+     * is simply never invoked on older OS versions.
+     */
+    override fun onTimeout(startId: Int) {
+        Log.w(TAG, "FGS onTimeout — stopping cleanly")
+        releaseWakeLock()
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -76,6 +104,7 @@ class ForegroundService : Service() {
     }
 
     companion object {
+        const val TAG = "LibreForegroundService"
         const val CHANNEL_ID = "libre_node_keepalive"
         const val NOTIFICATION_ID = 4242
 

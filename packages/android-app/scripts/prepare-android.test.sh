@@ -148,6 +148,31 @@ if ( merge_manifest "$d/snippet.xml" "$bad/AndroidManifest.xml" ) >/dev/null 2>&
   echo "FAIL: merge_manifest should die when </application> is missing"; fail=1
 fi
 
+# --- merge_manifest against the REAL native snippet (guards comment tokens poisoning extraction) ---
+# merge_manifest extracts elements by scanning line-by-line, so any live markup inside a comment
+# (an opening service tag, a self-closing terminator, a uses-permission element) would be picked up
+# as if it were the real element. The synthetic fixture above can't catch that — only the actual
+# snippet can. This asserts the real file merges to exactly the intended elements.
+real="$TMP/man-real"; mkdir -p "$real"
+cp "$HERE/../native/AndroidManifest.snippet.xml" "$real/snippet.xml"
+cat > "$real/AndroidManifest.xml" <<'EOF'
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="Libre">
+        <activity android:name=".MainActivity" />
+    </application>
+</manifest>
+EOF
+merge_manifest "$real/snippet.xml" "$real/AndroidManifest.xml"
+rm="$real/AndroidManifest.xml"
+assert_count   "$rm" ".ForegroundService" 1 "real snippet: exactly one ForegroundService merged"
+assert_contains "$rm" 'android:foregroundServiceType="specialUse"' "real snippet: specialUse type (not dataSync)"
+assert_count   "$rm" "dataSync" 0 "real snippet: no dataSync leaked in"
+assert_contains "$rm" "android.permission.FOREGROUND_SERVICE_SPECIAL_USE" "real snippet: SPECIAL_USE permission merged"
+assert_contains "$rm" "android.permission.SYSTEM_ALERT_WINDOW" "real snippet: overlay permission merged"
+# poison canary: prose from the file's comments must NEVER appear in the merged manifest
+assert_count   "$rm" "IMPORTANT for editors" 0 "real snippet: comment prose did not leak as an element"
+assert_count   "$rm" "honest fit" 0 "real snippet: comment prose did not leak as an element"
+
 # --- register_plugins ---
 rp_check() { # <file> <label>
   local j="$1" label="$2"

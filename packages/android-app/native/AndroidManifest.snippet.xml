@@ -5,7 +5,10 @@
 
 <!-- 1) Permissions: place inside <manifest>, above <application>. -->
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+<!-- specialUse (NOT dataSync): on Android 14+ each FGS type needs its matching permission, and the
+     type is specialUse because it is the only honest, NON-time-limited fit for an always-on wallet
+     node — see the service note below. -->
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 <uses-permission android:name="android.permission.WAKE_LOCK" />
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -16,12 +19,24 @@
 
 <!--
   2) Service: place inside <application>.
-  foregroundServiceType="dataSync" fits "staying synced with the Lightning network."
-  NOTE (validate on-device): Android 15 caps cumulative dataSync foreground-service runtime at ~6h/day.
-  If that bites an always-on wallet, evaluate a "mediaPlayback" type driven by a real MediaSession
-  (the wallet already generates a sub-audible keep-alive tone) or "connectedDevice". Decide in Phase 3/4.
+  foregroundServiceType="specialUse" — NOT "dataSync". On Android 14+ the "dataSync" (and
+  "mediaProcessing") types are capped at ~6h CUMULATIVE runtime per day; once exhausted the OS stops
+  the FGS and refuses to let it restart, and startForeground() throws
+  ForegroundServiceStartNotAllowedException. VALIDATED ON-DEVICE (Pixel 6, Android 16/API 36,
+  2026-07-14): an overnight screen-locked run crash-looped from ~03:43 onward — exactly this cap.
+  "specialUse" has NO daily time limit, needs no audio session, and is the honest fit for a
+  sideloaded always-on wallet node. (A future Google-Play build would additionally need an
+  android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE property child element; that is not required at
+  runtime for sideloaded/GitHub-Release distribution, and adding a child would break the self-closed
+  service element that scripts/prepare-android.sh merge_manifest expects. Alternative if ever needed:
+  "mediaPlayback" driven by a real MediaSession over the existing sub-audible keep-alive tone.)
+
+  IMPORTANT for editors: keep every comment in this file free of live manifest markup. merge_manifest
+  scans line-by-line, so a comment line containing an opening service tag, a self-closing tag
+  terminator, or a permission element gets scooped up as if it were the real element and poisons the
+  merge. Describe elements in prose only (as done here), never as copyable markup.
 -->
 <service
     android:name=".ForegroundService"
     android:exported="false"
-    android:foregroundServiceType="dataSync" />
+    android:foregroundServiceType="specialUse" />

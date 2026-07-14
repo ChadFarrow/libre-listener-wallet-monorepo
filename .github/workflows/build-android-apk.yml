@@ -1,0 +1,91 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "packages/wallet-pwa/**"
+      - "packages/shared/**"
+      - "packages/libre-listener-wallet/**"
+      - "packages/android-app/**"
+      - ".github/workflows/build-android-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-android-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit-test the prepare script
+        run: bash packages/android-app/scripts/prepare-android.test.sh
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install workspace (frozen)
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare android/ tree
+        env:
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+          ANDROID_VERSION_NAME: 0.0.${{ github.run_number }}
+        run: bash packages/android-app/scripts/prepare-android.sh
+
+      - name: Write keystore + properties from secrets
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PW: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::error::ANDROID_KEYSTORE_* secrets are not set — add them (see packages/android-app/README.md). Refusing to publish an unsigned APK."
+            exit 1
+          fi
+          KS="$RUNNER_TEMP/release.keystore"
+          echo "$KS_B64" | base64 -d > "$KS"
+          cat > packages/android-app/android/keystore.properties <<EOF
+          storeFile=$KS
+          storePassword=$KS_PW
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PW
+          EOF
+
+      - name: Assemble release APK
+        run: |
+          cd packages/android-app/android
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Verify signer
+        run: |
+          APK=packages/android-app/android/app/build/outputs/apk/release/app-release.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/apksigner" verify --print-certs "$APK"
+          cp "$APK" libre-listener-wallet.apk
+
+      - name: Publish rolling android-latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: Android APK (latest)
+          body: |
+            Rolling signed APK from the newest master build.
+            Version 0.0.${{ github.run_number }} — commit ${{ github.sha }}.
+            Install over an existing app with `adb install -r` (same signing key preserves the wallet).
+          files: libre-listener-wallet.apk
+          fail_on_unmatched_files: true

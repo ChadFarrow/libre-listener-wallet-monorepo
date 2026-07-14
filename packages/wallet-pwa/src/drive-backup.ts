@@ -14,6 +14,10 @@ const GIS_SRC = "https://accounts.google.com/gsi/client";
 // sessionStorage nonce for the redirect flow's CSRF `state` — survives the round-trip to Google in
 // the same tab. A soft check: if it's lost, the token (bound to our client + redirect_uri) still works.
 const OAUTH_STATE_KEY = "libre_drive_oauth_state";
+// Persisted account email — the durable "cloud backup is set up" signal the onboarding gate reads
+// (via drive-integration's rememberedEmail/driveConfigured). Owned here so EVERY connect path
+// persists it; drive-integration imports this constant rather than re-declaring the string.
+export const DRIVE_HINT_KEY = "libre_drive_hint";
 
 let connectedEmail: string | null = null;
 
@@ -21,6 +25,20 @@ let connectedEmail: string | null = null;
  *  feed it back as `hint` on silent reconnect. Null until a connect succeeds. */
 export function getConnectedEmail(): string | null {
   return connectedEmail;
+}
+
+// Remember the learned account both in memory (this session) AND on disk. The on-disk copy is what
+// keeps driveConfigured() true across a full app close — the in-memory `connectedEmail` is wiped
+// when iOS reaps the installed PWA. Both connect paths (GIS popup + iOS full-page redirect) call
+// this; before, only the popup path persisted, so an installed iOS PWA forgot Drive every launch
+// and the onboarding gate re-prompted "Connect Google Drive" every morning.
+function rememberEmail(email: string): void {
+  connectedEmail = email;
+  try {
+    localStorage.setItem(DRIVE_HINT_KEY, email);
+  } catch {
+    /* storage disabled (private mode) — the in-memory email still serves this session */
+  }
 }
 
 /**
@@ -131,7 +149,7 @@ export async function connect(clientId: string, opts: { silent?: boolean; hint?:
         // Never blocks connect success — a failed lookup just means no hint.
         fetchAccountEmail(token)
           .then((email) => {
-            if (email) connectedEmail = email;
+            if (email) rememberEmail(email);
           })
           .catch(() => {
             /* best-effort email hint; a failed lookup just means no login_hint */
@@ -201,7 +219,7 @@ export function completeDriveRedirect(hash: string): { ok: boolean; error?: stri
   accessToken = parsed.accessToken;
   fetchAccountEmail(parsed.accessToken)
     .then((email) => {
-      if (email) connectedEmail = email;
+      if (email) rememberEmail(email);
     })
     .catch(() => {
       /* best-effort email hint */

@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { buildTokenClientConfig, networkFromBackupFilename, pickRestoreNetwork } from "./drive-backup";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  buildTokenClientConfig,
+  networkFromBackupFilename,
+  pickRestoreNetwork,
+  completeDriveRedirect,
+  getConnectedEmail,
+  DRIVE_HINT_KEY,
+} from "./drive-backup";
 
 describe("networkFromBackupFilename", () => {
   it("extracts the network from a backup filename", () => {
@@ -52,5 +59,34 @@ describe("buildTokenClientConfig", () => {
     const cfg = buildTokenClientConfig(CLIENT_ID, { silent: true });
     expect(cfg.prompt).toBe("none");
     expect(cfg.hint).toBeUndefined();
+  });
+});
+
+// The installed iOS PWA can't use the GIS popup, so it connects Drive via a full-page OAuth redirect
+// that returns through completeDriveRedirect. Previously that path learned the account email only in
+// memory, so a full app close (iOS reaping the PWA overnight) wiped it and the onboarding gate
+// re-prompted "Connect Google Drive" on the next launch. The account must survive to localStorage.
+describe("completeDriveRedirect — remembers the Drive account across an app close", () => {
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("persists the learned account email to the onboarding-gate key", async () => {
+    globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ email: "chad@example.com" }) })) as any;
+
+    const r = completeDriveRedirect("#access_token=ya29.tok&token_type=Bearer&expires_in=3599");
+    expect(r.ok).toBe(true);
+
+    // The email is fetched fire-and-forget; once it lands it must be on disk (survives a reload)
+    // AND in memory (serves this session) — driveConfigured() reads either.
+    await vi.waitFor(() => {
+      expect(localStorage.getItem(DRIVE_HINT_KEY)).toBe("chad@example.com");
+    });
+    expect(getConnectedEmail()).toBe("chad@example.com");
   });
 });

@@ -29,9 +29,17 @@ const PILL_SCREEN: Record<StatusPillTarget, string | "drawer"> = {
   sweep: "screen-sweep",
 };
 
+// How long after launch to treat the status pill as "settling": long enough to cover the node coming
+// up AND the Drive token silently reconnecting, so the pill doesn't flicker stopped → running →
+// cloud-backup-disconnected during boot. After this, whatever's still wrong shows (calmly, once).
+export const PILL_SETTLE_MS = 12_000;
+
 export function initHomeScreen(ctx: AppContext): void {
   const controller = ctx.controller;
   let pillTarget: StatusPillTarget | null = null;
+  // App-launch timestamp for the pill settle window (see PILL_SETTLE_MS). Captured once at init so it
+  // tracks the page load; an OAuth-redirect reload restarts the app and re-arms the grace naturally.
+  const bootAt = Date.now();
   // Last confirmed spendable, held across a background→resume so the balance doesn't flash 0 while
   // the peer reconnects (see core/balance-display.ts). Seeded from the persisted cache so even a cold
   // boot shows the real balance during the peer-connect window instead of the 0-flash.
@@ -86,6 +94,10 @@ export function initHomeScreen(ctx: AppContext): void {
       const pill = statusPill({
         hasWallet: s.hasSeed || s.createdNew || s.hasChannelState,
         running: s.running,
+        starting: s.starting ?? false,
+        // Suppress the transient boot pills for the first few seconds after launch (see PILL_SETTLE_MS)
+        // so the pill doesn't flash stopped → running → cloud-backup while the node + Drive settle.
+        settling: Date.now() - bootAt < PILL_SETTLE_MS,
         startError: s.startError,
         lifecycle,
         // In the native APK, "cloud backup" is a chosen SAF folder (core/native-backup), not a Drive
@@ -215,5 +227,10 @@ export function initHomeScreen(ctx: AppContext): void {
   setInterval(() => {
     if (currentScreen() === "screen-home" && !document.hidden) void refresh();
   }, 5000);
+  // When the settle window ends, refresh once so any still-unresolved state (genuinely stopped, Drive
+  // truly disconnected) surfaces promptly instead of waiting up to 5s for the next poll.
+  setTimeout(() => {
+    if (currentScreen() === "screen-home") void refresh();
+  }, PILL_SETTLE_MS + 100);
   void refresh();
 }

@@ -330,6 +330,7 @@ export class WalletController {
   async getState(): Promise<{
     network: string;
     running: boolean;
+    starting: boolean;
     hasSeed: boolean;
     hasChannelState: boolean;
     createdNew: boolean;
@@ -396,6 +397,9 @@ export class WalletController {
     return {
       network,
       running,
+      // A start is in flight (auto-start or a manual start) — lets the UI stay quiet instead of
+      // flashing "Node stopped" during the boot window.
+      starting: !!this.startingPromise,
       hasSeed,
       hasChannelState,
       createdNew,

@@ -21,7 +21,8 @@ declare const self: any;
 // v7: the auto-start (trust-offline-mirror) + status-pill boot-flicker fixes were also app-JS-only,
 // so installed iOS PWAs kept serving the older cached bundle and still showed the "Node stopped"
 // flash on every launch. Bump to purge the stale bundle and deliver those fixes.
-const SHELL_CACHE = "libre-shell-v7";
+// v8: the home "Starting your node…" boot loader (app JS/CSS/HTML only) — bump to deliver it to iOS.
+const SHELL_CACHE = "libre-shell-v8";
 // Stable-named shell entries (relative to the SW scope, matching Vite's base:"./"). Hashed
 // main.js/style.css and the large WASM are cached lazily on first fetch instead of precached.
 const SHELL_PRECACHE = ["./", "./index.html", "./manifest.webmanifest"];

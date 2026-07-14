@@ -97,6 +97,25 @@ body {
 .balance .unit { font-size: 0.55em; font-weight: 600; color: var(--text-dim); letter-spacing: -0.01em; }
 .fiat { font-size: 20px; color: var(--text-dim); font-weight: 500; font-variant-numeric: tabular-nums; }
 
+/* Boot loading chip: shown while the node is coming up on launch, in place of the bare "— sats"
+   placeholder, so startup reads as "loading" rather than "empty/stopped". Same shape as the pill. */
+.boot-loading {
+  margin-top: 18px;
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 8px 14px; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--line);
+  font-size: 13px; font-weight: 600; color: var(--text-dim);
+  max-width: 100%;
+}
+.spinner {
+  width: 13px; height: 13px; flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .status-pill {
   margin-top: 18px;
   display: flex; align-items: center; gap: 8px;

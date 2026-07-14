@@ -1,6 +1,8 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent, emitControllerEvent } from "../core/events";
 import { statusPill, type StatusPillTarget } from "../core/status-pill";
+import { bootLoadingVisible } from "../core/boot-loading";
+import { AUTO_START_KEY, isAutoStartEnabled } from "@libre/shared";
 import { channelLifecycle } from "../core/channel-lifecycle";
 import { balanceDisplay } from "../core/balance-display";
 import { loadLastBalanceSats, saveLastBalanceSats } from "../core/balance-cache";
@@ -91,13 +93,29 @@ export function initHomeScreen(ctx: AppContext): void {
         show(recEl, false);
       }
 
+      // Within the post-launch settle window? Used both to suppress the transient boot pills and to
+      // show the "Starting your node…" loader in their place (see PILL_SETTLE_MS / boot-loading).
+      const settling = Date.now() - bootAt < PILL_SETTLE_MS;
+
+      // Boot loader: a clear "starting" state instead of a bare "— sats" placeholder while the node
+      // comes up on launch. Mutually exclusive with the pill (both are suppressed while booting).
+      show(
+        $("boot-loading"),
+        bootLoadingVisible({
+          running: s.running,
+          starting: s.starting ?? false,
+          settling,
+          autoStartOn: isAutoStartEnabled(localStorage.getItem(AUTO_START_KEY)),
+        }),
+      );
+
       const pill = statusPill({
         hasWallet: s.hasSeed || s.createdNew || s.hasChannelState,
         running: s.running,
         starting: s.starting ?? false,
         // Suppress the transient boot pills for the first few seconds after launch (see PILL_SETTLE_MS)
         // so the pill doesn't flash stopped → running → cloud-backup while the node + Drive settle.
-        settling: Date.now() - bootAt < PILL_SETTLE_MS,
+        settling,
         startError: s.startError,
         lifecycle,
         // In the native APK, "cloud backup" is a chosen SAF folder (core/native-backup), not a Drive

@@ -36,7 +36,13 @@ pnpm install
 # add Capacitor to THIS package (kept out of the committed lockfile on purpose — added on the Mac).
 # NOTE: this rewrites package.json + pnpm-lock.yaml locally — do NOT commit those changes (CI's
 # frozen-lockfile install and the no-committed-deps design depend on them staying out).
-pnpm --filter @libre/android-app add @capacitor/core @capacitor/cli @capacitor/android
+pnpm --filter @libre/android-app add @capacitor/core @capacitor/cli @capacitor/android \
+  @capacitor/share @capacitor/filesystem
+# @capacitor/share + @capacitor/filesystem power the Developer → Diagnostics "Share" button
+# (the OS share sheet → Telegram/Drive/Gmail). The Android System WebView implements neither
+# navigator.share nor blob downloads, so without these the diag export writes NO file on-device.
+# The web seam (wallet-pwa/src/core/native-share.ts) probes them at runtime — a build missing these
+# plugins just hides the share path; "Copy diagnostics" still works everywhere.
 
 # build the PWA the wrapper will host (produces packages/wallet-pwa/dist).
 # The VITE_LSPS1_MOCK_URL= override is MANDATORY (same rule as the Cloudflare deploy): a gitignored

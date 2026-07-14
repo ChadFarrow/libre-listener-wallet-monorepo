@@ -4,8 +4,9 @@ import { googleClientId, setGoogleClientId } from "../drive-integration";
 import { enablePush, disablePush, isPushEnabled, pushSupported } from "../web-push";
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";
 import { diagExportText, diagStats, diagClear } from "../core/diag-tap";
+import { nativeShareAvailable, nativeShareText } from "../core/native-share";
 import { registerScreen } from "../ui/nav";
-import { $, setMsg } from "./util";
+import { $, setMsg, copyText } from "./util";
 
 export function initDeveloperScreen(ctx: AppContext): void {
   const controller = ctx.controller;
@@ -109,6 +110,29 @@ export function initDeveloperScreen(ctx: AppContext): void {
     }
   }
 
+  async function diagName(): Promise<string> {
+    const { network } = await controller.getState();
+    const iso = new Date().toISOString();
+    const stamp = `${iso.slice(0, 10)}-${iso.slice(11, 13)}${iso.slice(14, 16)}`;
+    return `libre-diag-${network || "mainnet"}-${stamp}.txt`;
+  }
+
+  $("diag-copy").addEventListener("click", () => {
+    void (async () => {
+      const text = await diagExportText();
+      if (!text) {
+        setMsg("diag-msg", "Nothing recorded yet.");
+        return;
+      }
+      const ok = await copyText(text);
+      setMsg(
+        "diag-msg",
+        ok ? "Copied to clipboard." : "Copy failed — try Share instead.",
+        ok ? "ok" : "err",
+      );
+    })();
+  });
+
   $("diag-export").addEventListener("click", () => {
     void (async () => {
       try {
@@ -117,10 +141,14 @@ export function initDeveloperScreen(ctx: AppContext): void {
           setMsg("diag-msg", "Nothing recorded yet.");
           return;
         }
-        const { network } = await controller.getState();
-        const iso = new Date().toISOString();
-        const stamp = `${iso.slice(0, 10)}-${iso.slice(11, 13)}${iso.slice(14, 16)}`;
-        const name = `libre-diag-${network || "mainnet"}-${stamp}.txt`;
+        const name = await diagName();
+        // Native (Android/iOS APK): the OS share sheet. The Android System WebView implements
+        // neither navigator.share nor blob downloads, so the web branch below produces NO file there.
+        if (nativeShareAvailable()) {
+          await nativeShareText(name, text);
+          setMsg("diag-msg", "Shared.", "ok");
+          return;
+        }
         const file = new File([text], name, { type: "text/plain" });
         const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean };
         if (nav.share && nav.canShare?.({ files: [file] })) {
@@ -138,9 +166,11 @@ export function initDeveloperScreen(ctx: AppContext): void {
           setMsg("diag-msg", `Downloaded ${name}.`, "ok");
         }
       } catch (e) {
-        // iOS share sheet cancel throws AbortError — that's the user changing their mind, not an error.
-        if ((e as Error)?.name === "AbortError") return;
-        setMsg("diag-msg", (e as Error).message, "err");
+        // A cancelled share is the user changing their mind, not an error: the web share sheet throws
+        // a DOM AbortError; Capacitor's Share throws an Error whose message contains "cancel".
+        const err = e as Error;
+        if (err?.name === "AbortError" || /cancel/i.test(err?.message || "")) return;
+        setMsg("diag-msg", err.message, "err");
       }
     })();
   });

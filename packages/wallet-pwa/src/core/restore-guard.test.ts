@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   restoreBlockReason,
+  mayOverwriteStaleLocal,
   RESTORE_RUNNING_MSG,
   RESTORE_IN_PROGRESS_MSG,
   RESTORE_FUNDED_MSG,
@@ -33,5 +34,39 @@ describe("restoreBlockReason", () => {
     expect(restoreBlockReason({ running: true, restoring: false, targetHasChannelState: true })).toBe(
       RESTORE_RUNNING_MSG
     );
+  });
+});
+
+describe("mayOverwriteStaleLocal", () => {
+  const base = {
+    hasLocalChannelState: true,
+    backupDecryptsWithLocalSeed: true,
+    localStateVersion: 90,
+    backupStateVersion: 113,
+  };
+
+  it("permits the overwrite when the backup supersedes stale local state (BACKUP_AHEAD recovery)", () => {
+    expect(mayOverwriteStaleLocal(base)).toBe(true);
+  });
+
+  it("refuses when there is no local channel state (nothing to protect — ordinary path handles it)", () => {
+    expect(mayOverwriteStaleLocal({ ...base, hasLocalChannelState: false })).toBe(false);
+  });
+
+  it("refuses when the backup is NOT the same wallet (does not decrypt with the local seed)", () => {
+    expect(mayOverwriteStaleLocal({ ...base, backupDecryptsWithLocalSeed: false })).toBe(false);
+  });
+
+  it("refuses when the backup version is unknown", () => {
+    expect(mayOverwriteStaleLocal({ ...base, backupStateVersion: null })).toBe(false);
+  });
+
+  it("refuses when the backup is equal to or behind local (a stale backup must never clobber)", () => {
+    expect(mayOverwriteStaleLocal({ ...base, backupStateVersion: 90 })).toBe(false);
+    expect(mayOverwriteStaleLocal({ ...base, backupStateVersion: 42 })).toBe(false);
+  });
+
+  it("treats a missing/zero local version with an ahead backup as overwritable", () => {
+    expect(mayOverwriteStaleLocal({ ...base, localStateVersion: 0, backupStateVersion: 1 })).toBe(true);
   });
 });

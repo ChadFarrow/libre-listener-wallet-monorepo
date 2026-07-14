@@ -5,6 +5,7 @@ import {
   pickRestoreNetwork,
   completeDriveRedirect,
   getConnectedEmail,
+  isDriveConfiguredPersisted,
   DRIVE_HINT_KEY,
 } from "./drive-backup";
 
@@ -88,5 +89,24 @@ describe("completeDriveRedirect — remembers the Drive account across an app cl
       expect(localStorage.getItem(DRIVE_HINT_KEY)).toBe("chad@example.com");
     });
     expect(getConnectedEmail()).toBe("chad@example.com");
+  });
+
+  it("marks Drive configured synchronously — before, and independent of, the email lookup", () => {
+    // The email lookup fails outright; the durable configured flag must not depend on it.
+    globalThis.fetch = vi.fn(async () => ({ ok: false, json: async () => ({}) })) as any;
+
+    expect(isDriveConfiguredPersisted()).toBe(false);
+    const r = completeDriveRedirect("#access_token=ya29.tok2&token_type=Bearer&expires_in=3599");
+    expect(r.ok).toBe(true);
+    // Set the instant the token lands (synchronous), not awaiting the fetch.
+    expect(isDriveConfiguredPersisted()).toBe(true);
+  });
+
+  it("keeps the gate satisfied even when the email lookup never yields a hint", async () => {
+    globalThis.fetch = vi.fn(async () => ({ ok: false, json: async () => ({}) })) as any;
+    completeDriveRedirect("#access_token=ya29.tok3&token_type=Bearer");
+    await new Promise((res) => setTimeout(res, 0)); // let the fire-and-forget email lookup settle
+    expect(localStorage.getItem(DRIVE_HINT_KEY)).toBeNull(); // no hint learned…
+    expect(isDriveConfiguredPersisted()).toBe(true); // …but Drive is still remembered as configured
   });
 });

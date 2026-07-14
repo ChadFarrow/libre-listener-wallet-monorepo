@@ -13,6 +13,7 @@ import {
   deleteAllBackups,
   DriveForeignBackupError,
   DRIVE_HINT_KEY as HINT_KEY,
+  isDriveConfiguredPersisted,
 } from "./drive-backup";
 import type { WalletController } from "./wallet-controller";
 import { isDemoMode } from "./core/demo-mode";
@@ -35,11 +36,12 @@ export function driveConnected(): boolean {
 export function rememberedEmail(): string | null {
   return getConnectedEmail() || localStorage.getItem(HINT_KEY);
 }
-// Persistent "cloud backup has been set up" signal for the onboarding gate. Uses the remembered
-// account (set the first time Drive connects) rather than the in-memory token, so the mandatory
-// backup step stays satisfied across reloads — the token silently reconnects on first interaction.
+// Persistent "cloud backup has been set up" signal for the onboarding gate. Satisfied by EITHER the
+// remembered account email (also the login_hint) OR the durable configured flag — the flag is set
+// synchronously on connect, so a failed email lookup can't leave the gate re-prompting. Both survive
+// reloads / token expiry; the token silently reconnects on first interaction.
 export function driveConfigured(): boolean {
-  return !!rememberedEmail();
+  return !!rememberedEmail() || isDriveConfiguredPersisted();
 }
 
 // Coalesce concurrent connect attempts (e.g. the home pill's one-tap reconnect firing on the same

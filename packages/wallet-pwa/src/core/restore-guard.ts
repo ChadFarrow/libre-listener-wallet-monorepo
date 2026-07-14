@@ -9,6 +9,17 @@
 //      wallet would overwrite live channel state.
 // Also serialized against itself (a double-click firing two concurrent restores races the same DB).
 // Pure and dependency-free so it is unit-testable without LDK/WASM.
+//
+// EXCEPTION to hazard #2 — the backup-ahead recovery: when this device's storage was rolled back
+// (iOS eviction) the local channel state is the STALE copy and the off-device backup is NEWER. In
+// that case the `channel_manager` on disk is exactly what must be overwritten — blocking the restore
+// leaves the user stuck (start() refuses with BACKUP_AHEAD, restore refuses with "funded wallet
+// exists"). `mayOverwriteStaleLocal` narrowly re-permits the overwrite ONLY when the backup is
+// provably the same wallet (decrypts with the LOCAL seed) AND its state_version is strictly ahead of
+// local — the exact mirror of the start-path BACKUP_AHEAD guard. A stale/foreign backup can never
+// clobber a funded wallet.
+
+import { backupAheadOfLocal } from "./backup-ahead";
 
 export const RESTORE_RUNNING_MSG = "Stop the node before restoring from a backup.";
 export const RESTORE_IN_PROGRESS_MSG = "A restore is already in progress.";
@@ -26,4 +37,25 @@ export function restoreBlockReason(state: RestoreState): string | null {
   if (state.restoring) return RESTORE_IN_PROGRESS_MSG;
   if (state.targetHasChannelState) return RESTORE_FUNDED_MSG;
   return null;
+}
+
+export interface StaleOverwriteInput {
+  // Does the target network DB already hold channel state? (Only then is an overwrite in question.)
+  hasLocalChannelState: boolean;
+  // Did the backup decrypt with the LOCAL seed — i.e. is it the SAME wallet as the stale local state?
+  backupDecryptsWithLocalSeed: boolean;
+  // Local `state_version` (0 when absent/unparseable) and the backup's (null when unknown).
+  localStateVersion: number;
+  backupStateVersion: number | null;
+}
+
+// True when existing local channel state may be safely OVERWRITTEN by the restore because the backup
+// demonstrably supersedes it (same wallet + strictly-newer state_version = the rolled-back-device
+// BACKUP_AHEAD case). Any doubt — different wallet, unknown/equal/older version — returns false so
+// the funded-wallet guard stays fully protective.
+export function mayOverwriteStaleLocal(i: StaleOverwriteInput): boolean {
+  if (!i.hasLocalChannelState) return false;
+  if (!i.backupDecryptsWithLocalSeed) return false;
+  if (i.backupStateVersion == null) return false;
+  return backupAheadOfLocal(i.localStateVersion, i.backupStateVersion);
 }

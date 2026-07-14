@@ -48,7 +48,7 @@ import {
 } from "./core/wallet-config";
 import { resolveActiveNetwork } from "./core/sw-config";
 import { createWebSocketStreamProvider } from "./core/ws-provider";
-import { restoreBlockReason } from "./core/restore-guard";
+import { restoreBlockReason, mayOverwriteStaleLocal } from "./core/restore-guard";
 import { addressToScriptPubKey } from "./core/address-script";
 import { smoothUsable, type UsableSmootherState } from "./core/usable-smoothing";
 import { backupAheadOfLocal, BackupAheadError } from "./core/backup-ahead";
@@ -627,12 +627,56 @@ export class WalletController {
       if (!verified.ok) throw new Error("Backup could not be decrypted with that secret.");
       const targetNetwork = verified.network || (await this.activeNetwork());
       const targetStorage = this.storageForNetwork(targetNetwork);
+      const targetHasChannelState = !!(await targetStorage.getItem(CHANNEL_MANAGER_KEY));
+      // Normally the funded-wallet guard refuses to overwrite existing channel state. The ONE
+      // exception is the rolled-back-device BACKUP_AHEAD case: if this backup is the SAME wallet
+      // (decrypts with the local seed) and its state_version is strictly ahead of local, the local
+      // channel state is the stale copy and must be replaced — otherwise the user is deadlocked
+      // (start() throws BACKUP_AHEAD, restore throws "funded wallet exists"). Verified with the LOCAL
+      // seed (not the user's typed secret) so a newer counter from a DIFFERENT wallet can't clobber.
+      let canOverwriteStale = false;
+      if (targetHasChannelState) {
+        const localSeed = await targetStorage.getItem(SEED_KEY);
+        let backupDecryptsWithLocalSeed = false;
+        let backupStateVersion: number | null = null;
+        if (localSeed) {
+          try {
+            const ours = await probe.verifyBackup(envelope, localSeed);
+            if (ours.ok) {
+              backupDecryptsWithLocalSeed = true;
+              backupStateVersion = typeof ours.stateVersion === "number" ? ours.stateVersion : null;
+            }
+          } catch {
+            // not ours / unreadable — leave the guard fully protective
+          }
+        }
+        const localRaw = await targetStorage.getItem(STATE_VERSION_KEY);
+        const localStateVersion = localRaw ? parseInt(localRaw, 10) || 0 : 0;
+        canOverwriteStale = mayOverwriteStaleLocal({
+          hasLocalChannelState: targetHasChannelState,
+          backupDecryptsWithLocalSeed,
+          localStateVersion,
+          backupStateVersion,
+        });
+      }
       const funded = restoreBlockReason({
         running: false,
         restoring: false,
-        targetHasChannelState: !!(await targetStorage.getItem(CHANNEL_MANAGER_KEY)),
+        targetHasChannelState: targetHasChannelState && !canOverwriteStale,
       });
       if (funded) throw new Error(funded);
+      if (canOverwriteStale) {
+        // Rolled-back-device recovery: the stale local channel state must be REMOVED, not written
+        // over. LDK does not cleanly replace monitors on top of existing ones (→ bogus
+        // ChannelReestablish → force-close; the cross-device-handoff limitation). So reproduce the
+        // proven wipe-then-restore-into-empty path, preserving only the device-local app config
+        // (endpoints + on-chain sweep recovery address) that importState never carries.
+        const preservedConfig = await targetStorage.getItem(CONFIG_KEY);
+        const preservedSweep = await targetStorage.getItem(SWEEP_ADDRESS_KEY);
+        await new IndexedDBStorageProvider(dbNameForNetwork(targetNetwork)).clear();
+        if (preservedConfig != null) await targetStorage.setItem(CONFIG_KEY, preservedConfig);
+        if (preservedSweep != null) await targetStorage.setItem(SWEEP_ADDRESS_KEY, preservedSweep);
+      }
       if (verified.network) {
         await this.meta.setItem(ACTIVE_NETWORK_KEY, verified.network);
       }

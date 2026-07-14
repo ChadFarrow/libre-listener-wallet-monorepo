@@ -366,20 +366,25 @@ Claude-Session: https://claude.ai/code/session_0181hjeMiV5pC68XAuXTxDTW"
 - Modify: `packages/android-app/scripts/prepare-android.test.sh`
 
 **Interfaces:**
-- Produces: `merge_manifest <snippet_file> <manifest_file>` — inserts the snippet's `<uses-permission>`/`<uses-feature>` lines just before `</manifest>` closing, and its `<service>` element just before `</application>`. Idempotent (skips lines already present by a stable marker). Exits 1 if `</application>` or `</manifest>` missing.
+- Produces: `merge_manifest <snippet_file> <manifest_file>` — inserts the snippet's `<uses-permission>`/`<uses-feature>` elements just before `</manifest>`, and its `<service>` element just before `</application>`. Idempotent (keyed on each element's `android:name`). Exits 1 if `</application>` or `</manifest>` missing.
 
-**Implementation note:** read the real `native/AndroidManifest.snippet.xml` first to confirm its structure (permissions block + a `<service …>` block). The function must handle its exact contents. The test uses a representative snippet; during execution, verify the real snippet's permission/service split matches the two-bucket assumption (permissions → before `</manifest>`, service → before `</application>`). If the snippet interleaves differently, adjust the bucketing and the test together.
+**Implementation note (validated against the real snippet):** the real `native/AndroidManifest.snippet.xml` contains **XML comments** AND a **multi-line `<service …/>`** element. A naive line-by-line merge scatters comment lines into the manifest and splits the multi-line service across insertion points. So the function extracts elements **structurally**, not line-by-line: `grep -oE` pulls the single-line `<uses-*/>` elements (ignoring comment text automatically), and an `awk` flattens the `<service … />` block (from `<service` to the first `/>`) into one line. This exact approach was run against the real snippet and produces 6 permissions + one flattened service inside `<application>`, idempotent, with zero comment leakage.
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `prepare-android.test.sh`:
+Append to `prepare-android.test.sh`. The fixture mirrors the REAL snippet's shape — comments + a multi-line `<service>` — with a `LEAK-CANARY` comment that must not appear in the output:
 ```bash
 # --- merge_manifest ---
 d="$TMP/man"; mkdir -p "$d"
 cat > "$d/snippet.xml" <<'EOF'
+<!-- LEAK-CANARY: this comment must NOT end up in the manifest -->
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-<service android:name=".ForegroundService" android:foregroundServiceType="dataSync" />
+<!-- 2) Service: place inside <application>. -->
+<service
+    android:name=".ForegroundService"
+    android:exported="false"
+    android:foregroundServiceType="dataSync" />
 EOF
 cat > "$d/AndroidManifest.xml" <<'EOF'
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -392,15 +397,23 @@ merge_manifest "$d/snippet.xml" "$d/AndroidManifest.xml"
 m="$d/AndroidManifest.xml"
 assert_contains "$m" "android.permission.FOREGROUND_SERVICE" "permission merged"
 assert_contains "$m" ".ForegroundService" "service merged"
-# service must be inside application (appears before </application>)
-python3 - "$m" <<'PY' || { echo "FAIL: service inside application"; fail=1; }
+assert_contains "$m" "foregroundServiceType=" "service attrs preserved (flattened to one line)"
+assert_count "$m" "LEAK-CANARY" 0 "snippet comment did NOT leak into the manifest"
+# placement: service inside <application>; permission before </manifest>
+python3 - "$m" <<'PY' || { echo "FAIL: element placement"; fail=1; }
 import sys; t=open(sys.argv[1]).read()
 assert t.index(".ForegroundService") < t.index("</application>")
-assert t.index("FOREGROUND_SERVICE") < t.index("</manifest>")
+assert t.index('permission.FOREGROUND_SERVICE"') < t.index("</manifest>")
 PY
 merge_manifest "$d/snippet.xml" "$d/AndroidManifest.xml"
-assert_count "$m" "android.permission.FOREGROUND_SERVICE" 1 "permission not duplicated"
+assert_count "$m" 'permission.FOREGROUND_SERVICE"' 1 "permission not duplicated"
 assert_count "$m" ".ForegroundService" 1 "service not duplicated"
+# fail-loud on missing anchor
+bad="$TMP/man-bad"; mkdir -p "$bad"
+printf '<manifest></manifest>\n' > "$bad/AndroidManifest.xml"   # no </application>
+if ( merge_manifest "$d/snippet.xml" "$bad/AndroidManifest.xml" ) >/dev/null 2>&1; then
+  echo "FAIL: merge_manifest should die when </application> is missing"; fail=1
+fi
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -410,10 +423,13 @@ Expected: FAIL — `merge_manifest: command not found`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `prepare-android.sh`:
+Add to `prepare-android.sh` (this exact code was validated against the real snippet — see the implementation note):
 ```bash
-# Merge native/AndroidManifest.snippet.xml into the generated manifest: <uses-*> before </manifest>,
-# <service …> before </application>. Idempotent by line-content check.
+# Merge native/AndroidManifest.snippet.xml into the generated manifest. The snippet has XML comments
+# and a MULTI-LINE <service> element, so extract elements STRUCTURALLY (not line-by-line): grep -oE
+# the single-line <uses-*/> elements (comment text is ignored automatically), and awk-flatten the
+# <service …/> block. <uses-*> → before </manifest>; <service> → before </application>. Idempotent,
+# keyed on android:name.
 merge_manifest() {
   local snippet="$1" manifest="$2"
   [ -f "$snippet" ]  || die "missing $snippet"
@@ -421,22 +437,27 @@ merge_manifest() {
   grep -qF "</application>" "$manifest" || die "no </application> in $manifest"
   grep -qF "</manifest>"   "$manifest" || die "no </manifest> in $manifest"
 
-  local line trimmed
-  while IFS= read -r line; do
-    trimmed="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-    [ -z "$trimmed" ] && continue
-    # already present? (match on a stable substring: the android:name value)
-    local key; key="$(printf '%s' "$trimmed" | grep -oE 'android:name="[^"]*"' | head -1)"
+  local el key
+  # 1) permissions/features — each is a single self-closed element.
+  while IFS= read -r el; do
+    [ -z "$el" ] && continue
+    key="$(printf '%s' "$el" | grep -oE 'android:name="[^"]*"' | head -1)"
     if [ -n "$key" ] && grep -qF "$key" "$manifest"; then continue; fi
-    if printf '%s' "$trimmed" | grep -qE '^<service'; then
-      # insert before </application>
-      awk -v ins="        $trimmed" '/<\/application>/ && !d {print ins; d=1} {print}' "$manifest" > "$manifest.tmp"
-    else
-      # permission/feature: insert before </manifest>
-      awk -v ins="    $trimmed" '/<\/manifest>/ && !d {print ins; d=1} {print}' "$manifest" > "$manifest.tmp"
+    awk -v ins="    $el" '/<\/manifest>/ && !d {print ins; d=1} {print}' "$manifest" > "$manifest.tmp" \
+      && mv "$manifest.tmp" "$manifest"
+  done < <(grep -oE '<uses-(permission|feature)[^>]*/>' "$snippet")
+
+  # 2) service — flatten the possibly multi-line <service …/> block to one line.
+  local service
+  service="$(awk '/<service/{c=1} c{buf=buf" "$0} c&&/\/>/{print buf; exit}' "$snippet" \
+    | tr -s ' \t' ' ' | sed -E 's/^ //')"
+  if [ -n "$service" ]; then
+    key="$(printf '%s' "$service" | grep -oE 'android:name="[^"]*"' | head -1)"
+    if ! { [ -n "$key" ] && grep -qF "$key" "$manifest"; }; then
+      awk -v ins="        $service" '/<\/application>/ && !d {print ins; d=1} {print}' "$manifest" > "$manifest.tmp" \
+        && mv "$manifest.tmp" "$manifest"
     fi
-    mv "$manifest.tmp" "$manifest"
-  done < "$snippet"
+  fi
   log "manifest merged"
 }
 ```

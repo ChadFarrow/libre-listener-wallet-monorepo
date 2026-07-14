@@ -6,6 +6,7 @@ import {
   isStateRollbackError,
   mirrorKeyForNetwork,
   recoveryDecision,
+  shouldDeferAutoStart,
   STATE_ROLLBACK_CODE,
 } from "./state-version-mirror";
 
@@ -70,6 +71,37 @@ describe("recoveryDecision", () => {
     expect(recoveryDecision({ localVersion: 90, mirrorVersion: 113, backupVersion: null })).toBe("halt"); // unreachable
     expect(recoveryDecision({ localVersion: 90, mirrorVersion: 113, backupVersion: 90 })).toBe("halt"); // backup also stale
     expect(recoveryDecision({ localVersion: 90, mirrorVersion: 113, backupVersion: 88 })).toBe("halt"); // backup older
+  });
+});
+
+describe("shouldDeferAutoStart", () => {
+  const base = {
+    hasChannelState: true,
+    backupConfigured: true,
+    backupConnected: false,
+    localVersion: 5,
+    mirrorVersion: 5,
+  };
+
+  it("does NOT defer when the offline mirror confirms local is fresh (the iOS cold-load fix)", () => {
+    // Drive configured but not connected (installed iOS PWA at launch), yet the local witness shows
+    // no rollback → auto-start proceeds instead of stranding a funded wallet every launch.
+    expect(shouldDeferAutoStart(base)).toBe(false);
+    expect(shouldDeferAutoStart({ ...base, localVersion: 10, mirrorVersion: 5 })).toBe(false); // local ahead
+    expect(shouldDeferAutoStart({ ...base, localVersion: 5, mirrorVersion: null })).toBe(false); // no mirror yet
+  });
+
+  it("DOES defer only when the offline mirror shows a genuine rollback (Drive is the self-heal path)", () => {
+    expect(shouldDeferAutoStart({ ...base, localVersion: 5, mirrorVersion: 9 })).toBe(true);
+  });
+
+  it("never defers a wallet with no channel state, or with no backup configured", () => {
+    expect(shouldDeferAutoStart({ ...base, hasChannelState: false, mirrorVersion: 9 })).toBe(false);
+    expect(shouldDeferAutoStart({ ...base, backupConfigured: false, mirrorVersion: 9 })).toBe(false);
+  });
+
+  it("never defers when the backup is reachable (recoverOrHalt verifies against it directly)", () => {
+    expect(shouldDeferAutoStart({ ...base, backupConnected: true, mirrorVersion: 9 })).toBe(false);
   });
 });
 

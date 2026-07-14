@@ -49,6 +49,27 @@ export function localStateRolledBack(
   return coerce(mirrorVersion) > coerce(localVersion);
 }
 
+// Auto-start deferral decision (pure). Auto-start wants to verify local freshness before booting a
+// funded wallet (starting on rolled-back state can force-close a channel). When the cloud backup is
+// reachable, startNode's recoverOrHalt verifies against it directly — so no deferral is needed. The
+// hard case is an installed iOS PWA at cold-load: Drive can't reconnect silently (the popup is
+// blocked), so an unconditional "defer until Drive connects" meant a funded wallet NEVER auto-started
+// there. Instead we trust the OFFLINE mirror — a network-free local witness — and defer ONLY when it
+// shows a genuine rollback (Drive is then the sole self-heal path, so it's worth waiting for). A fresh
+// mirror lets auto-start proceed; recoverOrHalt re-checks the mirror AND the backup once reachable.
+export function shouldDeferAutoStart(i: {
+  hasChannelState: boolean;
+  backupConfigured: boolean;
+  backupConnected: boolean;
+  localVersion: number | string | null;
+  mirrorVersion: number | string | null;
+}): boolean {
+  if (!i.hasChannelState) return false; // nothing at risk (no channel) — never defer
+  if (!i.backupConfigured) return false; // no backup to verify against; deferring would strand forever
+  if (i.backupConnected) return false; // backup reachable → recoverOrHalt verifies against it
+  return localStateRolledBack(i.localVersion, i.mirrorVersion);
+}
+
 // Thrown from the start path when the offline mirror shows local storage rolled back. Carries a
 // boundary-stable `code` mirrored into `.message` (same convention as BackupAheadError /
 // ChannelStateRegressionError) so it survives error flattening.

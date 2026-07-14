@@ -13,6 +13,7 @@ import { bgChipView } from "../core/bg-mode";
 import { ensureOverlayPermission, isNativeApp } from "../core/native-bridge";
 import { nativeBackupAvailable, backupFolderConfigured } from "../core/native-backup";
 import { registerScreen, showScreen, currentScreen, openDrawer } from "../ui/nav";
+import { startNodeWithGuards } from "./start-node";
 import { $, show, fmtSats } from "./util";
 
 // Where each pill target lives — tapping the pill deep-links to the fixing screen.
@@ -127,10 +128,27 @@ export function initHomeScreen(ctx: AppContext): void {
       void reconnectDrive();
       return;
     }
+    // "Node stopped — tap to start": start the node right here instead of sending the user to the
+    // Node screen to press Start there. Target "node" only appears when the node is stopped, so this
+    // is always a start. Shares the Node screen's fund-safety guards (a channel-state regression /
+    // backup-ahead start still routes to the forced-restore screen, never a raw start on stale state).
+    if (pillTarget === "node") {
+      void startFromPill();
+      return;
+    }
     const dest = PILL_SCREEN[pillTarget];
     if (dest === "drawer") openDrawer();
     else showScreen(dest);
   });
+
+  async function startFromPill(): Promise<void> {
+    await startNodeWithGuards(controller, (msg) => {
+      $("status-pill-text").textContent = msg;
+    });
+    // refresh() reconciles the pill with real state (hides it once running, or reverts to the
+    // stopped pill — showing getState().startError — if the start failed for a non-routed reason).
+    void refresh();
+  }
 
   async function reconnectDrive(): Promise<void> {
     const text = $("status-pill-text");

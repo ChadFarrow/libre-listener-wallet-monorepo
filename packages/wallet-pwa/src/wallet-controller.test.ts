@@ -155,14 +155,19 @@ describe("WalletController auto-start deferral (unverifiable backup)", () => {
     localStorage.clear();
   });
 
-  it("defers a funded wallet when the cloud backup is configured but not connected", async () => {
+  it("defers a funded wallet whose OFFLINE mirror shows a rollback and Drive is offline", async () => {
     const storage = new IndexedDBStorageProvider(DB);
     await storage.setItem("ldk_seed", "22".repeat(32));
     await storage.setItem("channel_manager", "deadbeef"); // funded → at force-close risk from a rollback
+    await storage.setItem("state_version", "1"); // on-disk counter behind the witness below
+    // Offline high-water witness ahead of on-disk → a genuine rollback the mirror can prove locally.
+    localStorage.setItem("libre_state_version_hwm:mainnet", "5");
 
     const controller = new WalletController();
     controller.setBackupStatus(() => ({ configured: true, connected: false }));
     // autoStart never throws; a deferral simply leaves the node stopped (no WASM build attempted).
+    // Drive is the only path that can self-heal a rollback, so we wait for it rather than boot on
+    // stale state.
     await controller.autoStart(null);
     expect(controller.isRunning()).toBe(false);
   });

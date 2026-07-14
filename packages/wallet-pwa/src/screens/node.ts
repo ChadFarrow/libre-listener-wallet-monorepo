@@ -1,15 +1,8 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
-import {
-  isChannelStateRegressionError,
-  isNodeAlreadyRunningError,
-  AUTO_START_KEY,
-  isAutoStartEnabled,
-} from "@libre/shared";
-import { isBackupAheadError, BACKUP_AHEAD_MSG } from "../core/backup-ahead";
-import { isStateRollbackError, STATE_ROLLBACK_MSG } from "../core/state-version-mirror";
+import { AUTO_START_KEY, isAutoStartEnabled } from "@libre/shared";
 import { registerScreen, currentScreen } from "../ui/nav";
-import { forceRestoreScreen, clearRestoreLatch } from "./restore";
+import { startNodeWithGuards } from "./start-node";
 import { $, setMsg, copyText } from "./util";
 
 export function initNodeScreen(ctx: AppContext): void {
@@ -33,37 +26,7 @@ export function initNodeScreen(ctx: AppContext): void {
   }
 
   async function startNode(): Promise<void> {
-    setMsg("node-msg", "Starting node…");
-    try {
-      await controller.startNode();
-      clearRestoreLatch();
-      setMsg("node-msg", "Node started", "ok");
-    } catch (e) {
-      if (isChannelStateRegressionError(e)) {
-        setMsg("node-msg", "");
-        forceRestoreScreen();
-        return;
-      }
-      // The cloud backup is newer than local storage (this device was rolled back / iOS-evicted) —
-      // starting would force-close. Route to the same forced-restore screen with the reason.
-      if (isBackupAheadError(e)) {
-        setMsg("node-msg", "");
-        forceRestoreScreen(BACKUP_AHEAD_MSG);
-        return;
-      }
-      // The offline mirror shows this device's storage was rolled back (iOS partial eviction) — same
-      // remedy: restore from backup rather than start on stale state.
-      if (isStateRollbackError(e)) {
-        setMsg("node-msg", "");
-        forceRestoreScreen(STATE_ROLLBACK_MSG);
-        return;
-      }
-      if (isNodeAlreadyRunningError(e)) {
-        setMsg("node-msg", "This wallet is already running in another tab or window — close it and try again.", "err");
-        return;
-      }
-      setMsg("node-msg", (e as Error).message, "err");
-    }
+    await startNodeWithGuards(controller, (msg, level) => setMsg("node-msg", msg, level));
     void refresh();
   }
 

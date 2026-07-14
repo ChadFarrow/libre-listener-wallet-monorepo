@@ -57,6 +57,7 @@ import {
   StateRollbackError,
   mirrorKeyForNetwork,
   recoveryDecision,
+  shouldDeferAutoStart,
 } from "./core/state-version-mirror";
 
 // Keys the SDK / app persist that this controller reasons about.
@@ -209,14 +210,28 @@ export class WalletController {
     throw new StateRollbackError(localVersion, mirror);
   }
 
-  // True when auto-start should defer: a funded wallet whose cloud backup is configured but offline,
-  // so freshness can't be verified. No backup configured → nothing to verify against (and deferring
-  // would strand the wallet forever) → never defers; the offline mirror still guards partial rollbacks.
-  private shouldDeferForUnverifiableBackup(hasChannelState: boolean): boolean {
-    if (!hasChannelState) return false;
+  // True when auto-start should defer because local freshness genuinely can't be confirmed by ANY
+  // means. A funded, cloud-backup-configured wallet whose Drive is offline (the iOS cold-load window,
+  // where the silent reconnect popup is blocked) would otherwise strand auto-start every launch — so
+  // we TRUST THE OFFLINE MIRROR: the local high-water state_version witness needs no network, and if
+  // it confirms the on-disk state is NOT rolled back, auto-start proceeds (startNode's recoverOrHalt
+  // re-checks the same mirror AND the cloud backup when it IS reachable). We still defer only when the
+  // mirror itself shows a rollback: Drive is then the sole path that can self-heal it, so wait for it.
+  // No backup configured → nothing to verify against → never defers.
+  private async shouldDeferForUnverifiableBackup(
+    hasChannelState: boolean,
+    network: string,
+    storage: SecureStorageProvider,
+  ): Promise<boolean> {
     const s = this.backupStatus?.();
-    if (!s || !s.configured) return false;
-    return !s.connected;
+    const localRaw = await storage.getItem(STATE_VERSION_KEY);
+    return shouldDeferAutoStart({
+      hasChannelState,
+      backupConfigured: !!s?.configured,
+      backupConnected: !!s?.connected,
+      localVersion: localRaw ? parseInt(localRaw, 10) || 0 : 0,
+      mirrorVersion: this.readStateVersionMirror(network),
+    });
   }
 
   // The NWC wallet-service pubkey the push gateway registers a subscription against.
@@ -586,13 +601,15 @@ export class WalletController {
         console.log(`[AutoStart] skipped: ${plan.reason}`);
         return;
       }
-      // Backup-verifiability gate: a funded wallet whose cloud backup is configured but NOT currently
-      // reachable can't have its freshness checked (the Drive backup-ahead guard would silently skip),
-      // so an iOS-rolled-back copy could auto-start and force-close. On an installed iOS PWA this is
-      // exactly the cold-load window before the Drive redirect connects — defer until it does. Manual
-      // Start is unaffected (deliberate user action, still covered by the offline mirror + guard).
-      if (this.shouldDeferForUnverifiableBackup(hasChannelState)) {
-        console.log("[AutoStart] deferred: cloud backup configured but not connected — can't verify local freshness yet");
+      // Backup-verifiability gate (relaxed to trust the offline mirror): only defer when Drive is
+      // configured-but-offline AND the offline state-version mirror can't confirm local freshness. On
+      // an installed iOS PWA the silent Drive reconnect is blocked at cold-load, so the old
+      // unconditional defer meant a funded wallet never auto-started there — the user had to tap Start
+      // every launch. Now, if the local high-water witness shows no rollback, auto-start proceeds
+      // without waiting for Drive (recoverOrHalt still re-checks the mirror + the cloud backup when
+      // reachable). Manual Start is unaffected (it always runs recoverOrHalt).
+      if (await this.shouldDeferForUnverifiableBackup(hasChannelState, network, storage)) {
+        console.log("[AutoStart] deferred: local storage rolled back per the offline mirror — waiting for cloud backup to self-heal");
         return;
       }
       await this.startNode();

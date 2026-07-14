@@ -33,39 +33,22 @@ foreground service over the audio keep-alive when running in this wrapper).
 # from the repo root
 pnpm install
 
-# add Capacitor to THIS package (kept out of the committed lockfile on purpose — added on the Mac).
-# NOTE: this rewrites package.json + pnpm-lock.yaml locally — do NOT commit those changes (CI's
-# frozen-lockfile install and the no-committed-deps design depend on them staying out).
-pnpm --filter @libre/android-app add @capacitor/core @capacitor/cli @capacitor/android \
-  @capacitor/share @capacitor/filesystem
-# @capacitor/share + @capacitor/filesystem power the Developer → Diagnostics "Share" button
-# (the OS share sheet → Telegram/Drive/Gmail). The Android System WebView implements neither
-# navigator.share nor blob downloads, so without these the diag export writes NO file on-device.
-# The web seam (wallet-pwa/src/core/native-share.ts) probes them at runtime — a build missing these
-# plugins just hides the share path; "Copy diagnostics" still works everywhere.
-
-# build the PWA the wrapper will host (produces packages/wallet-pwa/dist).
-# The VITE_LSPS1_MOCK_URL= override is MANDATORY (same rule as the Cloudflare deploy): a gitignored
-# .env.local sets it for dev, and without the override the dev mock LSP gets baked into the APK.
-VITE_LSPS1_MOCK_URL= pnpm --filter @libre/wallet-pwa build
-
-# generate the native android/ project (gitignored)
-pnpm --filter @libre/android-app cap:add
-```
-
-Then wire the foreground-service plugin into the generated project — copy the `native/` files in,
-enable Kotlin, merge the manifest, register the plugin, and generate the launcher icon, all
-idempotently, via one script:
-
-```bash
-# from the repo root — reproduces the full android/ wiring idempotently:
+# One command reproduces the ENTIRE android/ wiring idempotently: installs Capacitor deps (kept OUT of
+# the committed lockfile on purpose — do not commit the package.json/lockfile churn), builds the
+# workspace + wallet-pwa (with the mandatory VITE_LSPS1_MOCK_URL= override), cap add, copies the
+# native/ Kotlin, patches Gradle/manifest/MainActivity, and generates the launcher icon.
 pnpm --filter @libre/android-app prepare:android
-# then build:
+
+# then build the signed release APK (JDK 21 — see Prerequisites):
 cd packages/android-app/android
 JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew assembleRelease
 ```
 
 The exact wiring lives in `scripts/prepare-android.sh` (unit-tested in `prepare-android.test.sh`).
+The `@capacitor/share` + `@capacitor/filesystem` plugins (which power the Diagnostics "Share" button —
+the Android System WebView has no `navigator.share` and no blob downloads) version on their OWN
+release lines, not in lockstep with core, so the script pins each to its newest v7 (`share@7.0.4`,
+`filesystem@7.1.8`) alongside core `7.4.3`.
 
 ## Build → install → iterate
 

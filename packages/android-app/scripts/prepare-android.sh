@@ -213,6 +213,11 @@ set_icon_background() {
 
 main() {
   local cap="${CAP_VERSION:-7.4.3}"
+  # NOTE: the @capacitor/share + @capacitor/filesystem plugins version on their OWN release lines,
+  # NOT in lockstep with core — there is no share@7.4.3. Pin each to its newest v7 (major must match
+  # core). Override via env if these ever drift.
+  local cap_share="${CAP_SHARE_VERSION:-7.0.4}"
+  local cap_fs="${CAP_FS_VERSION:-7.1.8}"
   local vcode="${ANDROID_VERSION_CODE:-1}"
   local vname="${ANDROID_VERSION_NAME:-0.0.0-dev}"
   [ -f "pnpm-workspace.yaml" ] || die "run from the repo root"
@@ -220,7 +225,7 @@ main() {
   log "installing Capacitor deps (not committed)"
   pnpm --filter @libre/android-app add \
     "@capacitor/core@$cap" "@capacitor/cli@$cap" "@capacitor/android@$cap" \
-    "@capacitor/share@$cap" "@capacitor/filesystem@$cap"
+    "@capacitor/share@$cap_share" "@capacitor/filesystem@$cap_fs"
 
   log "building workspace deps (dependency order) then wallet-pwa (mock LSP override enforced)"
   pnpm --filter @libre/shared build

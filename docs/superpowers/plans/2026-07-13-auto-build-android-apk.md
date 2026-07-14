@@ -12,7 +12,7 @@
 
 - App id / package: `com.v4vmusic.librelistener`. Native package dir: `android/app/src/main/java/com/v4vmusic/librelistener/`.
 - PWA build MUST use the override: `VITE_LSPS1_MOCK_URL= pnpm --filter @libre/wallet-pwa build`.
-- Capacitor pinned to **7.4.3** for core/cli/android/share/filesystem (reproducible generated tree).
+- Capacitor **core/cli/android** pinned to **7.4.3**. The **share/filesystem plugins version on their OWN release lines** (no share@7.4.3 exists) — pin `@capacitor/share@7.0.4` + `@capacitor/filesystem@7.1.8` (newest v7; major must match core).
 - JDK **21** (Capacitor 7 compiles `--release 21`).
 - Kotlin Gradle plugin **2.0.21**; `androidx.documentfile:documentfile:1.0.1`.
 - Adaptive-icon background color: `#17913F`.

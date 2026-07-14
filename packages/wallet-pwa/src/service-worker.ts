@@ -18,7 +18,10 @@ declare const self: any;
 // sign-in on iOS. Bumping this constant changes the SW bytes, which forces iOS to install + activate
 // the new worker (purging every old cache below) and, together with the no-store navigation fetch,
 // breaks the loop so stuck clients pull the fixed bundle.
-const SHELL_CACHE = "libre-shell-v6";
+// v7: the auto-start (trust-offline-mirror) + status-pill boot-flicker fixes were also app-JS-only,
+// so installed iOS PWAs kept serving the older cached bundle and still showed the "Node stopped"
+// flash on every launch. Bump to purge the stale bundle and deliver those fixes.
+const SHELL_CACHE = "libre-shell-v7";
 // Stable-named shell entries (relative to the SW scope, matching Vite's base:"./"). Hashed
 // main.js/style.css and the large WASM are cached lazily on first fetch instead of precached.
 const SHELL_PRECACHE = ["./", "./index.html", "./manifest.webmanifest"];

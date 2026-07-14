@@ -90,4 +90,34 @@ describe("statusPill", () => {
     const p = statusPill({ ...HEALTHY, lifecycle: "closed-needs-address", backedUp: false, driveConfigured: false });
     expect(p!.target).toBe("sweep");
   });
+
+  describe("boot-flicker suppression (settling / starting)", () => {
+    it("suppresses the 'node stopped' pill while a start is in flight", () => {
+      expect(statusPill({ ...HEALTHY, running: false, lifecycle: "none", starting: true })).toBeNull();
+    });
+
+    it("suppresses the 'node stopped' pill during the post-launch settle window", () => {
+      expect(statusPill({ ...HEALTHY, running: false, lifecycle: "none", settling: true })).toBeNull();
+    });
+
+    it("still shows a genuine start error immediately, even while settling", () => {
+      const p = statusPill({ ...HEALTHY, running: false, settling: true, starting: true, startError: "Esplora unreachable" });
+      expect(p).toMatchObject({ level: "bad", target: "node" });
+      expect(p!.text).toContain("Esplora unreachable");
+    });
+
+    it("suppresses the Drive-reconnect nag during the settle window (token reconnects a beat later)", () => {
+      expect(statusPill({ ...HEALTHY, driveConnected: false, settling: true })).toBeNull();
+    });
+
+    it("shows the Drive-reconnect nag once the settle window has passed", () => {
+      const p = statusPill({ ...HEALTHY, driveConnected: false, settling: false });
+      expect(p).toMatchObject({ target: "reconnect-drive" });
+    });
+
+    it("still surfaces steady-state issues while settling (a real closed channel isn't hidden)", () => {
+      const p = statusPill({ ...HEALTHY, settling: true, lifecycle: "closed-needs-address" });
+      expect(p).toMatchObject({ level: "bad", target: "sweep" });
+    });
+  });
 });

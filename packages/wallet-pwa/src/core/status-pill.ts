@@ -7,6 +7,15 @@ import type { ChannelLifecycle } from "./channel-lifecycle";
 export interface StatusPillInputs {
   hasWallet: boolean;
   running: boolean;
+  // A node start is in flight. While true, the "Node stopped" pill is suppressed so it doesn't flash
+  // red for the moment between launch and the node coming up.
+  starting?: boolean;
+  // Within the post-launch settle window (home tracks it). While true, the transient boot pills
+  // ("Node stopped", "Cloud backup disconnected") are suppressed: on every launch the node is briefly
+  // down and the Drive token is briefly absent (it reconnects on first interaction / via the iOS
+  // redirect), and showing each of those for a fraction of a second is the startup "flicker". A real,
+  // actionable start error still shows immediately.
+  settling?: boolean;
   startError?: string;
   lifecycle: ChannelLifecycle;
   driveConfigured: boolean;
@@ -37,6 +46,10 @@ export function statusPill(i: StatusPillInputs): StatusPill | null {
   if (!i.hasWallet) return null; // onboarding owns the no-wallet state
 
   if (!i.running) {
+    // Booting: a start is in flight, or we're still inside the post-launch settle window. Stay quiet
+    // rather than flash the red "stopped" pill for the fraction of a second before the node is up. A
+    // genuine start error is always actionable, so it surfaces immediately regardless.
+    if (!i.startError && (i.starting || i.settling)) return null;
     return {
       level: "bad",
       text: i.startError ? `Node stopped — ${i.startError}` : "Node stopped — tap to start",
@@ -66,6 +79,10 @@ export function statusPill(i: StatusPillInputs): StatusPill | null {
   // Configured but the token isn't live (typically an iOS PWA where silent reconnect can't run) —
   // auto-sync is dead until reconnected. Nag with a one-tap reconnect instead of failing silently.
   if (!i.driveConnected) {
+    // The Drive token is in-memory, so it's always absent right after launch and reconnects a beat
+    // later (first interaction / iOS redirect). Don't nag during the settle window — only once it's
+    // clearly not coming back on its own.
+    if (i.settling) return null;
     return { level: "warn", text: "Cloud backup disconnected — tap to reconnect", target: "reconnect-drive" };
   }
   return null;

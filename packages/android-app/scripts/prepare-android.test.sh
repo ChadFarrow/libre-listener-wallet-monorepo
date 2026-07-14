@@ -148,4 +148,27 @@ if ( merge_manifest "$d/snippet.xml" "$bad/AndroidManifest.xml" ) >/dev/null 2>&
   echo "FAIL: merge_manifest should die when </application> is missing"; fail=1
 fi
 
+# --- register_plugins ---
+rp_check() { # <file> <label>
+  local j="$1" label="$2"
+  register_plugins "$j"; register_plugins "$j"   # run twice → idempotent
+  assert_contains "$j" "registerPlugin(LibreForegroundServicePlugin.class)" "$label: fg plugin registered"
+  assert_contains "$j" "registerPlugin(LibreBackupStoragePlugin.class)" "$label: backup plugin registered"
+  assert_contains "$j" "super.onCreate(savedInstanceState)" "$label: onCreate synthesized"
+  assert_count "$j" "registerPlugin(LibreForegroundServicePlugin.class)" 1 "$label: fg not duplicated"
+  assert_count "$j" "super.onCreate" 1 "$label: single super.onCreate"
+}
+d="$TMP/act"; mkdir -p "$d"
+# Form A: empty body on ONE line (common Capacitor 7 output)
+printf 'package com.v4vmusic.librelistener;\nimport com.getcapacitor.BridgeActivity;\npublic class MainActivity extends BridgeActivity {}\n' > "$d/A.java"
+rp_check "$d/A.java" "oneline"
+# Form B: empty body, closing brace on its own line
+printf 'package com.v4vmusic.librelistener;\nimport com.getcapacitor.BridgeActivity;\npublic class MainActivity extends BridgeActivity {\n}\n' > "$d/B.java"
+rp_check "$d/B.java" "multiline"
+# fail-loud when there is no MainActivity class
+printf 'package x;\n' > "$d/none.java"
+if ( register_plugins "$d/none.java" ) >/dev/null 2>&1; then
+  echo "FAIL: register_plugins should die without a MainActivity class"; fail=1
+fi
+
 if [ "$fail" = 0 ]; then echo "ALL TESTS PASSED"; else echo "TESTS FAILED"; exit 1; fi

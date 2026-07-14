@@ -135,6 +135,58 @@ merge_manifest() {
   log "manifest merged"
 }
 
+# Register the two native plugins in MainActivity.onCreate. Handles all Capacitor MainActivity shapes:
+# an existing onCreate (inject before super.onCreate), a multi-line empty body, and — the common
+# Capacitor 7 output — an empty body on ONE line ("... {}"), which is normalized to multi-line first.
+# Synthesized onCreate uses fully-qualified android.os.Bundle so no import edit is needed (portable).
+register_plugins() {
+  local j="$1"
+  [ -f "$j" ] || die "missing $j"
+  if grep -qF "registerPlugin(LibreForegroundServicePlugin.class)" "$j"; then
+    log "plugins already registered"; return
+  fi
+  grep -qF "class MainActivity" "$j" || die "no MainActivity class in $j"
+
+  if grep -qF "super.onCreate" "$j"; then
+    # existing onCreate: insert registerPlugin lines before super.onCreate
+    awk '
+      /super\.onCreate/ && !d {
+        print "        registerPlugin(LibreForegroundServicePlugin.class);"
+        print "        registerPlugin(LibreBackupStoragePlugin.class);"
+        d=1
+      } { print }
+    ' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
+  else
+    # no onCreate: normalize a same-line "... {}" body to multi-line, then inject onCreate before the
+    # class's final lone "}".
+    awk '
+      { lines[NR]=$0 }
+      END {
+        emptyline=0
+        for (i=1;i<=NR;i++)
+          if (lines[i] ~ /class MainActivity[^{]*\{\}[[:space:]]*$/) { sub(/\{\}[[:space:]]*$/,"{",lines[i]); emptyline=i }
+        n=0
+        for (i=1;i<=NR;i++) { n++; arr[n]=lines[i]; if (i==emptyline) { n++; arr[n]="}" } }
+        last=0; for (i=1;i<=n;i++) if (arr[i] ~ /^}[[:space:]]*$/) last=i
+        if (last==0) { print "register_plugins: no injection point in " FILENAME > "/dev/stderr"; exit 3 }
+        for (i=1;i<=n;i++) {
+          if (i==last) {
+            print "    @Override"
+            print "    public void onCreate(android.os.Bundle savedInstanceState) {"
+            print "        registerPlugin(LibreForegroundServicePlugin.class);"
+            print "        registerPlugin(LibreBackupStoragePlugin.class);"
+            print "        super.onCreate(savedInstanceState);"
+            print "    }"
+          }
+          print arr[i]
+        }
+      }
+    ' "$j" > "$j.tmp" || die "register_plugins: could not inject onCreate into $j"
+    mv "$j.tmp" "$j"
+  fi
+  log "plugins registered"
+}
+
 main() {
   die "main not implemented yet"  # replaced in Task 6
 }

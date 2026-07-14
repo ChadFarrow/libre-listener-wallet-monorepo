@@ -18,6 +18,11 @@ const OAUTH_STATE_KEY = "libre_drive_oauth_state";
 // (via drive-integration's rememberedEmail/driveConfigured). Owned here so EVERY connect path
 // persists it; drive-integration imports this constant rather than re-declaring the string.
 export const DRIVE_HINT_KEY = "libre_drive_hint";
+// Durable "Drive has been connected here" flag, set the instant a token is obtained — BEFORE and
+// independent of the async email lookup. driveConfigured() honors it, so the onboarding gate stays
+// satisfied even if the email lookup fails (a network blip) or a token later expires. Reset only by
+// the wallet-wide delete-all (localStorage.clear); a routine token expiry must never clear it.
+export const DRIVE_CONFIGURED_KEY = "libre_drive_configured";
 
 let connectedEmail: string | null = null;
 
@@ -38,6 +43,25 @@ function rememberEmail(email: string): void {
     localStorage.setItem(DRIVE_HINT_KEY, email);
   } catch {
     /* storage disabled (private mode) — the in-memory email still serves this session */
+  }
+}
+
+// Set the durable configured flag synchronously when a token lands (both connect paths), so the
+// onboarding gate doesn't depend on the best-effort email lookup succeeding.
+function markDriveConfigured(): void {
+  try {
+    localStorage.setItem(DRIVE_CONFIGURED_KEY, "1");
+  } catch {
+    /* storage disabled — driveConfigured falls back to the in-memory token/email this session */
+  }
+}
+
+/** True once Drive has been connected on this device (persists across token expiry / app close). */
+export function isDriveConfiguredPersisted(): boolean {
+  try {
+    return localStorage.getItem(DRIVE_CONFIGURED_KEY) === "1";
+  } catch {
+    return false;
   }
 }
 
@@ -145,6 +169,7 @@ export async function connect(clientId: string, opts: { silent?: boolean; hint?:
         }
         const token: string = resp.access_token;
         accessToken = token;
+        markDriveConfigured();
         // Best-effort: learn the account email to use as a login_hint next time.
         // Never blocks connect success — a failed lookup just means no hint.
         fetchAccountEmail(token)
@@ -217,6 +242,7 @@ export function completeDriveRedirect(hash: string): { ok: boolean; error?: stri
   // across the redirect) still accepts — the implicit token is bound to our client + redirect_uri.
   if (expected && parsed.state && parsed.state !== expected) return { ok: false, error: "state_mismatch" };
   accessToken = parsed.accessToken;
+  markDriveConfigured();
   fetchAccountEmail(parsed.accessToken)
     .then((email) => {
       if (email) rememberEmail(email);

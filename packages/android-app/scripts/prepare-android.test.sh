@@ -90,4 +90,21 @@ if ( ensure_app_deps_signing "$bad" ) >/dev/null 2>&1; then
   echo "FAIL: ensure_app_deps_signing should die when android{} is missing"; fail=1
 fi
 
+# --- stamp_version ---
+d="$TMP/ver"; mk_app_fixture "$d"
+stamp_version "$d" 42 "0.0.42"
+v="$d/app/build.gradle"
+assert_contains "$v" "versionCode 42" "versionCode set"
+assert_contains "$v" 'versionName "0.0.42"' "versionName set"
+stamp_version "$d" 43 "0.0.43"
+assert_contains "$v" "versionCode 43" "versionCode replaced"
+assert_count "$v" "versionCode " 1 "single versionCode line"
+
+# --- stamp_version: fail-loud on missing field ---
+bad="$TMP/ver-bad"; mkdir -p "$bad/app"
+printf 'android {\n  defaultConfig {\n  }\n}\n' > "$bad/app/build.gradle"   # no versionCode/Name
+if ( stamp_version "$bad" 1 "0.0.1" ) >/dev/null 2>&1; then
+  echo "FAIL: stamp_version should die when versionCode is missing"; fail=1
+fi
+
 if [ "$fail" = 0 ]; then echo "ALL TESTS PASSED"; else echo "TESTS FAILED"; exit 1; fi

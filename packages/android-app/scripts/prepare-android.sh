@@ -87,6 +87,18 @@ ensure_app_deps_signing() {
   log "app gradle deps + signing ok"
 }
 
+# Set versionCode/versionName in app/build.gradle defaultConfig.
+stamp_version() {
+  local app="$1/app/build.gradle" code="$2" name="$3"
+  [ -f "$app" ] || die "missing $app"
+  grep -qE 'versionCode ' "$app" || die "no versionCode in $app"
+  grep -qE 'versionName ' "$app" || die "no versionName in $app"
+  sed -E -i.bak "s/versionCode [0-9]+/versionCode ${code}/" "$app"
+  sed -E -i.bak "s/versionName \"[^\"]*\"/versionName \"${name}\"/" "$app"
+  rm -f "$app.bak"
+  log "version stamped ${code} / ${name}"
+}
+
 main() {
   die "main not implemented yet"  # replaced in Task 6
 }

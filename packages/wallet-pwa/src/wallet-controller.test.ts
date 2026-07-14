@@ -98,6 +98,62 @@ describe("WalletController node alias (node stopped) — cross-device sync", () 
   });
 });
 
+describe("WalletController rolled-back-storage guard (offline mirror)", () => {
+  const seedHex = "11".repeat(32);
+  const mirrorKey = "libre_state_version_hwm:mainnet";
+
+  beforeEach(async () => {
+    await new IndexedDBStorageProvider(DB).clear();
+    localStorage.clear();
+  });
+
+  it("halts start() when the offline mirror is ahead of on-disk state_version (no WASM built)", async () => {
+    const storage = new IndexedDBStorageProvider(DB);
+    // A funded wallet whose IndexedDB was rolled back to v90 while the localStorage mirror holds v113.
+    await storage.setItem("ldk_seed", seedHex);
+    await storage.setItem("channel_manager", "deadbeef");
+    await storage.setItem("state_version", "90");
+    localStorage.setItem(mirrorKey, "113");
+
+    const controller = new WalletController();
+    await expect(controller.startNode()).rejects.toThrow(/\[STATE_ROLLBACK\]/);
+    expect(controller.isRunning()).toBe(false);
+  });
+
+  it("does not halt with a rollback error when on-disk state is current with the mirror", async () => {
+    // Same version in both places → the guard passes and start proceeds to build the wallet (WASM),
+    // which is out of scope here; assert only that the guard itself did NOT throw a rollback error.
+    const storage = new IndexedDBStorageProvider(DB);
+    await storage.setItem("ldk_seed", seedHex);
+    await storage.setItem("channel_manager", "deadbeef");
+    await storage.setItem("state_version", "113");
+    localStorage.setItem(mirrorKey, "113");
+
+    const controller = new WalletController();
+    await expect(controller.startNode()).rejects.not.toThrow(/\[STATE_ROLLBACK\]/);
+    expect(controller.isRunning()).toBe(false);
+  });
+});
+
+describe("WalletController auto-start deferral (unverifiable backup)", () => {
+  beforeEach(async () => {
+    await new IndexedDBStorageProvider(DB).clear();
+    localStorage.clear();
+  });
+
+  it("defers a funded wallet when the cloud backup is configured but not connected", async () => {
+    const storage = new IndexedDBStorageProvider(DB);
+    await storage.setItem("ldk_seed", "22".repeat(32));
+    await storage.setItem("channel_manager", "deadbeef"); // funded → at force-close risk from a rollback
+
+    const controller = new WalletController();
+    controller.setBackupStatus(() => ({ configured: true, connected: false }));
+    // autoStart never throws; a deferral simply leaves the node stopped (no WASM build attempted).
+    await controller.autoStart(null);
+    expect(controller.isRunning()).toBe(false);
+  });
+});
+
 describe("WalletController.listPeers (node stopped)", () => {
   beforeEach(async () => {
     await new IndexedDBStorageProvider(DB).clear();

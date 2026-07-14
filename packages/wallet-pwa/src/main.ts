@@ -76,6 +76,9 @@ const ctx: AppContext = { controller, isRunning: () => controller.isRunning(), k
 // in demo (no real backups) or native (SAF backup + the foreground-service residency cover it).
 if (!isDemoMode() && !isNativeApp()) {
   controller.setBackupFetcher((network) => peekBackupEnvelope(network || "mainnet"));
+  // Auto-start deferral: on a funded wallet, don't auto-boot until the cloud backup is reachable to
+  // verify local freshness (an iOS cold load reaches Drive only after the redirect — see autoStart).
+  controller.setBackupStatus(() => ({ configured: driveConfigured(), connected: driveConnected() }));
 }
 
 // Native APK: keeping the node alive in the background (a foreground service, not battery-costly

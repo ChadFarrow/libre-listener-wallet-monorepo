@@ -52,6 +52,12 @@ import { restoreBlockReason, mayOverwriteStaleLocal } from "./core/restore-guard
 import { addressToScriptPubKey } from "./core/address-script";
 import { smoothUsable, type UsableSmootherState } from "./core/usable-smoothing";
 import { backupAheadOfLocal, BackupAheadError } from "./core/backup-ahead";
+import {
+  nextMirrorValue,
+  localStateRolledBack,
+  StateRollbackError,
+  mirrorKeyForNetwork,
+} from "./core/state-version-mirror";
 
 // Keys the SDK / app persist that this controller reasons about.
 const CHANNEL_MANAGER_KEY = "channel_manager";
@@ -76,6 +82,11 @@ export class WalletController {
   // backup-ahead start guard. Returns null when no backup is reachable/applicable.
   private backupEnvelopeFetcher?: (network: string) => Promise<string | null>;
 
+  // Injected off-device-backup status used only by the auto-start deferral: whether the user has set
+  // up a cloud backup at all (`configured`) and whether it is reachable right now (`connected`). Kept
+  // out of the controller so it stays Drive-agnostic. Absent → treated as no backup (never defers).
+  private backupStatus?: () => { configured: boolean; connected: boolean };
+
   constructor(emit: ControllerEvent = () => {}) {
     this.meta = new IndexedDBStorageProvider(META_DB_NAME);
     this.emit = emit;
@@ -89,6 +100,74 @@ export class WalletController {
   // app injects a Drive-backed fetcher; kept behind a setter so the controller never imports Drive.
   setBackupFetcher(fetcher: (network: string) => Promise<string | null>): void {
     this.backupEnvelopeFetcher = fetcher;
+  }
+
+  // Wire the cloud-backup status source used by the auto-start deferral (see autoStart). Kept behind
+  // a setter so the controller never imports Drive.
+  setBackupStatus(status: () => { configured: boolean; connected: boolean }): void {
+    this.backupStatus = status;
+  }
+
+  // ---- Offline state-version mirror (rolled-back-storage guard) ----
+  // A high-water copy of the SDK's monotonic `state_version`, held in localStorage — a storage
+  // backend separate from the per-network IndexedDB, so an iOS partial eviction that rolls the DB
+  // back to an older snapshot leaves this witness intact. See core/state-version-mirror.ts.
+  private readStateVersionMirror(network: string): number {
+    try {
+      const raw = localStorage.getItem(mirrorKeyForNetwork(network));
+      return raw ? parseInt(raw, 10) || 0 : 0;
+    } catch {
+      return 0; // localStorage unavailable (private mode) — mirror simply can't help here
+    }
+  }
+
+  private writeStateVersionMirror(network: string, value: number): void {
+    try {
+      localStorage.setItem(mirrorKeyForNetwork(network), String(value));
+    } catch {
+      /* best-effort — the mirror is a defence-in-depth layer, never load-bearing for a legit start */
+    }
+  }
+
+  private clearStateVersionMirror(network: string): void {
+    try {
+      localStorage.removeItem(mirrorKeyForNetwork(network));
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // Advance the mirror to the current on-disk state_version (high-water: never decreases). Called
+  // after start and on every state persist, so the mirror always reflects the newest state this
+  // device has durably held.
+  private async recordStateVersionMirror(network: string, storage: SecureStorageProvider): Promise<void> {
+    try {
+      const raw = await storage.getItem(STATE_VERSION_KEY);
+      if (!raw) return;
+      this.writeStateVersionMirror(network, nextMirrorValue(parseInt(raw, 10) || 0, this.readStateVersionMirror(network)));
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // Halt the start if the offline mirror shows local storage regressed (iOS partial eviction rolled
+  // the per-network DB back to an older self-consistent snapshot — which the Drive backup-ahead guard
+  // can't see at auto-start time, when Drive is unreachable). No network needed.
+  private async assertNotRolledBack(network: string, storage: SecureStorageProvider): Promise<void> {
+    const raw = await storage.getItem(STATE_VERSION_KEY);
+    const local = raw ? parseInt(raw, 10) || 0 : 0;
+    const mirror = this.readStateVersionMirror(network);
+    if (localStateRolledBack(local, mirror)) throw new StateRollbackError(local, mirror);
+  }
+
+  // True when auto-start should defer: a funded wallet whose cloud backup is configured but offline,
+  // so freshness can't be verified. No backup configured → nothing to verify against (and deferring
+  // would strand the wallet forever) → never defers; the offline mirror still guards partial rollbacks.
+  private shouldDeferForUnverifiableBackup(hasChannelState: boolean): boolean {
+    if (!hasChannelState) return false;
+    const s = this.backupStatus?.();
+    if (!s || !s.configured) return false;
+    return !s.connected;
   }
 
   // The NWC wallet-service pubkey the push gateway registers a subscription against.
@@ -309,6 +388,9 @@ export class WalletController {
         if (await storage.getItem(CHANNEL_MANAGER_KEY)) {
           await storage.removeItem(CREATED_NEW_KEY);
         }
+        // Keep the offline rollback mirror current: every persist advances state_version, and the
+        // mirror must track it so a later eviction is detectable against the newest state held here.
+        await this.recordStateVersionMirror(cfg.network, storage);
         this.emit("state-changed");
       })();
     });
@@ -404,6 +486,11 @@ export class WalletController {
         "This seed has no channel state. Restore from a backup before starting — starting a stateless node can force-close existing channels."
       );
     }
+    // Offline rollback guard: an always-local, high-water mirror of state_version (in localStorage,
+    // separate from this network's IndexedDB) catches an iOS partial eviction that rolled the DB back
+    // to an older snapshot — the case the Drive backup-ahead guard below can't see at auto-start time
+    // (Drive is unreachable then). Cheap + network-free, so it runs before the wallet is even built.
+    await this.assertNotRolledBack(network, storage);
     const wallet = await this.buildWallet();
     // Backup-ahead guard (iOS-eviction / rolled-back-storage protection): if the off-device backup
     // is NEWER than local storage, refuse to start — starting + reconnecting would present stale
@@ -423,6 +510,8 @@ export class WalletController {
       throw e;
     }
     await this.applySweepAddress();
+    // Seed/advance the offline rollback mirror to the state we just durably loaded.
+    await this.recordStateVersionMirror(network, storage);
     // Persist the resolved config + network pointer so an offline push wake can boot this node
     // (covers wallets created/started on pure defaults, incl. createWallet → startNode).
     await this.persistActiveNetwork(network);
@@ -475,14 +564,24 @@ export class WalletController {
     try {
       const network = await this.activeNetwork();
       const storage = this.storageForNetwork(network);
+      const hasChannelState = !!(await storage.getItem(CHANNEL_MANAGER_KEY));
       const plan = autoStartPlan({
         flagRaw,
         hasSeed: !!(await storage.getItem(SEED_KEY)),
-        hasChannelState: !!(await storage.getItem(CHANNEL_MANAGER_KEY)),
+        hasChannelState,
         createdNew: !!(await storage.getItem(CREATED_NEW_KEY)),
       });
       if (!plan.start) {
         console.log(`[AutoStart] skipped: ${plan.reason}`);
+        return;
+      }
+      // Backup-verifiability gate: a funded wallet whose cloud backup is configured but NOT currently
+      // reachable can't have its freshness checked (the Drive backup-ahead guard would silently skip),
+      // so an iOS-rolled-back copy could auto-start and force-close. On an installed iOS PWA this is
+      // exactly the cold-load window before the Drive redirect connects — defer until it does. Manual
+      // Start is unaffected (deliberate user action, still covered by the offline mirror + guard).
+      if (this.shouldDeferForUnverifiableBackup(hasChannelState)) {
+        console.log("[AutoStart] deferred: cloud backup configured but not connected — can't verify local freshness yet");
         return;
       }
       await this.startNode();
@@ -563,6 +662,8 @@ export class WalletController {
         .clear()
         .catch((e) => console.warn(`[Reset] clearing ${name} failed:`, (e as Error)?.message || e));
     }
+    // The mirror lives in localStorage (outside those IndexedDBs), so clear it explicitly per network.
+    for (const net of SUPPORTED_NETWORKS) this.clearStateVersionMirror(net);
     this.emit("state-changed");
     return { network };
   }
@@ -682,6 +783,10 @@ export class WalletController {
       }
       const wallet = await this.buildWallet();
       await wallet.importState(envelope, secret);
+      // Reset the offline rollback mirror: importState wrote the backup's (newest) state_version to
+      // disk, so clearing lets start()'s onStateChanged re-seed the mirror from it — otherwise a
+      // higher witness left by the old/rolled-back wallet would false-halt the next start.
+      this.clearStateVersionMirror(targetNetwork);
       this.wallet = wallet;
       await wallet.start();
       await this.applySweepAddress();

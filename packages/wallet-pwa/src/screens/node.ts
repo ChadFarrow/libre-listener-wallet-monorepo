@@ -7,6 +7,7 @@ import {
   isAutoStartEnabled,
 } from "@libre/shared";
 import { isBackupAheadError, BACKUP_AHEAD_MSG } from "../core/backup-ahead";
+import { isStateRollbackError, STATE_ROLLBACK_MSG } from "../core/state-version-mirror";
 import { registerScreen, currentScreen } from "../ui/nav";
 import { forceRestoreScreen, clearRestoreLatch } from "./restore";
 import { $, setMsg, copyText } from "./util";
@@ -48,6 +49,13 @@ export function initNodeScreen(ctx: AppContext): void {
       if (isBackupAheadError(e)) {
         setMsg("node-msg", "");
         forceRestoreScreen(BACKUP_AHEAD_MSG);
+        return;
+      }
+      // The offline mirror shows this device's storage was rolled back (iOS partial eviction) — same
+      // remedy: restore from backup rather than start on stale state.
+      if (isStateRollbackError(e)) {
+        setMsg("node-msg", "");
+        forceRestoreScreen(STATE_ROLLBACK_MSG);
         return;
       }
       if (isNodeAlreadyRunningError(e)) {

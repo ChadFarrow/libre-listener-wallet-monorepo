@@ -107,4 +107,45 @@ if ( stamp_version "$bad" 1 "0.0.1" ) >/dev/null 2>&1; then
   echo "FAIL: stamp_version should die when versionCode is missing"; fail=1
 fi
 
+# --- merge_manifest ---
+d="$TMP/man"; mkdir -p "$d"
+cat > "$d/snippet.xml" <<'EOF'
+<!-- LEAK-CANARY: this comment must NOT end up in the manifest -->
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+<!-- 2) Service: place inside <application>. -->
+<service
+    android:name=".ForegroundService"
+    android:exported="false"
+    android:foregroundServiceType="dataSync" />
+EOF
+cat > "$d/AndroidManifest.xml" <<'EOF'
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="Libre">
+        <activity android:name=".MainActivity" />
+    </application>
+</manifest>
+EOF
+merge_manifest "$d/snippet.xml" "$d/AndroidManifest.xml"
+m="$d/AndroidManifest.xml"
+assert_contains "$m" "android.permission.FOREGROUND_SERVICE" "permission merged"
+assert_contains "$m" ".ForegroundService" "service merged"
+assert_contains "$m" "foregroundServiceType=" "service attrs preserved (flattened to one line)"
+assert_count "$m" "LEAK-CANARY" 0 "snippet comment did NOT leak into the manifest"
+# placement: service inside <application>; permission before </manifest>
+python3 - "$m" <<'PY' || { echo "FAIL: element placement"; fail=1; }
+import sys; t=open(sys.argv[1]).read()
+assert t.index(".ForegroundService") < t.index("</application>")
+assert t.index('permission.FOREGROUND_SERVICE"') < t.index("</manifest>")
+PY
+merge_manifest "$d/snippet.xml" "$d/AndroidManifest.xml"
+assert_count "$m" 'permission.FOREGROUND_SERVICE"' 1 "permission not duplicated"
+assert_count "$m" ".ForegroundService" 1 "service not duplicated"
+# fail-loud on missing anchor
+bad="$TMP/man-bad"; mkdir -p "$bad"
+printf '<manifest></manifest>\n' > "$bad/AndroidManifest.xml"   # no </application>
+if ( merge_manifest "$d/snippet.xml" "$bad/AndroidManifest.xml" ) >/dev/null 2>&1; then
+  echo "FAIL: merge_manifest should die when </application> is missing"; fail=1
+fi
+
 if [ "$fail" = 0 ]; then echo "ALL TESTS PASSED"; else echo "TESTS FAILED"; exit 1; fi

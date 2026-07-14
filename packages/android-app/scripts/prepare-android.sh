@@ -99,6 +99,42 @@ stamp_version() {
   log "version stamped ${code} / ${name}"
 }
 
+# Merge native/AndroidManifest.snippet.xml into the generated manifest. The snippet has XML comments
+# and a MULTI-LINE <service> element, so extract elements STRUCTURALLY (not line-by-line): grep -oE
+# the single-line <uses-*/> elements (comment text is ignored automatically), and awk-flatten the
+# <service …/> block. <uses-*> → before </manifest>; <service> → before </application>. Idempotent,
+# keyed on android:name.
+merge_manifest() {
+  local snippet="$1" manifest="$2"
+  [ -f "$snippet" ]  || die "missing $snippet"
+  [ -f "$manifest" ] || die "missing $manifest"
+  grep -qF "</application>" "$manifest" || die "no </application> in $manifest"
+  grep -qF "</manifest>"   "$manifest" || die "no </manifest> in $manifest"
+
+  local el key
+  # 1) permissions/features — each is a single self-closed element.
+  while IFS= read -r el; do
+    [ -z "$el" ] && continue
+    key="$(printf '%s' "$el" | grep -oE 'android:name="[^"]*"' | head -1)"
+    if [ -n "$key" ] && grep -qF "$key" "$manifest"; then continue; fi
+    awk -v ins="    $el" '/<\/manifest>/ && !d {print ins; d=1} {print}' "$manifest" > "$manifest.tmp" \
+      && mv "$manifest.tmp" "$manifest"
+  done < <(grep -oE '<uses-(permission|feature)[^>]*/>' "$snippet")
+
+  # 2) service — flatten the possibly multi-line <service …/> block to one line.
+  local service
+  service="$(awk '/<service/{c=1} c{buf=buf" "$0} c&&/\/>/{print buf; exit}' "$snippet" \
+    | tr -s ' \t' ' ' | sed -E 's/^ //')"
+  if [ -n "$service" ]; then
+    key="$(printf '%s' "$service" | grep -oE 'android:name="[^"]*"' | head -1)"
+    if ! { [ -n "$key" ] && grep -qF "$key" "$manifest"; }; then
+      awk -v ins="        $service" '/<\/application>/ && !d {print ins; d=1} {print}' "$manifest" > "$manifest.tmp" \
+        && mv "$manifest.tmp" "$manifest"
+    fi
+  fi
+  log "manifest merged"
+}
+
 main() {
   die "main not implemented yet"  # replaced in Task 6
 }

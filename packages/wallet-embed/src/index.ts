@@ -50,6 +50,12 @@ export interface MountOptions {
 
 export interface MountHandle {
   webln: LibreWeblnProvider;
+  /**
+   * Whether `installWebln` actually took window.webln. False when it was left alone because another
+   * provider (e.g. Alby) already held it — in that case window.webln is NOT this wallet, and a host
+   * that pays through it would silently charge the other one. Always pay via `webln` above.
+   */
+  installedWebln: boolean;
   element: HTMLElement;
   /** Current roaming view (running / blocked / …) — the host can reflect connection state. */
   state(): RoamingViewState;
@@ -202,10 +208,14 @@ export function mountLibreWallet(target: HTMLElement | string, opts: MountOption
     element.renderConnect();
   })();
 
-  if (opts.installWebln) installWebln(provider);
+  // Polite install: `false` means another provider (e.g. Alby) already owned window.webln and we
+  // left it alone. The host MUST know — otherwise it sees a truthy window.webln, assumes it's us,
+  // and routes payments to the other wallet under our name.
+  const installedWebln = opts.installWebln ? installWebln(provider) : false;
 
   return {
     webln: provider,
+    installedWebln,
     element,
     state: () => embed.session.current(),
     onState: (cb) => {
@@ -217,6 +227,11 @@ export function mountLibreWallet(target: HTMLElement | string, opts: MountOption
       if (balanceTimer !== undefined) clearInterval(balanceTimer);
       await embed.session.dispose();
       element.remove();
+      // Leave no dead provider behind: a host that kept using window.webln after dispose would be
+      // calling into a torn-down session. Only remove what we installed.
+      if (installedWebln && (window as Window & { webln?: unknown }).webln === provider) {
+        delete (window as Window & { webln?: unknown }).webln;
+      }
     },
   };
 }

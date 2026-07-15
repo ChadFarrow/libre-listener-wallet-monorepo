@@ -23,7 +23,10 @@ export default defineConfig([
     // Library build (npm/tarball consumers — e.g. the boostmebitch Next.js import)
     entry: { index: "src/index.ts" },
     format: ["esm", "cjs"],
-    dts: true,
+    // `noExternal` only governs the JS bundle — the .d.ts emit still writes bare
+    // `from "@libre/wallet-core"` specifiers a consumer cannot resolve. `dts.resolve`
+    // inlines those declarations too, so the types are self-contained like the code.
+    dts: { resolve: [/^@libre\//] },
     clean: true,
     sourcemap: true,
     platform: "browser",

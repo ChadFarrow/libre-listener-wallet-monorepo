@@ -14,12 +14,11 @@
     "lint": "eslint src",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
+  "//": "The @libre/* workspace packages MUST stay in devDependencies. They are never published to npm, and pnpm pack rewrites workspace:* to a bare version — so listing them as runtime dependencies makes every consumer's `npm i` 404. tsup bundles them into dist (noExternal in tsup.config.ts), so consumers need nothing at runtime. The release workflow's consumer-install gate enforces this.",
+  "devDependencies": {
     "@libre/listener-wallet": "workspace:*",
     "@libre/shared": "workspace:*",
-    "@libre/wallet-core": "workspace:*"
-  },
-  "devDependencies": {
+    "@libre/wallet-core": "workspace:*",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^24.0.0",
     "tsup": "^8.0.2",

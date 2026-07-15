@@ -40,11 +40,35 @@ describe("mountLibreWallet", () => {
     document.body.appendChild(host);
     const h1 = mountLibreWallet(host, { googleClientId: "cid", wasmUrl: "/w.wasm", network: "regtest" });
     expect((window as { webln?: unknown }).webln).toBeUndefined();
+    expect(h1.installedWebln).toBe(false);
     await h1.dispose();
 
     const h2 = mountLibreWallet(host, { googleClientId: "cid", wasmUrl: "/w.wasm", network: "regtest", installWebln: true });
     expect((window as { webln?: unknown }).webln).toBe(h2.webln);
+    expect(h2.installedWebln).toBe(true);
+
+    // dispose must take the provider back down with it — a host still holding window.webln would
+    // otherwise be calling into a torn-down session.
     await h2.dispose();
+    expect((window as { webln?: unknown }).webln).toBeUndefined();
+  });
+
+  // The install is polite, so a host CANNOT infer "window.webln is truthy" => "it's us". A host that
+  // did would route payments to the incumbent wallet while labelling them ours.
+  it("reports installedWebln:false when another provider already owns window.webln, and leaves it alone", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const incumbent = { id: "alby" };
+    (window as { webln?: unknown }).webln = incumbent;
+
+    const h = mountLibreWallet(host, { googleClientId: "cid", wasmUrl: "/w.wasm", network: "regtest", installWebln: true });
+    expect(h.installedWebln).toBe(false);
+    expect((window as { webln?: unknown }).webln).toBe(incumbent);
+    expect(h.webln).not.toBe(incumbent); // the real wallet is only reachable via the handle
+
+    // dispose only removes what it installed — never someone else's provider.
+    await h.dispose();
+    expect((window as { webln?: unknown }).webln).toBe(incumbent);
     delete (window as { webln?: unknown }).webln;
   });
 });

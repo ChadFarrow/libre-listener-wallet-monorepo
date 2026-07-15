@@ -21,6 +21,17 @@ describe("built bundles are self-contained", () => {
     expect(/^\s*import\s/m.test(src)).toBe(false);
   });
 
+  // The type declarations are the same contract as the code: tsup's `noExternal` does not apply to
+  // the .d.ts emit, so without `dts.resolve` these keep a bare `from "@libre/wallet-core"` that a
+  // consumer cannot resolve — `npm i` succeeds and their typecheck breaks instead.
+  for (const decl of ["index.d.ts", "index.d.mts"]) {
+    it.skipIf(!existsSync(join(dist, decl)))(`${decl} has no bare workspace imports`, () => {
+      const src = readFileSync(join(dist, decl), "utf8");
+      const bare = src.match(/from\s+['"]@libre\/[^'"]+['"]/g);
+      expect(bare, `bare specifiers survived into ${decl}: ${bare?.join(", ")}`).toBe(null);
+    });
+  }
+
   it.skipIf(!existsSync(dist))("the WASM binary ships in dist", () => {
     expect(existsSync(join(dist, "liblightningjs.wasm"))).toBe(true);
   });

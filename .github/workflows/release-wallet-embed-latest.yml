@@ -78,6 +78,38 @@ jobs:
           mv "$FILE" "$GITHUB_WORKSPACE/libre-wallet-embed.tgz"
           echo "Packed $FILE -> libre-wallet-embed.tgz"
 
+      # THE release gate: be the consumer. Everything above this runs inside the workspace, where
+      # @libre/* resolve as symlinks and the bare specifiers in the packed artifact are invisible.
+      # This step installs the tarball the way an embedding app does — clean cache, empty project,
+      # no workspace — which is the only thing that catches an unresolvable @libre/* specifier
+      # escaping into either the manifest (npm i 404s) or the .d.ts (their typecheck breaks).
+      # Both have shipped before; a "packed manifest has no dependencies" assertion would have
+      # caught neither, and would false-positive on a future legitimate runtime dep.
+      - name: Consumer install contract
+        run: |
+          set -euo pipefail
+          D=$(mktemp -d)
+          cd "$D"
+          npm init -y >/dev/null
+          npm install --cache "$D/.npm-clean" "$GITHUB_WORKSPACE/libre-wallet-embed.tgz"
+          test -f node_modules/@libre/wallet-embed/dist/liblightningjs.wasm
+          # No unpublished workspace package may be pulled in as a transitive dep.
+          test "$(ls node_modules/@libre)" = "wallet-embed"
+          # Resolve, don't execute: this is a browser build (it subclasses HTMLElement at module
+          # scope), so require()-ing it under Node throws for reasons unrelated to packaging.
+          node -e "require.resolve('@libre/wallet-embed')"
+          # Types must resolve standalone too — dist/*.d.ts must not reference unpublished @libre/*.
+          cat > probe.ts <<'EOF'
+          import { mountLibreWallet, type MountHandle } from "@libre/wallet-embed";
+          const h: MountHandle = mountLibreWallet(document.createElement("div"), {
+            googleClientId: "x", wasmUrl: "/liblightningjs.wasm",
+          });
+          void h.webln; void h.installedWebln; void h.state().view;
+          EOF
+          npx -y -p typescript@5 tsc --noEmit --strict --skipLibCheck false \
+            --module esnext --moduleResolution bundler --target es2022 --lib es2022,dom probe.ts
+          echo "Consumer install contract OK"
+
       # Upsert the single rolling release and replace its asset in place (--clobber keeps the
       # download URL identical). NOT --latest (the extension release owns that slot).
       - name: Update rolling release

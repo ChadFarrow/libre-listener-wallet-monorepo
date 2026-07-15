@@ -1,7 +1,7 @@
 # Embedding Libre Wallet in your web app (`@libre/wallet-embed`)
 
 A "Connect Libre Wallet" login widget for the maintainer's OWN web apps (pilot:
-[boostmebitch](https://boostmebitch.vercel.app)). Tapping Connect signs into Google Drive and
+[boostmebitch](https://boostmebitch.com)). Tapping Connect signs into Google Drive and
 **moves the user's wallet into your page** — the LDK node runs in-page while they use your app
 (so iOS backgrounding stops mattering), and your app drives it through a standard
 `window.webln` provider. Wallet creation/seed backup live ONLY in the standalone wallet PWA;
@@ -17,7 +17,7 @@ the widget is login-only.
 ## One-time setup per origin (Google Cloud console)
 
 The widget reuses the wallet's existing Google OAuth client ("Libre-wallet web"). For each
-embedding origin (e.g. `https://boostmebitch.vercel.app`):
+embedding origin (e.g. `https://boostmebitch.com`):
 
 1. Add the **bare origin** (no trailing slash, no path) to **Authorized JavaScript origins**.
 2. Add the SAME bare origin to **Authorized redirect URIs** (a different list! The installed-PWA
@@ -133,8 +133,15 @@ Add Libre as its own option in the wallet picker so there's one place to connect
 
 **1. Install + ship the wasm** (npm project, Next.js on Vercel):
 
+The release publishes two tarballs. An app with a committed lockfile (Vercel runs `npm ci`)
+MUST pin the **immutable per-commit** tarball `libre-wallet-embed-<sha>.tgz` — the rolling
+`libre-wallet-embed.tgz` changes bytes on every monorepo build, so a lockfile pinned to it
+fails `npm ci` with `EINTEGRITY` on an unrelated deploy. Bump deliberately by repinning to a
+newer per-commit tarball. (The rolling URL is fine only for lockfile-free / demo installs.)
+
 ```jsonc
-// npm i https://github.com/ChadFarrow/libre-listener-wallet-monorepo/releases/download/wallet-embed-latest/libre-wallet-embed.tgz
+// Pin the immutable per-commit tarball, NOT the rolling …/wallet-embed-latest/libre-wallet-embed.tgz:
+// npm i https://github.com/ChadFarrow/libre-listener-wallet-monorepo/releases/download/wallet-embed-latest/libre-wallet-embed-<sha>.tgz
 "scripts": {
   // Vercel runs postinstall; copies the bundled wasm so it serves at /liblightningjs.wasm
   "postinstall": "node -e \"require('fs').copyFileSync('node_modules/@libre/wallet-embed/dist/liblightningjs.wasm','public/liblightningjs.wasm')\""
@@ -194,6 +201,6 @@ Because `installWebln` sets `window.webln`, the modal's separate WebLN card also
 connected so users aren't offered two doors to the same wallet.
 
 **4. Config:** set `NEXT_PUBLIC_LIBRE_GOOGLE_CLIENT_ID` (the wallet PWA's OAuth client id) in
-Vercel + `.env.local`; register `https://boostmebitch.vercel.app` and `http://localhost:3000` in
+Vercel + `.env.local`; register `https://boostmebitch.com` and `http://localhost:3000` in
 the OAuth client's JS-origins AND redirect URIs (per the top of this doc); check `next.config.*`
 for a CSP and, if present, add the allowances above.

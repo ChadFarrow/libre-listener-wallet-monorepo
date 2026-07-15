@@ -310,6 +310,7 @@ export function bridgeTargetUrl(base: string, host: string, port: number): strin
 
 export * from "./error-code";
 export * from "./gateway-auth";
+export * from "./invoice-expiry";
 export * from "./strict-int";
 export * from "./v4v-utils";
 export * from "./nwc-schema";

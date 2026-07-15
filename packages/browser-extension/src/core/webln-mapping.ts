@@ -10,6 +10,8 @@
 
 // A 33-byte compressed Lightning node pubkey is 66 hex chars with an 02/03 prefix — the same
 // shape nwc-schema enforces for pay_keysend. (Not a 32-byte Nostr key.)
+import { DEFAULT_INVOICE_EXPIRY_SECONDS } from "@libre/shared";
+
 const NODE_PUBKEY_RE = /^0[23][0-9a-fA-F]{64}$/;
 
 export interface WalletRpc {
@@ -48,7 +50,7 @@ export class WeblnError extends Error {}
 export function normalizeMakeInvoice(params: any): { amountSats: number; memo: string; expirySeconds: number } {
   let amountRaw: unknown;
   let memo = "";
-  let expiry = 3600;
+  let expiry = DEFAULT_INVOICE_EXPIRY_SECONDS;
   if (params == null) {
     throw new WeblnError("makeInvoice requires an amount");
   }

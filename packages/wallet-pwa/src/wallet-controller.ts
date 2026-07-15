@@ -20,6 +20,7 @@ import {
   autoStartPlan,
   connectWithRetry,
   shouldReconnectPeer,
+  resolveInvoiceExpiry,
 } from "@libre/shared";
 import { nodeLockRetryPlan } from "./core/start-retry";
 import type { BudgetRenewal, NwcMethod, PaymentRecord } from "@libre/shared";
@@ -895,7 +896,7 @@ export class WalletController {
     this.requireRunning();
     const amt = Math.floor(Number(amountSats));
     if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter an amount in sats greater than 0.");
-    const paymentRequest = await this.wallet!.createInvoice(amt, memo || "Libre Listener Wallet top-up", expirySeconds || 3600);
+    const paymentRequest = await this.wallet!.createInvoice(amt, memo || "Libre Listener Wallet top-up", resolveInvoiceExpiry(expirySeconds));
     return { paymentRequest };
   }
 

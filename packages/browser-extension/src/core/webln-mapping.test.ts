@@ -23,8 +23,8 @@ function mockRpc(overrides: Partial<WalletRpc> = {}): WalletRpc {
 const DEST = "02" + "b".repeat(64); // 66-hex node pubkey
 
 describe("normalizeMakeInvoice", () => {
-  it("accepts a bare number of sats", () => {
-    expect(normalizeMakeInvoice(1000)).toEqual({ amountSats: 1000, memo: "", expirySeconds: 3600 });
+  it("accepts a bare number of sats (defaulting expiry to 4h, block-time-lag safe)", () => {
+    expect(normalizeMakeInvoice(1000)).toEqual({ amountSats: 1000, memo: "", expirySeconds: 14400 });
   });
   it("accepts an object with amount + defaultMemo + expiry", () => {
     expect(normalizeMakeInvoice({ amount: 500, defaultMemo: "coffee", expiry: 600 })).toEqual({
@@ -91,7 +91,7 @@ describe("handleWeblnRequest dispatch", () => {
   it("makeInvoice returns { paymentRequest }", async () => {
     const rpc = mockRpc();
     const res = await handleWeblnRequest(rpc, "makeInvoice", 1000);
-    expect(rpc.makeInvoice).toHaveBeenCalledWith({ amountSats: 1000, memo: "", expirySeconds: 3600 });
+    expect(rpc.makeInvoice).toHaveBeenCalledWith({ amountSats: 1000, memo: "", expirySeconds: 14400 });
     expect(res).toEqual({ paymentRequest: "lnbc1..." });
   });
 

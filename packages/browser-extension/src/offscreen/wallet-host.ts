@@ -14,6 +14,7 @@ import {
   autoStartPlan,
   connectWithRetry,
   shouldReconnectPeer,
+  resolveInvoiceExpiry,
 } from "@libre/shared";
 import type { BudgetRenewal, NwcMethod } from "@libre/shared";
 import {
@@ -469,7 +470,7 @@ export class WalletHost implements WalletRpc {
     this.requireRunning();
     const amt = Math.floor(Number(amountSats));
     if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter an amount in sats greater than 0.");
-    const paymentRequest = await this.wallet!.createInvoice(amt, memo || "Libre Listener Wallet top-up", expirySeconds || 3600);
+    const paymentRequest = await this.wallet!.createInvoice(amt, memo || "Libre Listener Wallet top-up", resolveInvoiceExpiry(expirySeconds));
     return { paymentRequest };
   }
 

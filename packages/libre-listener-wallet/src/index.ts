@@ -6,7 +6,7 @@ import type {
   TlvRecord,
   SplitResult,
 } from "@libre/shared";
-import { encodeV4VTlvs } from "@libre/shared";
+import { encodeV4VTlvs, DEFAULT_INVOICE_EXPIRY_SECONDS, resolveInvoiceExpiry } from "@libre/shared";
 import { Lsps1RestClient, clampExpiryBlocks, orderInvoice } from "./lsps1-rest-client";
 
 import {
@@ -19,7 +19,6 @@ import {
   MonitorUpdatingPersister,
   ChainMonitor,
   PhantomKeysManager,
-  UserConfig,
   ChainParameters,
   BestBlock,
   ChannelManager,
@@ -111,6 +110,7 @@ import { peersNeedingAnnouncement } from "./node-announcement";
 import { createDurablePersist } from "./durable-persist";
 import { getSecureRandomBytes } from "./crypto-utils";
 import { hasRouteHint, appendRouteHints, type HintHop } from "./bolt11-hints";
+import { buildUserConfig } from "./user-config";
 import { selectHintChannels, prioritizeHints, forwardingInfoFromLdk, type HintableChannel } from "./hint-selection";
 import { EsploraSyncClient, ldkTxidToDisplay } from "./esplora-client";
 import { LspsClient } from "./lsps-client";
@@ -815,24 +815,16 @@ export class LibreListenerWallet {
       this.keysManager.as_EntropySource()
     );
 
-    // 10. Load or construct ChannelManager
-    const userConfig = UserConfig.constructor_default();
-    userConfig.set_manually_accept_inbound_channels(true);
-    userConfig.get_channel_handshake_config().set_negotiate_anchors_zero_fee_htlc_tx(true);
-    // Confirmations we wait for as the fundee of an inbound CONFIRMED channel (LDK's default is 6).
-    // A trusted-peer 0-conf open bypasses this via accept_inbound_channel_from_trusted_peer_0conf.
-    userConfig.get_channel_handshake_config().set_minimum_depth(
-      resolveMinChannelConfirmations(this.config.minChannelConfirmations)
-    );
-    // Announced (public) channels must match the counterparty's preference. Default
-    // private; enable when accepting public channels (e.g. from the Mutinynet faucet).
-    userConfig.get_channel_handshake_config().set_announce_for_forwarding(this.config.announceChannels ?? false);
-    // Accept HTLCs worth less than the invoice amount by the LSP's skimmed opening fee — required
-    // for LSPS2 JIT, where the LSP deducts its opening fee from the first incoming payment before
-    // forwarding it to us. Without this LDK rejects the underpaying HTLC and the JIT payment fails.
-    const jitChannelConfig = userConfig.get_channel_config();
-    jitChannelConfig.set_accept_underpaying_htlcs(true);
-    userConfig.set_channel_config(jitChannelConfig);
+    // 10. Load or construct ChannelManager. The handshake policy (minimum_depth, announce,
+    // full-capacity inbound HTLCs, JIT underpaying-htlc acceptance) lives in buildUserConfig so it's
+    // unit-testable against the real bindings — see user-config.ts.
+    const userConfig = buildUserConfig({
+      // Confirmations we wait for as the fundee of an inbound CONFIRMED channel (LDK's default is 6).
+      // A trusted-peer 0-conf open bypasses this via accept_inbound_channel_from_trusted_peer_0conf.
+      minimumDepth: resolveMinChannelConfirmations(this.config.minChannelConfirmations),
+      // Announced (public) channels must match the counterparty's preference. Default private.
+      announceChannels: this.config.announceChannels ?? false,
+    });
 
     const managerHex = await this.storage.getItem("channel_manager");
     if (managerHex) {
@@ -1361,8 +1353,8 @@ export class LibreListenerWallet {
   /**
    * Create a BOLT11 invoice to receive a payment (sats). Returns the invoice string.
    */
-  async createInvoice(amountSats: number, description = "Libre Listener Wallet", expirySeconds = 3600): Promise<string> {
-    const { invoice } = await this.buildInvoice(BigInt(Math.round(amountSats)) * 1000n, description, expirySeconds);
+  async createInvoice(amountSats: number, description = "Libre Listener Wallet", expirySeconds?: number): Promise<string> {
+    const { invoice } = await this.buildInvoice(BigInt(Math.round(amountSats)) * 1000n, description, resolveInvoiceExpiry(expirySeconds));
     this.logger?.info(`[Receive] Created BOLT11 invoice for ${amountSats} sats`);
     return invoice;
   }
@@ -2406,7 +2398,7 @@ export class LibreListenerWallet {
 
     // 4. Generate the BOLT11 invoice with the same payment hash via the shared builder, forcing the
     // intercept hint (preimage persisted for the claim path).
-    const { invoice: invoiceStr } = await this.buildInvoice(amountMsat, description, 3600, preimage, jitHint);
+    const { invoice: invoiceStr } = await this.buildInvoice(amountMsat, description, DEFAULT_INVOICE_EXPIRY_SECONDS, preimage, jitHint);
     this.logger?.info(`[LSPS2] Generated JIT invoice with intercept scid ${buyRes.jit_channel_scid}`);
 
     return invoiceStr;

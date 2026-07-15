@@ -16,7 +16,8 @@ import {
   budgetWindowElapsed,
   NWC_ALWAYS_ALLOWED_METHODS,
   paymentRecordsToNwcTransactions,
-  buildGatewayAuthTemplate
+  buildGatewayAuthTemplate,
+  resolveInvoiceExpiry
 } from "@libre/shared";
 import {
   Bolt11Invoice,
@@ -716,7 +717,7 @@ export class NwcManager {
       } else if (request.method === "make_invoice") {
         const amountMsat = BigInt(request.params.amount);
         const description = request.params.description || "";
-        const expiry = request.params.expiry || 3600;
+        const expiry = resolveInvoiceExpiry(request.params.expiry);
 
         // The wallet owns the single invoice builder (it persists the preimage for claims).
         const invoiceStr = await this.wallet.createInvoice(Number(amountMsat / 1000n), description, expiry);

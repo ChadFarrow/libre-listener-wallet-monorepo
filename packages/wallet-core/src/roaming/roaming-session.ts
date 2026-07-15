@@ -60,7 +60,7 @@ export interface RoamingSessionOptions {
 }
 
 export class RoamingSession {
-  private state: RoamingViewState = { view: "checking" };
+  private state: RoamingViewState = { view: "stopped" }; // nothing booted yet — boot() flips to "checking"
   /** The lease record as it stood BEFORE we claimed — the crash-gap evidence. */
   private preClaimRecord: RoamingLeaseRecord | null = null;
   private readonly now: () => number;

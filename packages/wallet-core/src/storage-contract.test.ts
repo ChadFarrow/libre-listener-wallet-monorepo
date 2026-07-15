@@ -13,6 +13,7 @@ import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./core/stora
 import { resolveSwConfig } from "./core/sw-config";
 import { mirrorKeyForNetwork } from "./core/state-version-mirror";
 import { backupFilename, networkFromBackupFilename } from "./drive-backup";
+import { leaseFilename } from "./roaming/drive-lease";
 
 describe("storage contract: per-network DB name", () => {
   it("is `libre-wallet-<network>` for every supported network", () => {
@@ -43,6 +44,16 @@ describe("storage contract: state-version mirror key", () => {
   it("is `libre_state_version_hwm:<network>`", () => {
     expect(mirrorKeyForNetwork("mainnet")).toBe("libre_state_version_hwm:mainnet");
     expect(mirrorKeyForNetwork("")).toBe("libre_state_version_hwm:mainnet");
+  });
+});
+
+// The roaming lease file: every origin (and app version) must coordinate on the SAME Drive file —
+// a renamed lease means two versions "coordinate" on different files, i.e. no single-instance
+// guard at all, i.e. two live nodes on one channel (force-close).
+describe("storage contract: roaming lease filename", () => {
+  it("is `libre-wallet-lease-<network>.json`", () => {
+    expect(leaseFilename("mainnet")).toBe("libre-wallet-lease-mainnet.json");
+    expect(leaseFilename("regtest")).toBe("libre-wallet-lease-regtest.json");
   });
 });
 

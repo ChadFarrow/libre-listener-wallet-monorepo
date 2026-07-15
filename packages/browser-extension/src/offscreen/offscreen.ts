@@ -1,5 +1,5 @@
 import { WalletHost } from "./wallet-host";
-import { handleWeblnRequest } from "../core/webln-mapping";
+import { handleWeblnRequest } from "@libre/wallet-core";
 import { MSG, type RpcResponse } from "../core/messages";
 import { isFromExtensionContext } from "../core/sender-guard";
 

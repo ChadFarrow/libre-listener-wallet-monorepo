@@ -6,7 +6,7 @@ import {
   Event_PaymentFailed,
   Option_ThirtyTwoBytesZ_Some,
 } from "lightningdevkit";
-import { settlementPendingMessage } from "../core/settlement-pending";
+import { settlementPendingMessage } from "@libre/wallet-core";
 
 // Awaits outbound-payment settlement by payment hash, resolving with the preimage on
 // Event_PaymentSent and rejecting on Event_PaymentFailed. This mirrors the pendingPayments

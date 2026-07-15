@@ -1,5 +1,5 @@
 import { MSG, type RpcResponse } from "./core/messages";
-import { isAllowedWeblnMethod } from "./core/webln-gate";
+import { isAllowedWeblnMethod } from "@libre/wallet-core";
 import { WEBLN_MSG_SOURCE, type InpageRequest, type InpageResponse } from "./core/inpage-protocol";
 
 // Runs in the page's ISOLATED world at document_start. Two jobs:

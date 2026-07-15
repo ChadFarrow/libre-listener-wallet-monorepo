@@ -15,6 +15,7 @@
   "dependencies": {
     "@libre/listener-wallet": "workspace:*",
     "@libre/shared": "workspace:*",
+    "@libre/wallet-core": "workspace:*",
     "@scure/base": "^2.0.0",
     "lightningdevkit": "^0.1.0",
     "qrcode": "^1.5.4"

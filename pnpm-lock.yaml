@@ -40,6 +40,9 @@ importers:
       '@libre/shared':
         specifier: workspace:*
         version: link:../shared
+      '@libre/wallet-core':
+        specifier: workspace:*
+        version: link:../wallet-core
       '@scure/base':
         specifier: ^2.0.0
         version: 2.0.0

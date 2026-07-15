@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isAllowedWeblnMethod } from "./webln-gate";
+import { isAllowedWeblnMethod } from "@libre/wallet-core";
 
 describe("isAllowedWeblnMethod", () => {
   it("allows the WebLN provider surface", () => {

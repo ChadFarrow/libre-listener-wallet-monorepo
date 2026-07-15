@@ -1,12 +1,12 @@
 import { MSG, newId, type RpcResponse } from "./core/messages";
-import { PermissionStore } from "./core/permission-store";
+import { PermissionStore } from "@libre/wallet-core";
 import { chromeKV } from "./core/chrome-kv";
-import { normalizeSendPayment, spendAmountSats } from "./core/webln-mapping";
-import { isAllowedWeblnMethod } from "./core/webln-gate";
+import { normalizeSendPayment, spendAmountSats } from "@libre/wallet-core";
+import { isAllowedWeblnMethod } from "@libre/wallet-core";
 import { isFromExtensionContext } from "./core/sender-guard";
-import { invoiceAmountSats } from "./core/bolt11-amount";
-import { isSettlementPending } from "./core/settlement-pending";
-import { resolveGrantLimitSats, resolveGrantOrigin } from "./core/approval-grant";
+import { invoiceAmountSats } from "@libre/wallet-core";
+import { isSettlementPending } from "@libre/wallet-core";
+import { resolveGrantLimitSats, resolveGrantOrigin } from "@libre/wallet-core";
 import { buildAuthUrl, parseTokenFromRedirect } from "./core/drive-oauth";
 import {
   uploadBackup,

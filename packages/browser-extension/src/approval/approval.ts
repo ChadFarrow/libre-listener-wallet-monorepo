@@ -1,5 +1,5 @@
 import { MSG } from "../core/messages";
-import { parseCapInput } from "../core/cap-input";
+import { parseCapInput } from "@libre/wallet-core";
 
 // Approval prompt shown in its own popup window when an un-granted origin calls webln.enable().
 // Sends the user's decision back to the background, which is holding the enable() promise. If the

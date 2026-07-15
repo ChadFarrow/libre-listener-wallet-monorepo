@@ -7,7 +7,7 @@
 // lets an enabled origin mint an unlimited NWC pairing, exfiltrate the (encrypted) seed envelope,
 // or read the raw seed out of createWallet. This allowlist is that boundary.
 
-import { WEBLN_METHODS } from "./messages";
+import { WEBLN_METHODS } from "./webln-methods";
 
 const ALLOWED = new Set<string>(WEBLN_METHODS);
 

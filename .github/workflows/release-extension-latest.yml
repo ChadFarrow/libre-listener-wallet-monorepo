@@ -17,6 +17,7 @@ on:
     branches: [master]
     paths:
       - "packages/browser-extension/**"
+      - "packages/wallet-core/**"
       - "packages/libre-listener-wallet/**"
       - "packages/shared/**"
       - ".github/workflows/release-extension-latest.yml"

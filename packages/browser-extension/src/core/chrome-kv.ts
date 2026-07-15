@@ -1,4 +1,4 @@
-import type { KVStore } from "./permission-store";
+import type { KVStore } from "@libre/wallet-core";
 
 // KVStore backed by chrome.storage.local. Kept separate from the wallet's IndexedDB — permission
 // grants are control-plane metadata, not wallet state, and live only in the extension origin.

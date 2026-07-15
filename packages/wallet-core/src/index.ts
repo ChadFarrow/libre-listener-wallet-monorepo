@@ -19,3 +19,13 @@ export * from "./core/peer-list";
 export * from "./core/address-script";
 export * from "./core/usable-smoothing";
 export * from "./core/drive-redirect";
+// Portable WebLN layer (extracted from the browser extension): the page-facing method gate,
+// the WebLN→WalletRpc mapping, and the per-origin permission/spending-cap store.
+export * from "./webln/webln-methods";
+export * from "./webln/webln-gate";
+export * from "./webln/webln-mapping";
+export * from "./webln/permission-store";
+export * from "./webln/cap-input";
+export * from "./webln/approval-grant";
+export * from "./webln/bolt11-amount";
+export * from "./webln/settlement-pending";

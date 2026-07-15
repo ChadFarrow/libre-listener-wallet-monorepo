@@ -9,7 +9,7 @@
 // audio keep-alive), it never boots a second node in the background — the force-close hazard the
 // service worker comment warns about is untouched.
 
-import { createKeepAlive, type KeepAlive } from "./keep-alive-audio";
+import { createNoopKeepAlive, type KeepAlive } from "./keep-alive-audio";
 
 // The wrapper's custom Capacitor plugin name (see packages/android-app native plugin).
 const PLUGIN_NAME = "LibreForegroundService";
@@ -156,14 +156,20 @@ export async function ensureBatteryOptimizationExemption(): Promise<void> {
 }
 
 // Choose the background-liveness strategy for the current platform. In the native wrapper a
-// foreground service holds the process alive far more reliably than the PWA's inaudible audio tone
-// and needs no user gesture — so prefer it when the plugin is present. Falls back to the audio tone
-// in a plain browser/PWA, or if a wrapper build hasn't registered the plugin yet.
+// foreground service holds the process alive and needs no user gesture — so use it when the plugin is
+// present. Everywhere else this is now an INERT no-op: the PWA's inaudible-audio keep-alive was
+// DISABLED 2026-07-15 because it cannot actually hold an iOS PWA alive — iOS suspends the page's audio
+// session in the background (the diagnostics showed "[KeepAlive] tone paused (audio focus lost or page
+// suspended)" on every visibilitychange hidden), so it never delivered background settlement and only
+// risked claiming the Now Playing slot / interrupting other apps' audio. Real background paths are the
+// native Android wrapper (foreground service, above) or Web Push tap-to-open. The audio implementation
+// lives on in keep-alive-audio.ts (createKeepAlive) if it's ever revisited.
 export function createKeepAliveForPlatform(): KeepAlive {
   if (isNativeApp()) {
     const svc = getNativeForegroundService();
     if (svc) return createNativeKeepAlive(svc);
-    console.warn("[KeepAlive] native app but no foreground-service plugin found — using audio keep-alive");
+    console.warn("[KeepAlive] native app but no foreground-service plugin found — background mode unavailable");
   }
-  return createKeepAlive();
+  // return createKeepAlive(); // PWA audio keep-alive disabled — see the note above.
+  return createNoopKeepAlive();
 }

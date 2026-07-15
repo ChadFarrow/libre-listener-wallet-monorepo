@@ -75,6 +75,26 @@ export function inaudibleWavDataUri(): string {
   return "data:audio/wav;base64," + btoa(bin);
 }
 
+// Inert keep-alive: every method is a no-op and it never reports itself active or needing activation.
+// createKeepAliveForPlatform uses this on a plain PWA now the inaudible-audio keep-alive is disabled
+// there — it cannot actually hold an iOS PWA alive (iOS suspends the page's audio session on
+// background, so the tone paused on every visibilitychange hidden and no background settlement
+// happened), and playing audio only risked claiming the Now Playing slot. Keeps every KeepAlive call
+// site valid without playing any audio.
+export function createNoopKeepAlive(): KeepAlive {
+  return {
+    start(): void {},
+    stop(): void {},
+    unlock(): void {},
+    isActive(): boolean {
+      return false;
+    },
+    needsActivation(): boolean {
+      return false;
+    },
+  };
+}
+
 export function createKeepAlive(): KeepAlive {
   let audio: HTMLAudioElement | null = null;
   let armed = false;

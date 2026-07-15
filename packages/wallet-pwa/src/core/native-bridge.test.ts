@@ -379,19 +379,26 @@ describe("createKeepAliveForPlatform", () => {
     expect(ka.needsActivation()).toBe(false);
   });
 
-  it("falls back to audio keep-alive in a plain browser", () => {
+  it("returns an inert no-op keep-alive in a plain browser (PWA audio keep-alive disabled)", () => {
     const ka = createKeepAliveForPlatform();
-    // The audio impl needs a gesture to activate (needsActivation becomes true once wanted-but-blocked).
+    // No-op: never active, never asks for a tap, and every method is a safe no-op (no audio played).
     expect(ka.isActive()).toBe(false);
-    expect(() => ka.start()).not.toThrow();
+    expect(ka.needsActivation()).toBe(false);
+    expect(() => {
+      ka.start();
+      ka.unlock();
+      ka.stop();
+    }).not.toThrow();
+    expect(ka.isActive()).toBe(false);
   });
 
-  it("falls back to audio keep-alive when native but the plugin is missing", () => {
+  it("returns an inert no-op (and warns) when native but the foreground-service plugin is missing", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     g.__LIBRE_NATIVE__ = true;
     g.Capacitor = { Plugins: {} };
     const ka = createKeepAliveForPlatform();
     expect(ka).toBeTruthy();
+    expect(ka.needsActivation()).toBe(false);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

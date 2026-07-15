@@ -123,3 +123,77 @@ The wallet lives in ONE place at a time. If it's active on another site, the wid
 "Your wallet is active on <origin>" with **Move wallet here** — the other tab hands off cleanly
 within ~40s. The first login on each new origin asks for the recovery phrase once (the backup
 is end-to-end encrypted; Drive never sees keys). Details: `docs/roaming-protocol.md`.
+
+## Worked example: boostmebitch (Libre as a wallet-modal rail)
+
+boostmebitch already drives boosts through `window.webln` directly (`lib/v4v/webln.ts`:
+`!!window.webln` → `enable()`/`sendPayment()`/`keysend()`), so `installWebln: true` is all it
+takes for the existing boost orchestrator to route through Libre — no change to the boost code.
+Add Libre as its own option in the wallet picker so there's one place to connect.
+
+**1. Install + ship the wasm** (npm project, Next.js on Vercel):
+
+```jsonc
+// npm i https://github.com/ChadFarrow/libre-listener-wallet-monorepo/releases/download/wallet-embed-latest/libre-wallet-embed.tgz
+"scripts": {
+  // Vercel runs postinstall; copies the bundled wasm so it serves at /liblightningjs.wasm
+  "postinstall": "node -e \"require('fs').copyFileSync('node_modules/@libre/wallet-embed/dist/liblightningjs.wasm','public/liblightningjs.wasm')\""
+}
+```
+Add `public/liblightningjs.wasm` to `.gitignore` (regenerated on install).
+
+**2. `components/libre-wallet.tsx`** — a client component that mounts the widget and reports its
+roaming state to the modal:
+
+```tsx
+'use client';
+import { useEffect, useRef } from 'react';
+
+export function LibreWallet({
+  onConnected,
+  onDisconnected,
+}: {
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let handle: { dispose(): Promise<void>; onState?: (cb: (s: { view: string }) => void) => () => void } | undefined;
+    let unsub: (() => void) | undefined;
+    void import('@libre/wallet-embed').then(({ mountLibreWallet }) => {
+      if (!ref.current) return;
+      handle = mountLibreWallet(ref.current, {
+        googleClientId: process.env.NEXT_PUBLIC_LIBRE_GOOGLE_CLIENT_ID!,
+        wasmUrl: '/liblightningjs.wasm',
+        appName: 'boostmebitch',
+        installWebln: true,
+      });
+      unsub = handle.onState?.((s) => {
+        if (s.view === 'running') onConnected?.();
+        else if (s.view === 'stopped' || s.view === 'moved-away') onDisconnected?.();
+      });
+    });
+    return () => {
+      unsub?.();
+      void handle?.dispose();
+    };
+  }, [onConnected, onDisconnected]);
+  return <div ref={ref} />;
+}
+```
+
+**3. `components/wallet-modal.tsx`** — three edits mirroring the existing NWC/WebLN rails:
+add `'libre'` to the rail union; add a picker card (`{ rail: 'libre', title: 'Libre Wallet',
+description: 'Your roaming Lightning wallet — runs in this app' }`, shown unconditionally, not
+gated like the `weblnDetected` WebLN card); and render `{activeRail === 'libre' && <LibreWallet
+onConnected={…} onDisconnected={handleDisconnected} />}` in the connecting/connected branch (the
+widget draws its own connect/running/disconnect UI — no `mode` prop needed).
+
+Because `installWebln` sets `window.webln`, the modal's separate WebLN card also becomes
+"detected" once Libre mounts. Optional: hide the `webln` picker entry while the Libre rail is
+connected so users aren't offered two doors to the same wallet.
+
+**4. Config:** set `NEXT_PUBLIC_LIBRE_GOOGLE_CLIENT_ID` (the wallet PWA's OAuth client id) in
+Vercel + `.env.local`; register `https://boostmebitch.vercel.app` and `http://localhost:3000` in
+the OAuth client's JS-origins AND redirect URIs (per the top of this doc); check `next.config.*`
+for a CSP and, if present, add the allowances above.

@@ -19,6 +19,11 @@ export * from "./core/peer-list";
 export * from "./core/address-script";
 export * from "./core/usable-smoothing";
 export * from "./core/drive-redirect";
+// Roaming wallet: one wallet that MOVES between origins over the Drive backup, with a Drive-file
+// lease as the cross-origin single-instance guard (see docs/roaming-protocol.md).
+export * from "./roaming/roaming-policy";
+export * from "./roaming/drive-lease";
+export * from "./roaming/roaming-session";
 // Portable WebLN layer (extracted from the browser extension): the page-facing method gate,
 // the WebLN→WalletRpc mapping, and the per-origin permission/spending-cap store.
 export * from "./webln/webln-methods";

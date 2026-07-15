@@ -116,7 +116,8 @@ import { EsploraSyncClient, ldkTxidToDisplay } from "./esplora-client";
 import { LspsClient } from "./lsps-client";
 import { NwcManager } from "./nwc-manager";
 import { IndexedDBStorageProvider } from "./indexed-db-storage";
-import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, BackupPayload } from "./state-backup";
+import { serializeAndEncrypt, serializeAndEncryptV1, decryptAndParse, verifyBackupEnvelope, BackupPayload } from "./state-backup";
+export { verifyBackupEnvelope, type BackupVerification } from "./state-backup";
 import { BACKUP_DIRECT_KEYS } from "./backup-keys";
 import { VssClient } from "./vss-client";
 import { VssMirror, deriveVssStoreId, VSS_STATE_BACKUP_KEY } from "./vss-mirror";
@@ -1768,25 +1769,8 @@ export class LibreListenerWallet {
     stateVersion?: number;
     error?: string;
   }> {
-    try {
-      const payload = await decryptAndParse(envelope, secret);
-      const seedInBackup = payload.entries["ldk_seed"];
-      // Accept a 24-word recovery phrase as the seed secret: normalize to hex so
-      // the seedMatches comparison below works for both phrase and raw-hex input.
-      const resolvedSecret = normalizeBackupSecret(secret);
-      const isHex = /^[0-9a-fA-F]{64}$/.test(resolvedSecret);
-      const versionRaw = payload.entries["state_version"];
-      return {
-        ok: true,
-        network: payload.network,
-        hasSeed: !!seedInBackup,
-        seedMatches: isHex ? seedInBackup?.toLowerCase() === resolvedSecret.toLowerCase() : undefined,
-        entryKeys: Object.keys(payload.entries),
-        stateVersion: versionRaw ? parseInt(versionRaw, 10) || 0 : 0,
-      };
-    } catch (e) {
-      return { ok: false, hasSeed: false, entryKeys: [], error: e instanceof Error ? e.message : String(e) };
-    }
+    // Delegates to the pure state-backup verifier so wallet-free callers (roaming boot) share it.
+    return verifyBackupEnvelope(envelope, secret);
   }
 
   // --- exposed properties & methods ---

@@ -1021,6 +1021,44 @@ export class WalletController {
     }
   }
 
+  /**
+   * Keysend (spontaneous) payment — the WebLN `keysend` surface for the embeddable widget's
+   * host apps (V4V boosts carry bLIP-10 TLVs in customRecords). Routes through the SDK's single
+   * keysend path (the same one NWC pay_keysend uses). ACKS ON DISPATCH: we mint the preimage
+   * ourselves, so once send_spontaneous_payment succeeds the payment is irrevocably in flight
+   * and the preimage is returnable — the proven NWC/Alby-Go pattern; settlement lands in the
+   * payment log via the SDK's event demux.
+   */
+  async payKeysend(args: {
+    destination: string;
+    amountSats: number;
+    customRecords?: Record<number, string>;
+  }): Promise<{ preimage: string }> {
+    this.requireRunning();
+    if (this.payingPromise) throw new Error("A payment is already in progress.");
+    const amt = Math.floor(Number(args.amountSats));
+    if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter a positive amount in sats.");
+    if (!/^[0-9a-fA-F]{66}$/.test(args.destination)) throw new Error("Invalid destination node pubkey.");
+    const preimage = crypto.getRandomValues(new Uint8Array(32));
+    this.payingPromise = (async () => {
+      const res = await this.wallet!.sendKeysendPayment({
+        destinationPubkey: args.destination,
+        amountSats: amt,
+        customRecords: args.customRecords ?? {},
+        preimage,
+      });
+      if (!res.ok) throw new Error(`Keysend failed: ${res.error}`);
+      return { preimage: bytesToHex(preimage), amountSats: amt };
+    })();
+    try {
+      const { preimage: preimageHex } = await this.payingPromise;
+      return { preimage: preimageHex };
+    } finally {
+      this.payingPromise = undefined;
+      this.emit("state-changed");
+    }
+  }
+
   // ---- Peers ----
 
   // Rows for the Peers screen. Works stopped (address book only, all disconnected); running

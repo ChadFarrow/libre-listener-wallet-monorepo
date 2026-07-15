@@ -9,7 +9,7 @@ CLAUDE.md). Implementation: `packages/wallet-core/src/roaming/` (`roaming-policy
 ## Why this exists
 
 - Browser storage is per-origin: a wallet on `libre-wallet-pwa.pages.dev` is invisible to
-  `boostmebitch.vercel.app`. Third-party iframe storage is partitioned in modern browsers, so an
+  `boostmebitch.com`. Third-party iframe storage is partitioned in modern browsers, so an
   iframe can't share it either.
 - A Lightning channel's state may only ever advance in ONE running node. "Same seed everywhere"
   must therefore mean **move, not share**.

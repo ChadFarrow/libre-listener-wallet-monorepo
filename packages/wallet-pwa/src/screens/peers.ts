@@ -1,7 +1,7 @@
 import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
 import { isDemoMode } from "../core/demo-mode";
-import { parsePeerString } from "../core/wallet-config";
+import { parsePeerString } from "@libre/wallet-core";
 import { guardedClick } from "../core/ui-helpers";
 import { registerScreen, currentScreen, showScreen, goBack } from "../ui/nav";
 import { $, setMsg } from "./util";

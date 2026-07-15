@@ -6,7 +6,7 @@ import { initScreens } from "./index";
 import { showScreen } from "../ui/nav";
 import { emitControllerEvent } from "../core/events";
 import type { AppContext } from "../core/app-context";
-import type { WalletController } from "../wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,7 +63,7 @@ describe("start() channel-state regression → forced restore screen", () => {
       }),
       startNode: vi.fn().mockRejectedValue(new RegressionError()),
       getPayments: vi.fn().mockResolvedValue([]),
-    } as unknown as WalletController;
+    } as unknown as WalletControllerApi;
     const ctx: AppContext = { controller, isRunning: () => false, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 
     initScreens(ctx);
@@ -101,7 +101,7 @@ describe("start() channel-state regression → forced restore screen", () => {
       }),
       startNode: vi.fn().mockRejectedValue(new BackupAheadStub()),
       getPayments: vi.fn().mockResolvedValue([]),
-    } as unknown as WalletController;
+    } as unknown as WalletControllerApi;
     const ctx: AppContext = { controller, isRunning: () => false, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 
     initScreens(ctx);

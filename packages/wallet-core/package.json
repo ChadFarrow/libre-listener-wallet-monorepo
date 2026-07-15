@@ -1,11 +1,12 @@
 {
-  "name": "@libre/wallet-pwa",
+  "name": "@libre/wallet-core",
   "version": "0.1.0",
-  "private": true,
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
+    "build": "tsup",
+    "dev": "tsup --watch",
     "test": "vitest run",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit"
@@ -13,19 +14,13 @@
   "dependencies": {
     "@libre/listener-wallet": "workspace:*",
     "@libre/shared": "workspace:*",
-    "@libre/wallet-core": "workspace:*",
-    "@scure/base": "^2.0.0",
-    "nostr-tools": "^2.7.2",
-    "qrcode": "^1.5.4"
+    "@scure/base": "^2.0.0"
   },
   "devDependencies": {
-    "@types/qrcode": "^1.5.6",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^24.0.0",
-    "sharp": "^0.35.3",
     "tsup": "^8.0.2",
     "typescript": "^5.4.5",
-    "vite": "^5.2.11",
     "vitest": "^1.6.0"
   }
 }

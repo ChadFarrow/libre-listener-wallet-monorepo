@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { initScreens } from "./index";
 import { showScreen } from "../ui/nav";
 import type { AppContext } from "../core/app-context";
-import type { WalletController } from "../wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 import { NodeAlreadyRunningError } from "@libre/listener-wallet";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,7 +37,7 @@ describe("start() single-node-lock conflict", () => {
       }),
       startNode: vi.fn().mockRejectedValue(new NodeAlreadyRunningError()),
       getPayments: vi.fn().mockResolvedValue([]),
-    } as unknown as WalletController;
+    } as unknown as WalletControllerApi;
     const ctx: AppContext = { controller, isRunning: () => false, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 
     initScreens(ctx);

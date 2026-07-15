@@ -9,9 +9,9 @@
 // pinned in packages/libre-listener-wallet/src/tests/unit/storage-contract.test.ts.
 
 import { describe, it, expect } from "vitest";
-import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "./storage-namespace";
-import { resolveSwConfig } from "./sw-config";
-import { backupFilename, networkFromBackupFilename } from "../drive-backup";
+import { dbNameForNetwork, META_DB_NAME, ACTIVE_NETWORK_KEY } from "@libre/wallet-core";
+import { resolveSwConfig } from "@libre/wallet-core";
+import { backupFilename, networkFromBackupFilename } from "@libre/wallet-core";
 
 // Per-network IndexedDB name. The app, the service worker, and web-push all derive
 // the DB they open from this exact format; migrateStorage reads the legacy

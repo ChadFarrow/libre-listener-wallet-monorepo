@@ -89,9 +89,15 @@ export class WalletController {
   // out of the controller so it stays Drive-agnostic. Absent → treated as no backup (never defers).
   private backupStatus?: () => { configured: boolean; connected: boolean };
 
-  constructor(emit: ControllerEvent = () => {}) {
+  // Where the LDK WASM binary is served from. Injected because this library has no build-tool
+  // context (the PWA passes its Vite BASE_URL-prefixed path; an embed host passes its own asset
+  // URL). Default matches a root-served `liblightningjs.wasm`.
+  private wasmUrl: string;
+
+  constructor(emit: ControllerEvent = () => {}, opts: { wasmUrl?: string } = {}) {
     this.meta = new IndexedDBStorageProvider(META_DB_NAME);
     this.emit = emit;
+    this.wasmUrl = opts.wasmUrl ?? "/liblightningjs.wasm";
   }
 
   isRunning(): boolean {
@@ -442,8 +448,9 @@ export class WalletController {
       socketProvider,
       // Per-origin single-node lock: only one tab/window may run this network's node at a time.
       acquireRunLock: () => acquireWebNodeLock(nodeLockName(dbNameForNetwork(cfg.network))),
-      // Base-aware so the build works at a domain root (Cloudflare) or a project subpath.
-      wasmUrl: `${import.meta.env.BASE_URL}liblightningjs.wasm`,
+      // Injected by the app (the PWA passes a base-aware path so the build works at a domain
+      // root or a project subpath; an embed host passes wherever it serves the asset).
+      wasmUrl: this.wasmUrl,
       logger: {
         info: (m, ...a) => console.log("[LDK]", m, ...a),
         warn: (m, ...a) => console.warn("[LDK]", m, ...a),

@@ -1,7 +1,7 @@
-import type { WalletController } from "../wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 import { isChannelStateRegressionError, isNodeAlreadyRunningError } from "@libre/shared";
-import { isBackupAheadError, BACKUP_AHEAD_MSG } from "../core/backup-ahead";
-import { isStateRollbackError, STATE_ROLLBACK_MSG } from "../core/state-version-mirror";
+import { isBackupAheadError, BACKUP_AHEAD_MSG } from "@libre/wallet-core";
+import { isStateRollbackError, STATE_ROLLBACK_MSG } from "@libre/wallet-core";
 import { forceRestoreScreen, clearRestoreLatch } from "./restore";
 
 export const NODE_ALREADY_RUNNING_MSG =
@@ -12,7 +12,7 @@ export const NODE_ALREADY_RUNNING_MSG =
 // / state-rollback error MUST route to the forced-restore screen — starting on stale state would
 // force-close the channel — and never surface as a raw error/code. Returns true iff the node started.
 export async function startNodeWithGuards(
-  controller: WalletController,
+  controller: WalletControllerApi,
   onStatus: (msg: string, level?: "ok" | "err") => void,
 ): Promise<boolean> {
   onStatus("Starting node…");

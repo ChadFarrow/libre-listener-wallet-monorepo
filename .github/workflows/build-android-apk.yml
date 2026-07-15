@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - "packages/wallet-pwa/**"
+      - "packages/wallet-core/**"
       - "packages/shared/**"
       - "packages/libre-listener-wallet/**"
       - "packages/android-app/**"

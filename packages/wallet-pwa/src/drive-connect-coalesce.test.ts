@@ -16,8 +16,8 @@ const { state, connectMock, pending } = vi.hoisted(() => {
   return { state, connectMock, pending };
 });
 
-vi.mock("./drive-backup", async (importActual) => {
-  const actual = await importActual<typeof import("./drive-backup")>();
+vi.mock("@libre/wallet-core", async (importActual) => {
+  const actual = await importActual<typeof import("@libre/wallet-core")>();
   return {
     ...actual,
     isConnected: () => state.connected,

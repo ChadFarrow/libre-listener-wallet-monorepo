@@ -6,7 +6,7 @@ import { initScreens } from "./index";
 import { showScreen } from "../ui/nav";
 import { PILL_SETTLE_MS } from "./home";
 import type { AppContext } from "../core/app-context";
-import type { WalletController } from "../wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,7 +70,7 @@ describe("home status pill: tap-to-start starts the node directly (no detour to 
       startNode: vi.fn().mockResolvedValue({ nodeId: "abc", network: "mainnet" }),
       getPayments: vi.fn().mockResolvedValue([]),
       isRunning: () => false,
-    } as unknown as WalletController;
+    } as unknown as WalletControllerApi;
     const ctx: AppContext = { controller, isRunning: () => false, keepAlive };
 
     initScreens(ctx);
@@ -96,7 +96,7 @@ describe("home status pill: tap-to-start starts the node directly (no detour to 
       startNode: vi.fn().mockRejectedValue(new RegressionError()),
       getPayments: vi.fn().mockResolvedValue([]),
       isRunning: () => false,
-    } as unknown as WalletController;
+    } as unknown as WalletControllerApi;
     const ctx: AppContext = { controller, isRunning: () => false, keepAlive };
 
     initScreens(ctx);

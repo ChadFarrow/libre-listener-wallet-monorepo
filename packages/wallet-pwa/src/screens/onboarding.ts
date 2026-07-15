@@ -9,7 +9,7 @@ import {
   chooseBackupFolder,
   nativeBackupNow,
 } from "../core/native-backup";
-import { isDriveForeignBackupError } from "../drive-backup";
+import { isDriveForeignBackupError } from "@libre/wallet-core";
 import { isDemoMode, demoState } from "../core/demo-mode";
 import { currentScreen, showScreen } from "../ui/nav";
 import { $, show, setMsg } from "./util";

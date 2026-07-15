@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { initScreens } from "./index";
 import { openDrawer } from "../ui/nav";
 import type { AppContext } from "../core/app-context";
-import type { WalletController } from "../wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -45,7 +45,7 @@ describe("drawer → screen navigation", () => {
       listPeers: vi.fn().mockResolvedValue([]),
       getBalance: vi.fn().mockResolvedValue({ spendableSat: 0, receivableSat: 0 }),
       getChannels: vi.fn().mockResolvedValue([]),
-    } as unknown as WalletController;
+    } as unknown as WalletControllerApi;
     const ctx: AppContext = { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 
     initScreens(ctx);
@@ -82,7 +82,7 @@ describe("drawer → screen navigation", () => {
       getBalance: vi.fn().mockResolvedValue({ spendableSat: 0, receivableSat: 0 }),
       getChannels: vi.fn().mockResolvedValue([]),
       getConfig: vi.fn().mockResolvedValue({ network: "mainnet" }),
-    } as unknown as WalletController;
+    } as unknown as WalletControllerApi;
     const ctx: AppContext = { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 
     initScreens(ctx);

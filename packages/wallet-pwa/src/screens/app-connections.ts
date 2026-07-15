@@ -2,7 +2,7 @@ import type { AppContext } from "../core/app-context";
 import { onControllerEvent } from "../core/events";
 import { parseNwcLimit } from "../core/nwc-limit";
 import { presetToAllowedMethods, presetLabel, type NwcPermissionPreset } from "../core/nwc-presets";
-import { limitLabel, expiryLabel, type NwcConnectionView } from "../core/nwc-connection-view";
+import { limitLabel, expiryLabel, type NwcConnectionView } from "@libre/wallet-core";
 import { expiryFromDays, parseBudgetRenewal } from "@libre/shared";
 import { guardedClick } from "../core/ui-helpers";
 import { confirmModal } from "../ui/confirm-modal";

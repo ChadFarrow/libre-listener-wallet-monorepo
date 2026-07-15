@@ -7,7 +7,7 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "check:storage": "pnpm --filter @libre/listener-wallet exec vitest run src/tests/unit/storage-contract.test.ts && pnpm --filter @libre/example-app exec vitest run src/core/storage-contract.test.ts && pnpm --filter @libre/browser-extension exec vitest run src/core/storage-contract.test.ts && pnpm --filter @libre/wallet-pwa exec vitest run src/core/storage-contract.test.ts",
+    "check:storage": "pnpm --filter @libre/wallet-core build && pnpm --filter @libre/wallet-core exec vitest run src/storage-contract.test.ts && pnpm --filter @libre/listener-wallet exec vitest run src/tests/unit/storage-contract.test.ts && pnpm --filter @libre/example-app exec vitest run src/core/storage-contract.test.ts && pnpm --filter @libre/browser-extension exec vitest run src/core/storage-contract.test.ts && pnpm --filter @libre/wallet-pwa exec vitest run src/core/storage-contract.test.ts",
     "prepare": "husky"
   },
   "devDependencies": {

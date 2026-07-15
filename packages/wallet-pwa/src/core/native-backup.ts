@@ -6,13 +6,13 @@
 // identically — the only difference is where the bytes land. No-op / unavailable in a plain PWA.
 
 import { isNativeApp } from "./native-bridge";
-import type { WalletController } from "../wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 import {
   backupFilename,
   networkFromBackupFilename,
   pickRestoreNetwork,
   DriveForeignBackupError,
-} from "../drive-backup";
+} from "@libre/wallet-core";
 
 const PLUGIN_NAME = "LibreBackupStorage";
 // Persisted tree URI of the folder the user picked (SAF grants a persistable permission to it).
@@ -84,7 +84,7 @@ export function clearBackupFolder(): void {
 // Write the current encrypted backup envelope into the chosen folder. Mirrors driveBackupNow,
 // including the fund-safety foreign-backup guard: never overwrite a backup that belongs to a
 // DIFFERENT wallet (a fresh seed after a wipe must not clobber the funded wallet's only copy).
-export async function nativeBackupNow(controller: WalletController): Promise<{ network: string }> {
+export async function nativeBackupNow(controller: WalletControllerApi): Promise<{ network: string }> {
   const p = plugin();
   const uri = treeUri();
   if (!p || !uri) throw new Error("Choose a backup folder first.");
@@ -122,7 +122,7 @@ export async function nativeBackupNetworks(): Promise<string[]> {
 
 // Read the backup from the chosen folder (auto-detecting the network) and restore it. Mirrors
 // driveRestore.
-export async function nativeRestore(controller: WalletController, secret: string): Promise<void> {
+export async function nativeRestore(controller: WalletControllerApi, secret: string): Promise<void> {
   const p = plugin();
   const uri = treeUri();
   if (!p || !uri) throw new Error("Choose a backup folder first.");

@@ -1,7 +1,7 @@
 import type { PaymentRecord } from "@libre/shared";
-import type { ControllerEvent } from "../wallet-controller";
-import type { NwcConnectionView } from "./nwc-connection-view";
-import type { PeerRow } from "./peer-list";
+import type { ControllerEvent } from "@libre/wallet-core";
+import type { NwcConnectionView } from "@libre/wallet-core";
+import type { PeerRow } from "@libre/wallet-core";
 import { demoState } from "./demo-mode";
 
 // A fake, in-memory WalletController stand-in for demo mode (?demo): every flow works and

@@ -1,4 +1,4 @@
-// Thin glue between the Drive REST module (drive-backup.ts) and the WalletController, shared by the
+// Thin glue between the Drive REST module (drive-backup.ts) and the WalletControllerApi, shared by the
 // home (restore) and settings (connect / backup-now) views. Keeps the GIS token flow and the
 // remembered-account hint in one place.
 import {
@@ -14,8 +14,8 @@ import {
   DriveForeignBackupError,
   DRIVE_HINT_KEY as HINT_KEY,
   isDriveConfiguredPersisted,
-} from "./drive-backup";
-import type { WalletController } from "./wallet-controller";
+} from "@libre/wallet-core";
+import type { WalletControllerApi } from "@libre/wallet-core";
 import { isDemoMode } from "./core/demo-mode";
 import { isStandaloneDisplay } from "./core/display-mode";
 
@@ -111,7 +111,7 @@ export function markDriveSyncPending(): void {
 // persisted or logged.
 const confirmedOwnBackup = new Map<string /*network*/, string /*seedHex*/>();
 
-export async function driveBackupNow(controller: WalletController): Promise<{ network: string }> {
+export async function driveBackupNow(controller: WalletControllerApi): Promise<{ network: string }> {
   await ensureDriveConnected();
   const envelope = await controller.exportBackup();
   const { network } = await controller.getState();
@@ -159,7 +159,7 @@ export async function peekBackupEnvelope(network: string): Promise<string | null
 }
 
 // Fetch the backup from Drive (auto-detecting the network) and restore it with the given secret.
-export async function driveRestore(controller: WalletController, secret: string): Promise<void> {
+export async function driveRestore(controller: WalletControllerApi, secret: string): Promise<void> {
   await ensureDriveConnected();
   const networks = await listBackupNetworks();
   const network = pickRestoreNetwork(networks);

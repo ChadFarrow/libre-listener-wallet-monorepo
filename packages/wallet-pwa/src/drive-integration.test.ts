@@ -10,8 +10,8 @@ const { uploadBackup, dl } = vi.hoisted(() => ({
   uploadBackup: vi.fn(async () => {}),
   dl: { result: null as string | null },
 }));
-vi.mock("./drive-backup", async (importActual) => {
-  const actual = await importActual<typeof import("./drive-backup")>();
+vi.mock("@libre/wallet-core", async (importActual) => {
+  const actual = await importActual<typeof import("@libre/wallet-core")>();
   return {
     ...actual,
     isConnected: () => true, // ensureDriveConnected returns early
@@ -22,7 +22,7 @@ vi.mock("./drive-backup", async (importActual) => {
 });
 
 import { driveBackupNow } from "./drive-integration";
-import { isDriveForeignBackupError } from "./drive-backup";
+import { isDriveForeignBackupError } from "@libre/wallet-core";
 
 function fakeController(opts: { isOurs: boolean; seedHex: string }): any {
   return {

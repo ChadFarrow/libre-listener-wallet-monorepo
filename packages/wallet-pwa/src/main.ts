@@ -8,7 +8,7 @@ import { emitControllerEvent, onControllerEvent } from "./core/events";
 import { AUTO_START_KEY } from "@libre/shared";
 import { registerServiceWorker, wireInstallPrompt } from "./register-sw";
 import { downloadBackupName } from "./core/backup-name";
-import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync } from "./core/backup-policy";
+import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync, isTransientBackupStorageError } from "./core/backup-policy";
 import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail, markDriveSyncPending, peekBackupEnvelope } from "./drive-integration";
 import { completeDriveRedirect } from "./drive-backup";
 import { shouldArmGestureReconnect } from "./core/drive-ui";
@@ -229,13 +229,42 @@ onControllerEvent((event) => {
   markDriveSyncPending();
   clearTimeout(driveSyncTimer);
   driveSyncTimer = setTimeout(() => {
-    void driveBackupNow(controller)
-      .catch((e) => console.warn("[DriveSync] auto-backup failed:", (e as Error)?.message || e))
-      // "drive-sync" (not "state-changed" — that would re-arm this debounce forever) so the
-      // drawer re-reads driveSyncPending() and flips Syncing… → Synced ✓.
-      .finally(() => emitControllerEvent("drive-sync"));
+    void runDriveAutoSync();
   }, 5000);
 });
+
+// Fire-time backup for the debounce above. The 5s window can STRADDLE a node restart (an iOS
+// OAuth-redirect return, a forced-restore, an auto-start), and exporting while the storage layer is
+// being reopened throws "Attempt to get a record from database without an in-progress transaction"
+// (seen live 2026-07-15). Two guards: (1) re-check the node is actually running before exporting —
+// if it isn't, skip quietly, leaving the chip on "Syncing…" so the state-changes a completing start()
+// emits re-arm a fresh sync; (2) if the restart lands DURING the export, retry once after a beat
+// (the retry gets a fresh transaction) before surfacing a warning.
+async function runDriveAutoSync(): Promise<void> {
+  if (!controller.isRunning()) {
+    emitControllerEvent("drive-sync"); // still pending; next state-change re-arms
+    return;
+  }
+  try {
+    await driveBackupNow(controller);
+  } catch (e) {
+    const msg = (e as Error)?.message || String(e);
+    if (isTransientBackupStorageError(msg)) {
+      await new Promise((r) => setTimeout(r, 1000)); // let the concurrent restart settle
+      try {
+        if (controller.isRunning()) await driveBackupNow(controller);
+      } catch (e2) {
+        console.warn("[DriveSync] auto-backup failed:", (e2 as Error)?.message || e2);
+      }
+    } else {
+      console.warn("[DriveSync] auto-backup failed:", msg);
+    }
+  } finally {
+    // "drive-sync" (not "state-changed" — that would re-arm this debounce forever) so the
+    // drawer re-reads driveSyncPending() and flips Syncing… → Synced ✓.
+    emitControllerEvent("drive-sync");
+  }
+}
 
 // ---- Native (APK) SAF auto-backup (debounced on every state change) ----
 // Same hands-off guarantee as Drive auto-sync, but writes the encrypted envelope to the user's

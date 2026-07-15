@@ -30,3 +30,20 @@ export function shouldDriveAutoSync(opts: {
 }): boolean {
   return opts.event === "state-changed" && !opts.demo && opts.running && opts.driveConnected;
 }
+
+// A transient IndexedDB failure seen when the debounced auto-backup's export STRADDLES a node restart
+// (an iOS OAuth-redirect return, a forced-restore, an auto-start): the storage layer is being reopened
+// while exportState() reads its keys, so a read lands on a transaction that's already closed —
+// "Attempt to get a record from database without an in-progress transaction". This is NOT a real
+// backup failure (the next state-change re-arms a fresh sync), so the caller retries once quietly and
+// only warns if it's still failing. Pure + here so the classification is unit-tested.
+export function isTransientBackupStorageError(message: string): boolean {
+  const m = (message || "").toLowerCase();
+  return (
+    m.includes("in-progress transaction") ||
+    m.includes("transaction is not active") ||
+    m.includes("transaction has finished") ||
+    m.includes("the database connection is closing") ||
+    m.includes("database is not open")
+  );
+}

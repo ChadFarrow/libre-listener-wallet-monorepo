@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wallet-embed demo host</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+      h1 { font-size: 20px; }
+      .host-app { border: 1px dashed #bbb; border-radius: 12px; padding: 16px; margin: 16px 0; }
+      button { min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid #ccc; cursor: pointer; }
+      pre { background: #f5f5f5; padding: 10px; border-radius: 8px; font-size: 12px; overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>Demo host app (stands in for boostmebitch)</h1>
+    <p>
+      The widget below is <code>&lt;libre-wallet&gt;</code> from <code>@libre/wallet-embed</code>. Open this page as BOTH
+      <code>http://localhost:5174</code> and <code>http://127.0.0.1:5174</code> — two real origins — to exercise the
+      roaming lease (see <code>docs/roaming-verification.md</code>).
+    </p>
+    <div class="host-app">
+      <div id="wallet-slot"></div>
+    </div>
+    <div class="host-app">
+      <p>Host-app payment rail (drives <code>window.webln</code> like boostmebitch's boost orchestrator):</p>
+      <button id="btn-info">webln.getInfo()</button>
+      <button id="btn-invoice">webln.makeInvoice(21)</button>
+      <button id="btn-keysend">webln.keysend(10 → peer)</button>
+      <pre id="out">—</pre>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -40,6 +40,9 @@ importers:
       '@libre/shared':
         specifier: workspace:*
         version: link:../shared
+      '@libre/wallet-core':
+        specifier: workspace:*
+        version: link:../wallet-core
       '@scure/base':
         specifier: ^2.0.0
         version: 2.0.0
@@ -282,6 +285,65 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@25.9.3)(jsdom@24.1.3)
 
+  packages/wallet-core:
+    dependencies:
+      '@libre/listener-wallet':
+        specifier: workspace:*
+        version: link:../libre-listener-wallet
+      '@libre/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@scure/base':
+        specifier: ^2.0.0
+        version: 2.0.0
+    devDependencies:
+      fake-indexeddb:
+        specifier: ^6.2.5
+        version: 6.2.5
+      jsdom:
+        specifier: ^24.0.0
+        version: 24.1.3
+      tsup:
+        specifier: ^8.0.2
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@25.9.3)(jsdom@24.1.3)
+
+  packages/wallet-embed:
+    dependencies:
+      '@libre/listener-wallet':
+        specifier: workspace:*
+        version: link:../libre-listener-wallet
+      '@libre/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@libre/wallet-core':
+        specifier: workspace:*
+        version: link:../wallet-core
+    devDependencies:
+      fake-indexeddb:
+        specifier: ^6.2.5
+        version: 6.2.5
+      jsdom:
+        specifier: ^24.0.0
+        version: 24.1.3
+      tsup:
+        specifier: ^8.0.2
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vite:
+        specifier: ^5.2.11
+        version: 5.4.21(@types/node@25.9.3)
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@25.9.3)(jsdom@24.1.3)
+
   packages/wallet-pwa:
     dependencies:
       '@libre/listener-wallet':
@@ -290,6 +352,9 @@ importers:
       '@libre/shared':
         specifier: workspace:*
         version: link:../shared
+      '@libre/wallet-core':
+        specifier: workspace:*
+        version: link:../wallet-core
       '@scure/base':
         specifier: ^2.0.0
         version: 2.0.0

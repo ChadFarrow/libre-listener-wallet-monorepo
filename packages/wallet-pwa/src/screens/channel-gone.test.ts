@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { initScreens } from "./index";
 import { showScreen, resetToHome } from "../ui/nav";
 import type { AppContext } from "../core/app-context";
-import type { WalletController } from "../wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,7 +39,7 @@ function makeCtx(state: unknown): AppContext {
     listPeers: vi.fn().mockResolvedValue([]),
     getBalance: vi.fn().mockResolvedValue({ spendableSat: 0, receivableSat: 0 }),
     getChannels: vi.fn().mockResolvedValue([]),
-  } as unknown as WalletController;
+  } as unknown as WalletControllerApi;
   return { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 }
 

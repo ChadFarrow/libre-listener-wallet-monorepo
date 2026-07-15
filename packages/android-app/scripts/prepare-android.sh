@@ -230,6 +230,7 @@ main() {
   log "building workspace deps (dependency order) then wallet-pwa (mock LSP override enforced)"
   pnpm --filter @libre/shared build
   pnpm --filter @libre/listener-wallet build
+  pnpm --filter @libre/wallet-core build
   VITE_LSPS1_MOCK_URL= pnpm --filter @libre/wallet-pwa build
 
   if [ -d "$ANDROID" ]; then

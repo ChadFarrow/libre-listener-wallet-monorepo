@@ -89,9 +89,15 @@ export class WalletController {
   // out of the controller so it stays Drive-agnostic. Absent → treated as no backup (never defers).
   private backupStatus?: () => { configured: boolean; connected: boolean };
 
-  constructor(emit: ControllerEvent = () => {}) {
+  // Where the LDK WASM binary is served from. Injected because this library has no build-tool
+  // context (the PWA passes its Vite BASE_URL-prefixed path; an embed host passes its own asset
+  // URL). Default matches a root-served `liblightningjs.wasm`.
+  private wasmUrl: string;
+
+  constructor(emit: ControllerEvent = () => {}, opts: { wasmUrl?: string } = {}) {
     this.meta = new IndexedDBStorageProvider(META_DB_NAME);
     this.emit = emit;
+    this.wasmUrl = opts.wasmUrl ?? "/liblightningjs.wasm";
   }
 
   isRunning(): boolean {
@@ -442,8 +448,9 @@ export class WalletController {
       socketProvider,
       // Per-origin single-node lock: only one tab/window may run this network's node at a time.
       acquireRunLock: () => acquireWebNodeLock(nodeLockName(dbNameForNetwork(cfg.network))),
-      // Base-aware so the build works at a domain root (Cloudflare) or a project subpath.
-      wasmUrl: `${import.meta.env.BASE_URL}liblightningjs.wasm`,
+      // Injected by the app (the PWA passes a base-aware path so the build works at a domain
+      // root or a project subpath; an embed host passes wherever it serves the asset).
+      wasmUrl: this.wasmUrl,
       logger: {
         info: (m, ...a) => console.log("[LDK]", m, ...a),
         warn: (m, ...a) => console.warn("[LDK]", m, ...a),
@@ -1008,6 +1015,44 @@ export class WalletController {
     })();
     try {
       return await this.payingPromise;
+    } finally {
+      this.payingPromise = undefined;
+      this.emit("state-changed");
+    }
+  }
+
+  /**
+   * Keysend (spontaneous) payment — the WebLN `keysend` surface for the embeddable widget's
+   * host apps (V4V boosts carry bLIP-10 TLVs in customRecords). Routes through the SDK's single
+   * keysend path (the same one NWC pay_keysend uses). ACKS ON DISPATCH: we mint the preimage
+   * ourselves, so once send_spontaneous_payment succeeds the payment is irrevocably in flight
+   * and the preimage is returnable — the proven NWC/Alby-Go pattern; settlement lands in the
+   * payment log via the SDK's event demux.
+   */
+  async payKeysend(args: {
+    destination: string;
+    amountSats: number;
+    customRecords?: Record<number, string>;
+  }): Promise<{ preimage: string }> {
+    this.requireRunning();
+    if (this.payingPromise) throw new Error("A payment is already in progress.");
+    const amt = Math.floor(Number(args.amountSats));
+    if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter a positive amount in sats.");
+    if (!/^[0-9a-fA-F]{66}$/.test(args.destination)) throw new Error("Invalid destination node pubkey.");
+    const preimage = crypto.getRandomValues(new Uint8Array(32));
+    this.payingPromise = (async () => {
+      const res = await this.wallet!.sendKeysendPayment({
+        destinationPubkey: args.destination,
+        amountSats: amt,
+        customRecords: args.customRecords ?? {},
+        preimage,
+      });
+      if (!res.ok) throw new Error(`Keysend failed: ${res.error}`);
+      return { preimage: bytesToHex(preimage), amountSats: amt };
+    })();
+    try {
+      const { preimage: preimageHex } = await this.payingPromise;
+      return { preimage: preimageHex };
     } finally {
       this.payingPromise = undefined;
       this.emit("state-changed");

@@ -3,7 +3,7 @@
 // request. This is CORE to mobile usefulness: a browser node can't stay alive in the background, so
 // push is the only way a "sleeping" wallet answers a pay/balance request. iOS fires push only when
 // the PWA is installed to the home screen (iOS 16.4+); Android is more reliable.
-import type { WalletController } from "./wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 import {
   PUSH_WAKE_PREFS_KEY,
   parsePushWakePrefs,
@@ -41,7 +41,7 @@ export async function isPushEnabled(): Promise<boolean> {
 // Subscribe this device to offline wake-ups via the gateway. Requires a running node (the gateway
 // registers against the NWC wallet pubkey).
 export async function enablePush(
-  ctx: { controller: WalletController },
+  ctx: { controller: WalletControllerApi },
   gatewayUrl: string,
   relayUrl: string
 ): Promise<void> {
@@ -71,7 +71,7 @@ export async function enablePush(
 // the same key), signs the push-auth, and registers the endpoint. The gateway upserts by endpoint, so
 // re-running this refreshes a stale record and re-adds this wallet's pubkey to the live relay sub.
 async function subscribeAndRegister(
-  ctx: { controller: WalletController },
+  ctx: { controller: WalletControllerApi },
   reg: ServiceWorkerRegistration,
   gatewayUrl: string,
   relayUrl: string
@@ -116,7 +116,7 @@ async function subscribeAndRegister(
 // re-registers with the gateway, refreshing its record. Fully best-effort and SILENT — it never
 // prompts (permission must already be granted) and never throws into the caller. No-op unless the
 // user previously enabled wake and everything needed is in place.
-export async function refreshPushRegistration(ctx: { controller: WalletController }): Promise<void> {
+export async function refreshPushRegistration(ctx: { controller: WalletControllerApi }): Promise<void> {
   const supported = await pushSupported();
   const permission = typeof Notification !== "undefined" ? Notification.permission : "denied";
   if (!supported || permission !== "granted" || !ctx.controller.isRunning()) return;
@@ -152,7 +152,7 @@ export async function refreshPushRegistration(ctx: { controller: WalletControlle
 }
 
 export async function disablePush(
-  ctx: { controller: WalletController },
+  ctx: { controller: WalletControllerApi },
   gatewayUrl: string,
   relayUrl: string
 ): Promise<void> {

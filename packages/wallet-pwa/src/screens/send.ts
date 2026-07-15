@@ -1,5 +1,5 @@
 import type { AppContext } from "../core/app-context";
-import { classifySendInput } from "../core/send-input";
+import { classifySendInput } from "@libre/wallet-core";
 import { isDemoMode } from "../core/demo-mode";
 import { sendResultView, type SendResultKind } from "../core/send-result";
 import { guardedClick } from "../core/ui-helpers";

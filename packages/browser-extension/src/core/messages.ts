@@ -11,11 +11,10 @@
 //   - WalletCommand: originates in the extension's own UI (popup/options), fully trusted,
 //     drives wallet lifecycle + setup. Never reachable from a page.
 
-export const WEBLN_METHODS = ["enable", "isEnabled", "getInfo", "makeInvoice", "sendPayment", "keysend"] as const;
-export type WeblnMethod = (typeof WEBLN_METHODS)[number];
-
-// Methods that move money — subject to per-origin spending caps + serialization.
-export const WEBLN_SPENDING_METHODS: WeblnMethod[] = ["sendPayment", "keysend"];
+// The WebLN method lists live in @libre/wallet-core (shared with the embeddable widget's
+// in-page gate); re-exported here so extension consumers keep importing them from messages.
+export { WEBLN_METHODS, WEBLN_SPENDING_METHODS, type WeblnMethod } from "@libre/wallet-core";
+import type { WeblnMethod } from "@libre/wallet-core";
 
 // Namespaced message "kinds" so a single chrome.runtime.onMessage handler can fan out.
 export const MSG = {

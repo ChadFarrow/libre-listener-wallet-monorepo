@@ -11,8 +11,8 @@ import {
   nativeRestore,
   type BackupStoragePlugin,
 } from "./native-backup";
-import { DriveForeignBackupError } from "../drive-backup";
-import type { WalletController } from "../wallet-controller";
+import { DriveForeignBackupError } from "@libre/wallet-core";
+import type { WalletControllerApi } from "@libre/wallet-core";
 
 const g = globalThis as unknown as {
   __LIBRE_NATIVE__?: boolean;
@@ -44,14 +44,14 @@ function clearAll() {
   localStorage.clear();
 }
 
-function mockController(over: Partial<WalletController> = {}): WalletController {
+function mockController(over: Partial<WalletControllerApi> = {}): WalletControllerApi {
   return {
     exportBackup: async () => "ENVELOPE",
     getState: async () => ({ network: "mainnet" }),
     backupIsOurs: async () => true,
     restoreWallet: async () => ({ nodeId: "n", network: "mainnet" }),
     ...over,
-  } as unknown as WalletController;
+  } as unknown as WalletControllerApi;
 }
 
 describe("nativeBackupAvailable", () => {

@@ -343,6 +343,65 @@ export async function downloadBackup(network: string): Promise<string | null> {
   return await res.text();
 }
 
+// ---- Generic appDataFolder file verbs ----
+// Used by the roaming lease (drive-lease.ts) and any other small coordination file. Same
+// driveFetch + same auth/error semantics as the backup verbs; kept generic so new files don't
+// each grow their own REST plumbing. NOT used by the backup functions above (their behavior is
+// pinned by the storage contract and stays byte-for-byte as shipped).
+
+async function findAppDataFileId(name: string): Promise<{ id: string; modifiedTime: string } | null> {
+  const q = encodeURIComponent(`name='${name}'`);
+  const res = await driveFetch(
+    `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=files(id,modifiedTime)`,
+    { method: "GET" }
+  );
+  const data = await res.json();
+  const f = (data.files || [])[0];
+  return f ? { id: f.id, modifiedTime: f.modifiedTime } : null;
+}
+
+/** Read a small JSON/text file from the app's private Drive folder. Null when absent. */
+export async function readAppDataFile(name: string): Promise<{ contents: string; modifiedTime: string } | null> {
+  const found = await findAppDataFileId(name);
+  if (!found) return null;
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${found.id}?alt=media`, { method: "GET" });
+  return { contents: await res.text(), modifiedTime: found.modifiedTime };
+}
+
+/** Create-or-overwrite a small JSON/text file in the app's private Drive folder. */
+export async function writeAppDataFile(name: string, contents: string): Promise<void> {
+  const found = await findAppDataFileId(name);
+  if (found) {
+    await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${found.id}?uploadType=media`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: contents,
+    });
+  } else {
+    const boundary = "libreAppDataBoundary";
+    const metadata = { name, parents: ["appDataFolder"] };
+    const body =
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
+      `${contents}\r\n--${boundary}--`;
+    await driveFetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`, {
+      method: "POST",
+      headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+      body,
+    });
+  }
+}
+
+/** The backup file's Drive modifiedTime (epoch ms), or null when absent — the takeover path's
+ *  "did the previous holder flush after my claim?" probe. No content download. */
+export async function backupModifiedTime(network: string): Promise<number | null> {
+  const found = await findAppDataFileId(backupFilename(network));
+  if (!found) return null;
+  const t = Date.parse(found.modifiedTime);
+  return Number.isFinite(t) ? t : null;
+}
+
 // Delete a single network's backup file. No-op if there's nothing to delete. DELETE returns
 // HTTP 204 with an empty body, so we don't read the response.
 export async function deleteBackup(network: string): Promise<void> {

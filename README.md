@@ -31,6 +31,7 @@ A TypeScript monorepo managed by `pnpm` + Turborepo. Every package's own README 
 | [`packages/wallet-pwa`](packages/wallet-pwa) (`@libre/wallet-pwa`) | Installable, mobile-first PWA that hosts the LDK node in one persistent page. **Most active surface.** |
 | [`packages/browser-extension`](packages/browser-extension) (`@libre/browser-extension`) | MV3 extension (Chrome/Brave) that injects a `window.webln` provider so any web app drives the wallet. |
 | [`packages/android-app`](packages/android-app) (`@libre/android-app`) | Capacitor wrapper of the PWA; a foreground service keeps the node alive in the background. Play-Services-free / GrapheneOS-friendly. |
+| [`packages/wallet-embed`](packages/wallet-embed) (`@libre/wallet-embed`) | Embeddable `<libre-wallet>` "Connect Libre Wallet" login widget for our own web apps — hosts the node in-page (the iOS-background answer) and exposes `window.webln`; the wallet roams between origins over the Drive backup + lease. See [`docs/embed-integration.md`](docs/embed-integration.md). |
 | [`packages/example-app`](packages/example-app) (`@libre/example-app`) | Vite dev playground/testbed for the SDK against a local regtest sandbox. |
 
 **Libraries**
@@ -38,6 +39,7 @@ A TypeScript monorepo managed by `pnpm` + Turborepo. Every package's own README 
 |---|---|
 | [`packages/libre-listener-wallet`](packages/libre-listener-wallet) (`@libre/listener-wallet`) | The core client SDK wrapping LDK WASM — peers, channels, payments, NWC, encrypted backup/recovery. |
 | [`packages/shared`](packages/shared) (`@libre/shared`) | Protocol types, Zod schemas, and pure calc utilities shared by the SDK and gateway (single source of truth for LSPS/NWC shapes). |
+| [`packages/wallet-core`](packages/wallet-core) (`@libre/wallet-core`) | The headless wallet application layer shared by the PWA, extension, and embed: `WalletController`, Drive backup client, portable WebLN gate/caps, and the cross-origin roaming lease ([`docs/roaming-protocol.md`](docs/roaming-protocol.md)). |
 
 **Servers (hold no keys)**
 | Package | What it is |

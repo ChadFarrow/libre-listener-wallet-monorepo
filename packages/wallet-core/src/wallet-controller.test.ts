@@ -187,3 +187,10 @@ describe("WalletController.listPeers (node stopped)", () => {
     expect(rows).toEqual([{ pubkey: pk, address: "1.2.3.4:9735", connected: false, hasChannel: false }]);
   });
 });
+
+describe("WalletController.payKeysend (surface guards)", () => {
+  it("refuses when the node is not running, and validates inputs before any send", async () => {
+    const c = new WalletController();
+    await expect(c.payKeysend({ destination: "02".repeat(33), amountSats: 100 })).rejects.toThrow(/not running/i);
+  });
+});

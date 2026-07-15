@@ -7,7 +7,7 @@ import { initScreens } from "./index";
 import { showScreen } from "../ui/nav";
 import { emitControllerEvent } from "../core/events";
 import type { AppContext } from "../core/app-context";
-import type { WalletController } from "../wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -45,7 +45,7 @@ describe("receive screen payment confirmation", () => {
       listPeers: vi.fn().mockResolvedValue([]),
       getBalance: vi.fn().mockResolvedValue({ spendableSat: 20_000, receivableSat: 100_000 }),
       createInvoice: vi.fn().mockResolvedValue({ paymentRequest: "lnbc50u1invoicestub" }),
-    } as unknown as WalletController;
+    } as unknown as WalletControllerApi;
     return { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
   }
 

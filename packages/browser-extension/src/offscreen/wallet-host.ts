@@ -40,7 +40,7 @@ import { payBolt11 } from "./pay-invoice";
 import { restoreBlockReason } from "./restore-guard";
 import { downloadBackupName } from "../core/backup-name";
 import { addressToScriptPubKey } from "../core/address-script";
-import type { WalletRpc } from "../core/webln-mapping";
+import type { WalletRpc } from "@libre/wallet-core";
 
 const KEYSEND_TIMEOUT_MS = 90_000;
 

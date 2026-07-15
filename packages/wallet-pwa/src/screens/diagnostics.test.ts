@@ -7,7 +7,7 @@ import { initScreens } from "./index";
 import { showScreen, resetToHome } from "../ui/nav";
 import { installDiagTap, diagFlushNow, diagClear } from "../core/diag-tap";
 import type { AppContext } from "../core/app-context";
-import type { WalletController } from "../wallet-controller";
+import type { WalletControllerApi } from "@libre/wallet-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,7 +37,7 @@ function makeCtx(): AppContext {
     getChannelCloses: vi.fn().mockResolvedValue([]),
     listPeers: vi.fn().mockResolvedValue([]),
     getChannels: vi.fn().mockResolvedValue([]),
-  } as unknown as WalletController;
+  } as unknown as WalletControllerApi;
   return { controller, isRunning: () => true, keepAlive: { start() {}, stop() {}, unlock() {}, isActive: () => false, needsActivation: () => false } };
 }
 

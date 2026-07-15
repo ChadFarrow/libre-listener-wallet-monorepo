@@ -15,6 +15,8 @@ export default defineConfig({
   // evaluate ("ServiceWorker script evaluation failed").
   // @scure/bip39 is pulled in via the SDK's seed-phrase module (BIP39 recovery-phrase support);
   // it MUST be bundled or the service worker dies with "ServiceWorker script evaluation failed".
-  noExternal: ["@libre/listener-wallet", "@libre/shared", "lightningdevkit", "nostr-tools", "zod", "@scure/base", "@scure/bip39"],
+  // @libre/wallet-core: the extracted controller/core layer — any SW import of it (direct or
+  // transitive) must be bundled like the SDK, or the SW dies on a bare specifier.
+  noExternal: ["@libre/listener-wallet", "@libre/shared", "@libre/wallet-core", "lightningdevkit", "nostr-tools", "zod", "@scure/base", "@scure/bip39"],
   external: ["crypto"]
 });

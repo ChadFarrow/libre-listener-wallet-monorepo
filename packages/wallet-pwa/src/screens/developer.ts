@@ -1,5 +1,5 @@
 import type { AppContext } from "../core/app-context";
-import { defaultBridgeUrl, defaultRapidGossipSyncUrl } from "../core/wallet-config";
+import { defaultBridgeUrl, defaultRapidGossipSyncUrl } from "@libre/wallet-core";
 import { googleClientId, setGoogleClientId } from "../drive-integration";
 import { enablePush, disablePush, isPushEnabled, pushSupported } from "../web-push";
 import { keepAliveEnabled, setKeepAliveEnabled } from "../core/keep-alive";

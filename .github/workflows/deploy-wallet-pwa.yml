@@ -26,6 +26,7 @@ on:
     branches: [master]
     paths:
       - "packages/wallet-pwa/**"
+      - "packages/wallet-core/**"
       - "packages/shared/**"
       - "packages/libre-listener-wallet/**"
       - ".github/workflows/deploy-wallet-pwa.yml"
@@ -68,6 +69,7 @@ jobs:
         run: |
           pnpm --filter @libre/shared build
           pnpm --filter @libre/listener-wallet build
+          pnpm --filter @libre/wallet-core build
           pnpm --filter @libre/wallet-pwa build
 
       # Deploy the built static site. Wrangler is pinned by version (no unpinned third-party action).

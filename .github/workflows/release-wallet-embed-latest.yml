@@ -1,0 +1,102 @@
+name: Update wallet-embed "latest" download
+
+# Keeps ONE stable download link current on every push to master, so an embedding app
+# (e.g. boostmebitch) can install the packed tarball from a URL that never changes and always
+# serves the newest build:
+#
+#   https://github.com/ChadFarrow/libre-listener-wallet-monorepo/releases/download/wallet-embed-latest/libre-wallet-embed.tgz
+#
+# The tarball is self-contained (tsup noExternal bundles all workspace deps + LDK, and
+# scripts/copy-wasm.mjs ships liblightningjs.wasm inside dist/), so a consumer just does
+# `npm i <that URL>` and copies dist/liblightningjs.wasm into their static dir — see
+# docs/embed-integration.md.
+#
+# NOTE: this rolling release is intentionally NOT marked --latest — the extension's
+# browser-extension-latest release owns the repo's single "latest" slot. This one is reached by
+# its fixed tag `wallet-embed-latest` only.
+#
+# Same build + gates as ci.yml — an unverified tarball is never published.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "packages/wallet-embed/**"
+      - "packages/wallet-core/**"
+      - "packages/libre-listener-wallet/**"
+      - "packages/shared/**"
+      - ".github/workflows/release-wallet-embed-latest.yml"
+  workflow_dispatch:
+
+# Default the workflow token to read-only; the job elevates to write to update the release.
+permissions:
+  contents: read
+
+# A newer push supersedes an in-flight build of the same rolling asset.
+concurrency:
+  group: wallet-embed-latest
+  cancel-in-progress: true
+
+jobs:
+  rolling:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # update the rolling release / replace its asset
+    steps:
+      # Third-party actions pinned to a full commit SHA (supply-chain safety); the
+      # trailing comment records the human-readable version.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Workspace deps FIRST (turbo order: shared → SDK → wallet-core → wallet-embed). The embed's
+      # build (tsup + copy-wasm) and typecheck resolve @libre/* types from their dist/.
+      - name: Build workspace
+        run: pnpm build
+
+      # Never ship an unverified tarball: gate on lint, storage contract, typecheck, tests.
+      - name: Lint
+        run: pnpm --filter @libre/wallet-embed lint
+      - name: Storage-contract guard
+        run: pnpm check:storage
+      - name: Typecheck
+        run: pnpm --filter @libre/wallet-embed typecheck
+      - name: Unit tests
+        run: pnpm --filter @libre/wallet-embed test
+
+      # Pack to a STABLE filename so the download URL never changes. pnpm pack names the file with
+      # the package version (libre-wallet-embed-<ver>.tgz); rename it to the fixed asset name.
+      - name: Pack tarball
+        run: |
+          cd packages/wallet-embed
+          FILE=$(pnpm pack | tail -n1)
+          mv "$FILE" "$GITHUB_WORKSPACE/libre-wallet-embed.tgz"
+          echo "Packed $FILE -> libre-wallet-embed.tgz"
+
+      # Upsert the single rolling release and replace its asset in place (--clobber keeps the
+      # download URL identical). NOT --latest (the extension release owns that slot).
+      - name: Update rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=wallet-embed-latest
+          NOTES="Rolling build of @libre/wallet-embed — auto-updated on every push to master. This download link stays constant; it always serves the newest build (commit ${GITHUB_SHA}).
+
+          **Install (in an embedding app):**
+          \`\`\`
+          npm i https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/libre-wallet-embed.tgz
+          cp node_modules/@libre/wallet-embed/dist/liblightningjs.wasm public/
+          \`\`\`
+          Integration + per-origin Google OAuth setup: docs/embed-integration.md."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" libre-wallet-embed.tgz --clobber
+            gh release edit "$TAG" --title "Latest wallet-embed build (auto-updated)" --notes "$NOTES"
+          else
+            gh release create "$TAG" libre-wallet-embed.tgz \
+              --title "Latest wallet-embed build (auto-updated)" --notes "$NOTES" --prerelease
+          fi

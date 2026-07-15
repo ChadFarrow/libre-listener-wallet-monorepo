@@ -3,6 +3,8 @@ import { isChannelStateRegressionError, isNodeAlreadyRunningError } from "@libre
 import { isBackupAheadError, BACKUP_AHEAD_MSG } from "@libre/wallet-core";
 import { isStateRollbackError, STATE_ROLLBACK_MSG } from "@libre/wallet-core";
 import { forceRestoreScreen, clearRestoreLatch } from "./restore";
+import { leaseHolderBlockingStart } from "../core/pwa-lease";
+import { driveConnected } from "../drive-integration";
 
 export const NODE_ALREADY_RUNNING_MSG =
   "This wallet is already running in another tab or window — close it and try again.";
@@ -17,6 +19,15 @@ export async function startNodeWithGuards(
 ): Promise<boolean> {
   onStatus("Starting node…");
   try {
+    // Roaming lease gate: while Drive is connected, a LIVE lease held by another origin (an
+    // embedded widget) means the wallet is running THERE — starting here would put two nodes on
+    // one channel. Drive-offline never blocks (the PWA's offline-first behavior is unchanged).
+    const state = await controller.getState();
+    const holder = await leaseHolderBlockingStart(state.network, driveConnected());
+    if (holder) {
+      onStatus(`Your wallet is active on ${holder} right now. Disconnect it there (or wait ~2 minutes), then try again.`, "err");
+      return false;
+    }
     await controller.startNode();
     clearRestoreLatch();
     onStatus("Node started", "ok");

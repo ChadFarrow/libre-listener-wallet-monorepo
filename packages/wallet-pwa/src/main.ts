@@ -12,6 +12,7 @@ import { isMobileUa, shouldAutoDownload, shouldDriveAutoSync, isTransientBackupS
 import { driveConnected, driveConfigured, driveBackupNow, ensureDriveConnected, rememberedEmail, markDriveSyncPending, peekBackupEnvelope } from "./drive-integration";
 import { completeDriveRedirect } from "@libre/wallet-core";
 import { shouldArmGestureReconnect } from "./core/drive-ui";
+import { createPwaLeaseKeeper, WALLET_MOVED_MSG } from "./core/pwa-lease";
 import { shouldRefreshOnVisible } from "./core/resume-refresh";
 import { refreshPushRegistration } from "./web-push";
 import {
@@ -72,6 +73,20 @@ const controller = isDemoMode()
 // plain browser/PWA → the inaudible audio keep-alive. Same KeepAlive interface either way.
 const keepAlive = createKeepAliveForPlatform();
 const ctx: AppContext = { controller, isRunning: () => controller.isRunning(), keepAlive };
+
+// Roaming lease keeper: while the node runs with Drive connected, hold + heartbeat the cross-origin
+// lease so an embedded widget (wallet-embed) and this PWA can never run two nodes on one channel;
+// when a widget claims the wallet, this node self-fences (stop + flush + handoff ack). No-op in
+// demo and whenever Drive is disconnected (offline-first start behavior unchanged).
+if (!isDemoMode()) {
+  const leaseKeeper = createPwaLeaseKeeper({
+    controller,
+    driveConnected: () => driveConnected(),
+    isDemo: () => isDemoMode(),
+    onMoved: (origin) => console.warn(`[Lease] ${WALLET_MOVED_MSG(origin)}`),
+  });
+  onControllerEvent(() => leaseKeeper.onEvent());
+}
 
 // Backup-ahead start guard: give the controller a Drive-backed way to peek the off-device backup so
 // it can refuse to start on a rolled-back / iOS-evicted local snapshot (which would force-close the

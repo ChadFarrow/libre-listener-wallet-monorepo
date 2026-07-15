@@ -1,15 +1,20 @@
 name: Update wallet-embed "latest" download
 
-# Keeps ONE stable download link current on every push to master, so an embedding app
-# (e.g. boostmebitch) can install the packed tarball from a URL that never changes and always
-# serves the newest build:
+# Publishes the packed tarball twice on every push to master, under one release:
 #
-#   https://github.com/ChadFarrow/libre-listener-wallet-monorepo/releases/download/wallet-embed-latest/libre-wallet-embed.tgz
+#   .../releases/download/wallet-embed-latest/libre-wallet-embed.tgz            (rolling)
+#   .../releases/download/wallet-embed-latest/libre-wallet-embed-<sha>.tgz      (immutable)
 #
-# The tarball is self-contained (tsup noExternal bundles all workspace deps + LDK, and
-# scripts/copy-wasm.mjs ships liblightningjs.wasm inside dist/), so a consumer just does
-# `npm i <that URL>` and copies dist/liblightningjs.wasm into their static dir — see
-# docs/embed-integration.md.
+# Use the IMMUTABLE url in any app with a lockfile. npm records an integrity hash per resolved
+# url, so a rolling url whose bytes change under a pinned hash fails `npm ci` with EINTEGRITY —
+# i.e. a push here would redden an untouched consumer's production deploy. Pinning the <sha> url
+# makes upgrades an explicit, reviewable bump. The rolling url stays for demos/scripts and for
+# anyone who genuinely wants "newest, unpinned".
+#
+# The tarball is self-contained (tsup noExternal bundles all workspace deps + LDK, dts.resolve
+# inlines their types, and scripts/copy-wasm.mjs ships liblightningjs.wasm inside dist/), so a
+# consumer just does `npm i <that URL>` and copies dist/liblightningjs.wasm into their static
+# dir — see docs/embed-integration.md.
 #
 # NOTE: this rolling release is intentionally NOT marked --latest — the extension's
 # browser-extension-latest release owns the repo's single "latest" slot. This one is reached by
@@ -110,25 +115,48 @@ jobs:
             --module esnext --moduleResolution bundler --target es2022 --lib es2022,dom probe.ts
           echo "Consumer install contract OK"
 
-      # Upsert the single rolling release and replace its asset in place (--clobber keeps the
-      # download URL identical). NOT --latest (the extension release owns that slot).
+      # Upsert the single rolling release, carrying BOTH assets: the rolling filename (replaced in
+      # place with --clobber, so its download URL never changes) and an immutable per-commit copy
+      # (never clobbered — a lockfile can pin it). NOT --latest (the extension release owns that
+      # slot). Old per-commit assets are pruned so the release doesn't grow without bound.
       - name: Update rolling release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG=wallet-embed-latest
-          NOTES="Rolling build of @libre/wallet-embed — auto-updated on every push to master. This download link stays constant; it always serves the newest build (commit ${GITHUB_SHA}).
+          KEEP=10
+          PINNED="libre-wallet-embed-${GITHUB_SHA}.tgz"
+          cp libre-wallet-embed.tgz "$PINNED"
+          NOTES="Rolling build of @libre/wallet-embed — auto-updated on every push to master (commit ${GITHUB_SHA}).
 
-          **Install (in an embedding app):**
+          **Install — pinned (use this in any app with a lockfile):**
           \`\`\`
-          npm i https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/libre-wallet-embed.tgz
+          npm i https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${PINNED}
           cp node_modules/@libre/wallet-embed/dist/liblightningjs.wasm public/
           \`\`\`
+
+          **Install — rolling (always newest; bytes change under a fixed URL):**
+          \`\`\`
+          npm i https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/libre-wallet-embed.tgz
+          \`\`\`
+          npm pins an integrity hash per resolved URL, so the rolling URL breaks \\\`npm ci\\\` with EINTEGRITY the next time this workflow runs. Pin the per-commit URL and bump it deliberately. The last ${KEEP} pinned builds are retained.
+
           Integration + per-origin Google OAuth setup: docs/embed-integration.md."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" libre-wallet-embed.tgz --clobber
+            gh release upload "$TAG" libre-wallet-embed.tgz "$PINNED" --clobber
             gh release edit "$TAG" --title "Latest wallet-embed build (auto-updated)" --notes "$NOTES"
           else
-            gh release create "$TAG" libre-wallet-embed.tgz \
+            gh release create "$TAG" libre-wallet-embed.tgz "$PINNED" \
               --title "Latest wallet-embed build (auto-updated)" --notes "$NOTES" --prerelease
           fi
+
+          # Prune all but the newest $KEEP per-commit assets (the rolling one is never matched).
+          gh release view "$TAG" --json assets \
+            --jq '.assets | map(select(.name | test("^libre-wallet-embed-[0-9a-f]{40}\\.tgz$")))
+                  | sort_by(.createdAt) | reverse | .['"$KEEP"':] | .[].name' \
+            | while read -r old; do
+                [ -n "$old" ] || continue
+                echo "Pruning old pinned asset: $old"
+                gh release delete-asset "$TAG" "$old" --yes
+              done

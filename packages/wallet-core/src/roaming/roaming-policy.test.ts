@@ -5,6 +5,7 @@ import {
   heartbeatDecision,
   shouldSelfFenceOnOutage,
   buildLeaseRecord,
+  evaluateHandoffProof,
   takeoverMayProceed,
   parseLeaseRecord,
   ROAMING_LEASE_MS,
@@ -52,6 +53,22 @@ describe("roamingBootDecision", () => {
     expect(d).toEqual({ action: "blocked", origin: "https://a.example", expiresAt: NOW + 60_000 });
   });
 
+  // ISSUE #90, as one assertion. A holder that dies AFTER its last 40s heartbeat leaves
+  // advertised == backup — its post-heartbeat state is invisible to every successor. The old
+  // check only caught advertised > backup, so this restored a 9-commitments-stale backup onto a
+  // live mainnet channel and the peer force-closed it. No proof of a clean handoff ⇒ no restore.
+  it("a holder that died at its last heartbeat (advertised == backup) → halt, NOT restore", () => {
+    const d = roamingBootDecision({
+      ...base,
+      lease: lease({ phase: "live", heartbeatStateVersion: 42 }),
+      leaseClaimed: true, // we took it over; the ack never came (the holder is dead)
+      backupStateVersion: 42,
+      localSeedPresent: false,
+      localStateVersion: 0,
+    });
+    expect(d.action).toBe("halt-version-gap");
+  });
+
   it("expired foreign lease advertising MORE state than the backup → halt-version-gap", () => {
     // Origin A crashed without its final flush: lease says v50, backup only has v42, we have v40.
     const d = roamingBootDecision({
@@ -59,7 +76,123 @@ describe("roamingBootDecision", () => {
       lease: lease({ expiresAt: NOW - 1, heartbeatStateVersion: 50 }),
       localStateVersion: 40,
     });
-    expect(d).toEqual({ action: "halt-version-gap", staleOrigin: "https://a.example", missingVersions: 8 });
+    expect(d).toEqual({
+      action: "halt-version-gap",
+      staleOrigin: "https://a.example",
+      missingVersions: 8,
+      overridable: true,
+    });
+  });
+
+  // The reload hole. Exception (a) ("we hold the missing state") compares against a record WE
+  // wrote — and our claim stamps OUR version (0 on a fresh origin, 10 for a stale origin A) over
+  // the predecessor's. Reading that back, (a) scores true and starts on state the predecessor has
+  // outrun. unprovenPredecessor is what survives our own writes.
+  it("our own claim cannot launder the predecessor's advertised version away", () => {
+    const ours = buildLeaseRecord({
+      ownerToken: "tok-b",
+      origin: "https://b.example",
+      now: NOW,
+      previous: lease({ owner: "tok-a", heartbeatStateVersion: 20 }),
+      heartbeatStateVersion: 10, // our stale local state
+    });
+    expect(ours.heartbeatStateVersion).toBe(10); // we really did stamp our own version...
+    expect(ours.unprovenPredecessor).toEqual({
+      owner: "tok-a",
+      origin: "https://a.example",
+      advertisedVersion: 20, // ...but the predecessor's high-water mark rides along
+      since: NOW,
+    });
+    // Feed our own record back in, as a reload does (a reload mints a new token, so it reads its
+    // own prior record as a foreign live lease → blocked → Move-here → claimed → here).
+    const d = roamingBootDecision({
+      ...base,
+      lease: ours,
+      leaseClaimed: true,
+      localStateVersion: 10,
+      backupStateVersion: 15,
+    });
+    expect(d.action).toBe("halt-version-gap");
+  });
+
+  it("carries the high-water mark through a chain of unproven claims", () => {
+    // A dies at v20 → B claims and halts → B reloads (new token) → C claims. C must still see A.
+    const b = buildLeaseRecord({
+      ownerToken: "tok-b",
+      origin: "https://b.example",
+      now: NOW,
+      previous: lease({ owner: "tok-a", heartbeatStateVersion: 20 }),
+      heartbeatStateVersion: 0,
+    });
+    const c = buildLeaseRecord({
+      ownerToken: "tok-c",
+      origin: "https://c.example",
+      now: NOW + 1_000,
+      previous: b,
+      heartbeatStateVersion: 0,
+    });
+    expect(c.unprovenPredecessor?.advertisedVersion).toBe(20);
+    expect(
+      roamingBootDecision({
+        ...base,
+        lease: c,
+        leaseClaimed: true,
+        localSeedPresent: false,
+        localStateVersion: 0,
+      }).action,
+    ).toBe("halt-version-gap");
+  });
+
+  it("our own renewal carries the predecessor verbatim (it is not re-snapshotted as ourselves)", () => {
+    const claim = buildLeaseRecord({
+      ownerToken: "tok-b",
+      origin: "https://b.example",
+      now: NOW,
+      previous: lease({ owner: "tok-a", heartbeatStateVersion: 20 }),
+      heartbeatStateVersion: 0,
+    });
+    const renewed = buildLeaseRecord({
+      ownerToken: "tok-b",
+      origin: "https://b.example",
+      now: NOW + 40_000,
+      previous: claim,
+      heartbeatStateVersion: 3,
+    });
+    expect(renewed.unprovenPredecessor).toEqual(claim.unprovenPredecessor);
+  });
+
+  it("a released predecessor leaves nothing to carry, and the override clears it", () => {
+    expect(
+      buildLeaseRecord({
+        ownerToken: "tok-b",
+        origin: "https://b.example",
+        now: NOW,
+        previous: lease({ phase: "released", heartbeatStateVersion: 20 }),
+        heartbeatStateVersion: 0,
+      }).unprovenPredecessor,
+    ).toBeUndefined();
+    expect(
+      buildLeaseRecord({
+        ownerToken: "tok-b",
+        origin: "https://b.example",
+        now: NOW,
+        previous: lease({ owner: "tok-a", heartbeatStateVersion: 20 }),
+        heartbeatStateVersion: 0,
+        clearPredecessor: true,
+      }).unprovenPredecessor,
+    ).toBeUndefined();
+  });
+
+  it("the user's explicit override proceeds past an unproven handoff", () => {
+    const d = roamingBootDecision({
+      ...base,
+      lease: lease({ phase: "live", heartbeatStateVersion: 50 }),
+      leaseClaimed: true,
+      localSeedPresent: false,
+      localStateVersion: 0,
+      override: true,
+    });
+    expect(d.action).toBe("restore-into-empty");
   });
 
   it("version gap does NOT halt the origin that holds the missing state locally", () => {
@@ -197,7 +330,6 @@ describe("takeoverMayProceed", () => {
   const base = {
     ourToken: "me",
     previousOwner: "other-token",
-    backupModifiedAfterClaim: false,
     takeoverStartedAt: NOW,
     now: NOW + 10_000,
   };
@@ -207,14 +339,7 @@ describe("takeoverMayProceed", () => {
     expect(takeoverMayProceed({ ...base, record })).toEqual({ proceed: true, reason: "acked" });
   });
 
-  it("proceeds when the backup file was flushed after our claim", () => {
-    expect(takeoverMayProceed({ ...base, record: lease({ owner: "me" }), backupModifiedAfterClaim: true })).toEqual({
-      proceed: true,
-      reason: "backup-flushed",
-    });
-  });
-
-  it("waits, then times out to the version-gap check", () => {
+  it("stops waiting on timeout — which is NOT permission to restore (the proof gate decides)", () => {
     expect(takeoverMayProceed({ ...base, record: lease({ owner: "me" }) }).reason).toBe("waiting");
     expect(takeoverMayProceed({ ...base, record: lease({ owner: "me" }), now: NOW + 90_000 })).toEqual({
       proceed: true,
@@ -227,6 +352,85 @@ describe("takeoverMayProceed", () => {
       proceed: false,
       reason: "lost",
     });
+  });
+});
+
+describe("evaluateHandoffProof", () => {
+  const base = { backupStateVersion: 42, localSeedPresent: false, localStateVersion: 0 };
+
+  it("proves a clean handoff from the predecessor itself — released, or an ack within the backup", () => {
+    expect(evaluateHandoffProof({ ...base, lease: null })).toEqual({ proven: true, via: "no-predecessor" });
+    expect(evaluateHandoffProof({ ...base, lease: lease({ phase: "released" }) })).toEqual({
+      proven: true,
+      via: "released",
+    });
+    expect(
+      evaluateHandoffProof({
+        ...base,
+        lease: lease({ owner: "tok-a" }),
+        postClaimLease: lease({ owner: "me", handoffAck: { from: "tok-a", flushedVersion: 42, at: NOW } }),
+      }),
+    ).toEqual({ proven: true, via: "ack" });
+  });
+
+  it("rejects an ack claiming MORE than the backup actually holds", () => {
+    // The holder acks flushedVersion 50 but Drive only has 42 — its upload didn't land. Trusting
+    // the ack alone would restore v42 onto a v50 channel.
+    const p = evaluateHandoffProof({
+      ...base,
+      lease: lease({ owner: "tok-a" }),
+      postClaimLease: lease({ owner: "me", handoffAck: { from: "tok-a", flushedVersion: 50, at: NOW } }),
+    });
+    expect(p.proven).toBe(false);
+  });
+
+  it("rejects an ack when the backup version is unreadable (unreadable must fail, not pass)", () => {
+    const p = evaluateHandoffProof({
+      ...base,
+      backupStateVersion: null,
+      lease: lease({ owner: "tok-a" }),
+      postClaimLease: lease({ owner: "me", handoffAck: { from: "tok-a", flushedVersion: 0, at: NOW } }),
+    });
+    expect(p.proven).toBe(false);
+  });
+
+  it("rejects an ack from someone who is not the predecessor", () => {
+    const p = evaluateHandoffProof({
+      ...base,
+      lease: lease({ owner: "tok-a" }),
+      postClaimLease: lease({ owner: "me", handoffAck: { from: "tok-stranger", flushedVersion: 42, at: NOW } }),
+    });
+    expect(p.proven).toBe(false);
+  });
+
+  it("proves via local state only when we actually HAVE a wallet here", () => {
+    // Origin A reopening with the real state → start; our flush catches Drive up.
+    expect(
+      evaluateHandoffProof({ ...base, lease: lease(), localSeedPresent: true, localStateVersion: 42 }),
+    ).toEqual({ proven: true, via: "local-state" });
+    // A fresh origin scoring 0 >= 0 against a zeroed record is EXACTLY issue #90 — the seed gate
+    // is what stops it.
+    expect(
+      evaluateHandoffProof({
+        ...base,
+        lease: lease({ heartbeatStateVersion: 0 }),
+        localSeedPresent: false,
+        localStateVersion: 0,
+      }).proven,
+    ).toBe(false);
+  });
+
+  it("names the ORIGINAL stale origin, not the intermediate claimant", () => {
+    const p = evaluateHandoffProof({
+      ...base,
+      lease: lease({
+        owner: "tok-b",
+        origin: "https://b.example",
+        heartbeatStateVersion: 0,
+        unprovenPredecessor: { owner: "tok-a", origin: "https://a.example", advertisedVersion: 20, since: NOW },
+      }),
+    });
+    expect(p).toEqual({ proven: false, staleOrigin: "https://a.example", advertisedVersion: 20, backupVersion: 42 });
   });
 });
 

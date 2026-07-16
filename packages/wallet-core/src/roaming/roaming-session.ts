@@ -14,6 +14,7 @@ import {
   CONFIRM_READ_MS,
   TAKEOVER_POLL_MS,
   TAKEOVER_WAIT_MS,
+  evaluateHandoffProof,
   roamingBootDecision,
   takeoverMayProceed,
   type RoamingLeaseRecord,
@@ -30,7 +31,15 @@ export type RoamingViewState =
   | { view: "starting" }
   | { view: "running" }
   | { view: "moved-away"; origin: string } // we were evicted; wallet now lives elsewhere
-  | { view: "halted"; reason: "version-gap" | "start-failed" | "restore-failed"; message: string }
+  | {
+      view: "halted";
+      reason: "version-gap" | "start-failed" | "restore-failed";
+      message: string;
+      /** Present ONLY on an unproven-handoff halt: the deliberate escape hatch for "the other
+       *  device is gone for good". Restoring anyway will almost certainly force-close the channel
+       *  (funds return on-chain via the sweeper), so the widget must confirm, never one-tap it. */
+      override?: { staleOrigin: string };
+    }
   | { view: "paused"; reason: "drive-unreachable" }
   | { view: "stopped" };
 
@@ -41,8 +50,6 @@ export interface RoamingPorts {
   fetchBackup(): Promise<string | null>;
   /** Decrypt-only verification (SDK verifyBackupEnvelope). Never throws. */
   verifyEnvelope(envelope: string, secret: string): Promise<{ ok: boolean; stateVersion?: number }>;
-  /** Backup file's Drive modifiedTime (epoch ms) — the takeover "did they flush?" probe. */
-  backupModifiedTime(): Promise<number | null>;
   /** Controller verbs. start() runs the controller's own guards (recoverOrHalt etc.). */
   startNode(): Promise<void>;
   stopNode(): Promise<void>;
@@ -61,8 +68,13 @@ export interface RoamingSessionOptions {
 
 export class RoamingSession {
   private state: RoamingViewState = { view: "stopped" }; // nothing booted yet — boot() flips to "checking"
-  /** The lease record as it stood BEFORE we claimed — the crash-gap evidence. */
+  /** The lease record as it stood BEFORE we claimed — this is who the PREDECESSOR is. */
   private preClaimRecord: RoamingLeaseRecord | null = null;
+  /** The lease as last re-read AFTER our claim — where a predecessor's handoffAck lands. */
+  private postClaimRecord: RoamingLeaseRecord | null = null;
+  /** Armed only by forceRestoreAnyway(): the user declared the stale origin gone and accepted the
+   *  near-certain force-close. Never set by any automatic path. */
+  private overrideUnprovenHandoff = false;
   private readonly now: () => number;
   private readonly delay: (ms: number) => Promise<void>;
   private readonly confirmReadMs: number;
@@ -125,15 +137,16 @@ export class RoamingSession {
     } catch (e) {
       return this.leaseFailureState(e);
     }
-    // Poll for the holder's handoff (ack or backup flush), up to the takeover window.
+    // Poll for the holder's handoff ack, up to the takeover window. The backup's Drive modifiedTime
+    // is deliberately NOT consulted: it names neither the writer nor the version, so it never proved
+    // anything — and since the holder uploads BEFORE it acks, believing it raced us into halting on
+    // the happy path. The ack is the proof; timing out just means we stop waiting.
     for (;;) {
       const waited = this.now() - claimedAt;
       this.set({ view: "moving", waitedMs: waited });
       let record: RoamingLeaseRecord | null = null;
-      let backupModified: number | null = null;
       try {
         record = (await this.lease.peek()).record;
-        backupModified = await this.ports.backupModifiedTime();
       } catch {
         /* transient — the poll below decides on what we have */
       }
@@ -141,7 +154,6 @@ export class RoamingSession {
         record,
         ourToken: this.lease.ownerToken,
         previousOwner,
-        backupModifiedAfterClaim: backupModified !== null && backupModified > claimedAt,
         takeoverStartedAt: claimedAt,
         now: this.now(),
         waitMs: this.takeoverWaitMs,
@@ -154,16 +166,9 @@ export class RoamingSession {
         return this.state;
       }
       if (verdict.proceed) {
-        // The evicted holder's final heartbeat/ack updated the picture; refresh the gap evidence.
-        if (record && record.handoffAck) {
-          this.preClaimRecord = {
-            ...(this.preClaimRecord ?? record),
-            heartbeatStateVersion: Math.max(
-              this.preClaimRecord?.heartbeatStateVersion ?? 0,
-              record.handoffAck.flushedVersion,
-            ),
-          };
-        }
+        // Hand the polled record to the proof gate as-is. It is NOT merged into preClaimRecord:
+        // preClaim says who the predecessor IS, postClaim carries what (if anything) it proved.
+        this.postClaimRecord = record;
         return this.continueAfterLeaseGate({ takeover: true, alreadyAcquired: true });
       }
       await this.delay(this.takeoverPollMs);
@@ -200,13 +205,15 @@ export class RoamingSession {
 
     const decision = roamingBootDecision({
       lease: this.preClaimRecord,
+      postClaimLease: this.postClaimRecord,
       ownerToken: this.lease.ownerToken, // pre-claim record can never be "ours" — token is fresh
       now: this.now(),
-      leaseClaimed: true, // we hold the file now; the pre-claim record is gap evidence only
+      leaseClaimed: true, // we hold the file now; the pre-claim record is proof evidence only
       backupPresent: backup !== null,
       backupStateVersion: backupVersion,
       localSeedPresent: local.seedPresent,
       localStateVersion: local.stateVersion,
+      override: this.overrideUnprovenHandoff,
     });
 
     switch (decision.action) {
@@ -214,13 +221,7 @@ export class RoamingSession {
         this.set({ view: "blocked", origin: decision.origin, expiresAt: decision.expiresAt });
         return this.state;
       case "halt-version-gap":
-        this.set({
-          view: "halted",
-          reason: "version-gap",
-          message:
-            `This wallet's last session on ${decision.staleOrigin} didn't finish saving to the cloud. ` +
-            `Open ${decision.staleOrigin} once so it can sync, then come back here.`,
-        });
+        this.set(this.unprovenHandoffHalt(decision.staleOrigin));
         return this.state;
       case "setup-needed":
         this.set({ view: "setup-needed" });
@@ -236,6 +237,46 @@ export class RoamingSession {
 
   private pendingRestoreEnvelope: string | null = null;
 
+  /** The one place the unproven-handoff halt is authored, so boot() and submitSecret() can't drift.
+   *  Deliberately quotes no version count: the version delta is 0 whenever the holder died after its
+   *  last heartbeat, which is the common case and the whole of issue #90 — a "0 versions behind"
+   *  halt would read as a bug. */
+  private unprovenHandoffHalt(staleOrigin: string): RoamingViewState {
+    return {
+      view: "halted",
+      reason: "version-gap",
+      message:
+        `This wallet's last session on ${staleOrigin} didn't finish saving to the cloud. ` +
+        `Open ${staleOrigin} once so it can sync, then come back here.`,
+      override: { staleOrigin },
+    };
+  }
+
+  /**
+   * The escape hatch behind an unproven-handoff halt: the user asserts the stale origin is gone for
+   * good, and accepts that the peer will almost certainly force-close the channel (funds return
+   * on-chain to the recovery address via the sweeper). NOT a retry — a one-way, informed decision,
+   * so the widget must confirm it rather than offer it as a second "Try again".
+   *
+   * Note this does NOT survive a crash before our first flush: the record still says phase "live"
+   * with no ack, so the next boot halts again. That's correct — at that point we genuinely have no
+   * proof — and the user can override again.
+   */
+  async forceRestoreAnyway(): Promise<RoamingViewState> {
+    if (this.state.view !== "halted" || !this.state.override) return this.state;
+    this.overrideUnprovenHandoff = true;
+    // The user authorized dropping the predecessor, so stop carrying it forward to the next boot.
+    await this.lease.clearPredecessor();
+    if (this.pendingRestoreEnvelope) {
+      // Re-ask for the secret rather than stashing the verified one for a one-click restore:
+      // re-entry is itself a second deliberate act, and keeping a seed alive across a halt for UI
+      // convenience is a key-lifetime smell (guardrail: absolute key isolation).
+      this.set({ view: "need-secret" });
+      return this.state;
+    }
+    return this.continueAfterLeaseGate({ takeover: true, alreadyAcquired: true });
+  }
+
   /** The user's recovery phrase / seed for a fresh-origin restore. */
   async submitSecret(secret: string): Promise<RoamingViewState> {
     if (this.state.view !== "need-secret" || !this.pendingRestoreEnvelope) return this.state;
@@ -246,20 +287,18 @@ export class RoamingSession {
       this.set({ view: "need-secret" });
       return this.state;
     }
-    // Deferred crash-gap check (couldn't read the backup's version before the secret arrived):
-    // the previous holder advertised more state than this backup carries → restoring would put a
-    // stale node on the channel. Halt instead.
-    const advertised = this.preClaimRecord && this.preClaimRecord.phase !== "released" ? this.preClaimRecord.heartbeatStateVersion || 0 : 0;
-    const backupVersion = typeof v.stateVersion === "number" ? v.stateVersion : 0;
-    if (advertised > backupVersion) {
-      const staleOrigin = this.preClaimRecord?.origin ?? "the previous device";
-      this.set({
-        view: "halted",
-        reason: "version-gap",
-        message:
-          `This wallet's last session on ${staleOrigin} didn't finish saving to the cloud. ` +
-          `Open ${staleOrigin} once so it can sync, then come back here.`,
-      });
+    // The DEFERRED half of the proof gate: a fresh origin can't read the backup's version until the
+    // secret arrives, so boot() postponed the check to here. Same rule, same evidence.
+    const proof = evaluateHandoffProof({
+      lease: this.preClaimRecord,
+      postClaimLease: this.postClaimRecord,
+      backupStateVersion: typeof v.stateVersion === "number" ? v.stateVersion : null,
+      localSeedPresent: false, // by construction: this path only runs with no local wallet
+      localStateVersion: 0,
+      override: this.overrideUnprovenHandoff,
+    });
+    if (!proof.proven) {
+      this.set(this.unprovenHandoffHalt(proof.staleOrigin));
       return this.state;
     }
     try {
@@ -345,17 +384,21 @@ export class RoamingSession {
     this.set({ view: "paused", reason: "drive-unreachable" });
   }
 
-  /** Clean shutdown (widget dispose / page close): stop, final flush, release the lease. */
+  /** Clean shutdown (widget dispose / page close): stop, final flush, release the lease.
+   *  The release is told exactly how far the flush got, so a failed upload leaves an honest `live`
+   *  lease rather than a `released` one promising a backup that isn't there. */
   async dispose(): Promise<void> {
     this.disposed = true;
     this.lease.stopHeartbeat();
     const wasRunning = this.state.view === "running";
     try {
+      let proof: { localStateVersion?: number; flushedVersion?: number } = {};
       if (wasRunning) {
         await this.ports.stopNode();
-        await this.ports.flushBackup();
+        const flushedVersion = await this.ports.flushBackup();
+        proof = { localStateVersion: (await this.ports.readLocal()).stateVersion, flushedVersion };
       }
-      await this.lease.release();
+      await this.lease.release(proof);
     } catch {
       /* best-effort — an unreleased lease expires on its own */
     }

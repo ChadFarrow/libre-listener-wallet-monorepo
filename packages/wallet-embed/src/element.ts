@@ -12,6 +12,9 @@ export interface ElementHooks {
   onSubmitSecret(secret: string): void;
   onMoveHere(): void;
   onRetry(): void; // paused / halted / moved-away → try boot again
+  /** The user confirmed the stale origin is gone for good and accepted the force-close. Only ever
+   *  reachable from an overridable halt, and only behind the confirm step. */
+  onForceRestore?(): void;
   onDisconnect(): void;
   walletAppUrl: string;
   appName?: string;
@@ -73,7 +76,7 @@ export class LibreWalletElement extends HTMLElement {
       p.textContent = text;
       return add(p);
     };
-    const button = (label: string, cls: "primary" | "secondary", onClick: () => void) => {
+    const button = (label: string, cls: "primary" | "secondary" | "danger", onClick: () => void) => {
       const btn = document.createElement("button");
       btn.className = cls;
       btn.textContent = label;
@@ -163,10 +166,34 @@ export class LibreWalletElement extends HTMLElement {
         msg(`Your wallet moved to ${hostOf(state.origin)}.`);
         button("Move it back here", "primary", () => this.hooks?.onRetry());
         break;
-      case "halted":
+      case "halted": {
         msg(state.message, "msg warn");
         button("Try again", "secondary", () => this.hooks?.onRetry());
+        // The escape hatch, for when the other device is genuinely gone (lost/broken/wiped) and the
+        // halt would otherwise be permanent. Restoring anyway puts a stale node on a live channel —
+        // the peer force-closes it and the funds come back on-chain via the sweeper — so this is a
+        // one-way, informed decision. It sits behind a reveal so it can't be mistaken for a second
+        // "Try again", and the consequence is spelled out before the button to accept it exists.
+        const ov = state.override;
+        if (ov && this.hooks?.onForceRestore) {
+          const reveal = document.createElement("button");
+          reveal.className = "link-btn";
+          reveal.textContent = `${hostOf(ov.staleOrigin)} is gone for good`;
+          reveal.addEventListener("click", () => {
+            reveal.remove();
+            msg(
+              `Restoring your wallet here without ${hostOf(ov.staleOrigin)} syncing first will very ` +
+                `likely FORCE-CLOSE your Lightning channel. Your funds return on-chain to your ` +
+                `recovery address (a few blocks), minus fees, and the channel is gone. Only do this ` +
+                `if ${hostOf(ov.staleOrigin)} is never coming back.`,
+              "msg warn",
+            );
+            button("I understand — restore anyway", "danger", () => this.hooks?.onForceRestore?.());
+          });
+          add(reveal);
+        }
         break;
+      }
       case "paused":
         msg("Can't reach Google Drive — the wallet is paused to stay safe.", "msg warn");
         button("Retry", "secondary", () => this.hooks?.onRetry());

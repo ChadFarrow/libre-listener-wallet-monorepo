@@ -11,10 +11,14 @@ class FakeDrive {
   backup: string | null = null; // "envelope:<version>" — verify parses it
   backupModified: number | null = null;
   down = false;
+  /** Test seam for driving the OTHER origin's behaviour mid-poll (the fake-clock loop never yields
+   *  to macrotasks, so a poll's own lease read is where a holder's ack can be made to appear). */
+  onRead: (() => void) | null = null;
   store(): LeaseStore {
     return {
       read: async () => {
         if (this.down) throw new Error("drive down");
+        this.onRead?.();
         return this.lease ? { ...this.lease } : null;
       },
       write: async (r) => {
@@ -60,7 +64,6 @@ function makeSession(opts: {
       const good = m && (secret === (opts.secretForBackup ?? "seed-hex") || secret === wallet.seedHex);
       return good ? { ok: true, stateVersion: parseInt(m![1], 10) } : { ok: false };
     },
-    backupModifiedTime: async () => drive.backupModified,
     startNode: async () => {
       wallet.startCalls++;
       wallet.running = true;
@@ -198,16 +201,13 @@ describe("RoamingSession takeover (Move wallet here)", () => {
     expect((await session.boot()).view).toBe("blocked");
 
     // Simulate the holder: after our claim, its heartbeat sees tok-b, stops, flushes v50, acks.
-    // Hooked into the takeover poll's own probe (the fake-clock loop never yields to macrotasks).
-    let probes = 0;
-    const realProbe = ports.backupModifiedTime;
-    ports.backupModifiedTime = async () => {
-      if (++probes === 2) {
+    // Hooked onto the poll's lease read (the fake-clock loop never yields to macrotasks).
+    let reads = 0;
+    drive.onRead = () => {
+      if (++reads === 2) {
         drive.backup = "envelope:50";
-        drive.backupModified = clock.t + 1;
         drive.lease = { ...drive.lease!, handoffAck: { from: "tok-a", flushedVersion: 50, at: clock.t } };
       }
-      return realProbe();
     };
     const s = await session.moveHere();
     expect(s.view).toBe("need-secret"); // fresh origin still needs the secret
@@ -216,7 +216,7 @@ describe("RoamingSession takeover (Move wallet here)", () => {
     expect(wallet.stateVersion).toBe(50); // restored the FLUSHED version, not the stale v42
   });
 
-  it("holder dead (no ack, no flush) → proceeds on timeout, then the gap check halts", async () => {
+  it("holder dead (no ack, no flush) → proceeds on timeout, then the proof gate halts", async () => {
     const drive = new FakeDrive();
     drive.lease = liveLease({ heartbeatStateVersion: 50 });
     drive.backup = "envelope:42";
@@ -228,6 +228,92 @@ describe("RoamingSession takeover (Move wallet here)", () => {
     expect(s.view).toBe("need-secret");
     const after = await session.submitSecret("seed-hex");
     expect(after).toMatchObject({ view: "halted", reason: "version-gap" });
+  });
+
+  // ISSUE #90 END-TO-END. The holder died AFTER its last heartbeat, so its lease advertises exactly
+  // what Drive holds — its post-heartbeat state is invisible. The old check compared advertised vs
+  // backup and saw nothing to complain about, so this restored a stale backup onto a live channel.
+  it("holder died at its last heartbeat (advertised == backup) → halts, with the override offered", async () => {
+    const drive = new FakeDrive();
+    drive.lease = liveLease({ heartbeatStateVersion: 42 }); // last heartbeat said 42...
+    drive.backup = "envelope:42"; // ...and Drive has 42. The 9 real commitments after it are unseen.
+    const wallet = new FakeWallet();
+    const { session } = makeSession({ drive, wallet, origin: "https://b.example", token: "tok-b" });
+    expect((await session.boot()).view).toBe("blocked");
+    expect((await session.moveHere()).view).toBe("need-secret");
+    const after = await session.submitSecret("seed-hex");
+    expect(after).toMatchObject({
+      view: "halted",
+      reason: "version-gap",
+      override: { staleOrigin: "https://a.example" },
+    });
+    expect(wallet.restoreCalls.length).toBe(0); // the force-close never happens
+  });
+
+  // The "Try again" bug: the halt must not be a one-shot. Our own claim wrote heartbeatStateVersion
+  // 0 over the holder's; re-booting reads that back and must NOT read it as "nothing to worry about".
+  it("re-booting a halted session over our OWN claim re-derives the halt", async () => {
+    const drive = new FakeDrive();
+    drive.lease = liveLease({ heartbeatStateVersion: 42 });
+    drive.backup = "envelope:42";
+    const wallet = new FakeWallet();
+    const { session } = makeSession({ drive, wallet, origin: "https://b.example", token: "tok-b" });
+    await session.boot();
+    await session.moveHere();
+    expect((await session.submitSecret("seed-hex")).view).toBe("halted");
+    expect(drive.lease?.owner).toBe("tok-b"); // we DID overwrite the holder's record...
+    expect(drive.lease?.heartbeatStateVersion).toBe(0); // ...with our own zero
+
+    // "Try again" → boot() → reads back our own record.
+    const again = await session.boot();
+    expect(again.view).not.toBe("running");
+    expect(wallet.restoreCalls.length).toBe(0);
+  });
+
+  it("a fresh page-life (new ownerToken) reading back our own claim still halts", async () => {
+    const drive = new FakeDrive();
+    drive.lease = liveLease({ heartbeatStateVersion: 42 });
+    drive.backup = "envelope:42";
+    const wallet = new FakeWallet();
+    const first = makeSession({ drive, wallet, origin: "https://b.example", token: "tok-b" });
+    await first.session.boot();
+    await first.session.moveHere();
+    expect((await first.session.submitSecret("seed-hex")).view).toBe("halted");
+
+    // Reload: same origin, same Drive, NEW token — so "is this record mine?" is unanswerable.
+    const second = makeSession({ drive, wallet, origin: "https://b.example", token: "tok-b2" });
+    const s = await second.session.boot();
+    expect(s.view).toBe("blocked"); // our own prior record reads as a live foreign lease
+    expect((await second.session.moveHere()).view).toBe("need-secret");
+    expect((await second.session.submitSecret("seed-hex")).view).toBe("halted");
+    expect(wallet.restoreCalls.length).toBe(0);
+  });
+
+  it("forceRestoreAnyway is the user's informed escape hatch past an unproven handoff", async () => {
+    const drive = new FakeDrive();
+    drive.lease = liveLease({ heartbeatStateVersion: 42 });
+    drive.backup = "envelope:42";
+    const wallet = new FakeWallet();
+    const { session } = makeSession({ drive, wallet, origin: "https://b.example", token: "tok-b" });
+    await session.boot();
+    await session.moveHere();
+    expect((await session.submitSecret("seed-hex")).view).toBe("halted");
+
+    // The user asserts the phone is gone and accepts the force-close.
+    expect((await session.forceRestoreAnyway()).view).toBe("need-secret");
+    expect(drive.lease?.unprovenPredecessor).toBeUndefined(); // predecessor cleared
+    expect((await session.submitSecret("seed-hex")).view).toBe("running");
+    expect(wallet.restoreCalls.length).toBe(1);
+  });
+
+  it("forceRestoreAnyway is a no-op from any state that isn't an overridable halt", async () => {
+    const drive = new FakeDrive();
+    drive.lease = liveLease();
+    const wallet = new FakeWallet();
+    const { session } = makeSession({ drive, wallet, origin: "https://b.example", token: "tok-b" });
+    expect((await session.boot()).view).toBe("blocked");
+    expect((await session.forceRestoreAnyway()).view).toBe("blocked");
+    expect(wallet.restoreCalls.length).toBe(0);
   });
 });
 

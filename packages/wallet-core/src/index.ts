@@ -19,6 +19,7 @@ export * from "./core/peer-list";
 export * from "./core/address-script";
 export * from "./core/usable-smoothing";
 export * from "./core/drive-redirect";
+export * from "./core/drive-sync-policy";
 // Roaming wallet: one wallet that MOVES between origins over the Drive backup, with a Drive-file
 // lease as the cross-origin single-instance guard (see docs/roaming-protocol.md).
 export * from "./roaming/roaming-policy";

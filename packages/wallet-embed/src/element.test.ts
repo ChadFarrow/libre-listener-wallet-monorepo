@@ -20,6 +20,9 @@ function mountEl(hooks: Partial<ElementHooks> = {}): LibreWalletElement {
 
 const sr = (el: LibreWalletElement) => el.shadowRoot!;
 const text = (el: LibreWalletElement) => sr(el).textContent ?? "";
+/** Only what's RENDERED — sr().textContent also carries the stylesheet, so an assertion that some
+ *  copy is absent can otherwise be satisfied (or broken) by a CSS comment. */
+const bodyText = (el: LibreWalletElement) => sr(el).querySelector('[data-ref="body"]')?.textContent ?? "";
 
 describe("stylesheet is themeable by the embedding app", () => {
   // Custom properties inherit through the shadow boundary and an outer page's declarations beat
@@ -87,6 +90,42 @@ describe("<libre-wallet> views", () => {
     expect(text(el)).toContain("Open a.example once");
     (sr(el).querySelector("button.secondary") as HTMLButtonElement).click();
     expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  // The escape hatch for "my phone is gone for good". It force-closes a live channel, so it must be
+  // a deliberate, informed act — never a second button next to "Try again" that a user mashes after
+  // the first one didn't work. Reveal the consequence first; only then offer the button.
+  it("an overridable halt hides the force-restore behind a confirm, not a second retry", () => {
+    const onForceRestore = vi.fn();
+    const onRetry = vi.fn();
+    const el = mountEl({ onForceRestore, onRetry });
+    el.renderState({
+      view: "halted",
+      reason: "version-gap",
+      message: "Open a.example once so it can sync.",
+      override: { staleOrigin: "https://a.example" },
+    });
+    // Nothing about force-closing is shown, and no force button exists, until the user asks.
+    expect(bodyText(el)).not.toMatch(/force-close/i);
+    expect(sr(el).querySelector("button.danger")).toBeNull();
+
+    const reveal = sr(el).querySelector("button.link-btn") as HTMLButtonElement;
+    expect(reveal.textContent).toMatch(/gone/i);
+    reveal.click();
+    expect(onForceRestore).not.toHaveBeenCalled(); // revealing is not consenting
+
+    expect(bodyText(el)).toMatch(/force-close/i);
+    expect(bodyText(el)).toMatch(/on-chain/i); // says where the money goes
+    const confirm = sr(el).querySelector("button.danger") as HTMLButtonElement;
+    confirm.click();
+    expect(onForceRestore).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("a non-overridable halt (start-failed) offers no escape hatch at all", () => {
+    const el = mountEl({});
+    el.renderState({ view: "halted", reason: "start-failed", message: "Start failed" });
+    expect(sr(el).querySelector("button.link-btn")).toBeNull();
   });
 });
 

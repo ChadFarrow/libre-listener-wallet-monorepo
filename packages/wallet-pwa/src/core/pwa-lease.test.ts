@@ -19,16 +19,23 @@ function liveLease(over: Partial<RoamingLeaseRecord> = {}): RoamingLeaseRecord {
   };
 }
 
-function fakeIo(initialLease: RoamingLeaseRecord | null = null) {
+function fakeIo(initialLease: RoamingLeaseRecord | null = null, opts: { backupVersion?: number | null } = {}) {
   const files = new Map<string, string>();
   if (initialLease) files.set(leaseFilename("mainnet"), JSON.stringify(initialLease));
   const local = new Map<string, string>([["state_version", "12"], ["ldk_seed", "aa".repeat(32)]]);
+  const backupVersion = opts.backupVersion === undefined ? 12 : opts.backupVersion; // default: synced
   const io: PwaLeaseIo = {
     readFile: async (name) => (files.has(name) ? { contents: files.get(name)!, modifiedTime: "" } : null),
     writeFile: async (name, contents) => void files.set(name, contents),
-    downloadBackup: async () => null,
+    downloadBackup: async () => (backupVersion === null ? null : `envelope:${backupVersion}`),
     uploadBackup: vi.fn(async () => {}),
     storageGet: async (_n, key) => local.get(key) ?? null,
+    verifyEnvelope: async (envelope: string) => {
+      const m = /^envelope:(\d+)$/.exec(envelope);
+      return m
+        ? { ok: true, hasSeed: true, entryKeys: [], stateVersion: parseInt(m[1], 10) }
+        : { ok: false, hasSeed: false, entryKeys: [] };
+    },
   };
   return { io, files, local };
 }
@@ -87,12 +94,36 @@ describe("createPwaLeaseKeeper", () => {
     keeper.onEvent();
     await vi.waitFor(() => {
       const rec = JSON.parse(files.get(leaseFilename("mainnet"))!);
-      expect(rec.phase).toBe("released");
+      expect(rec.phase).toBe("released"); // local v12, backup v12 → a clean handoff, honestly
+    });
+  });
+
+  // "released" is the strongest proof a successor gets, so it has to be earned. The Drive auto-sync
+  // is debounced, so a stop can land with state that never reached the cloud — saying "released"
+  // there invites the next origin to restore a stale backup onto a live channel (issue #90).
+  it("stopping with state the Drive backup never got does NOT claim a clean handoff", async () => {
+    const { io, files } = fakeIo(null, { backupVersion: 9 }); // local is at 12; the flush didn't land
+    const controller = fakeController();
+    const keeper = createPwaLeaseKeeper({
+      controller,
+      driveConnected: () => true,
+      origin: "https://libre-wallet-pwa.pages.dev",
+      io,
+      leaseTuning: { delay: async () => {} },
+    });
+    keeper.onEvent();
+    await vi.waitFor(() => expect(files.get(leaseFilename("mainnet"))).toBeDefined());
+    controller._setRunning(false);
+    keeper.onEvent();
+    await vi.waitFor(() => {
+      const rec = JSON.parse(files.get(leaseFilename("mainnet"))!);
+      expect(rec.phase).toBe("live"); // honest — we're 3 versions ahead of Drive
+      expect(rec.heartbeatStateVersion).toBe(12); // and we say exactly how far we got
     });
   });
 
   it("self-fences when already running against a LIVE foreign lease (auto-start race): stop, flush-if-ahead, ack", async () => {
-    const { io, files } = fakeIo(liveLease({ heartbeatStateVersion: 10 }));
+    const { io, files } = fakeIo(liveLease({ heartbeatStateVersion: 10 }), { backupVersion: null });
     const controller = fakeController();
     const onMoved = vi.fn();
     const keeper = createPwaLeaseKeeper({

@@ -1,6 +1,11 @@
 // Shadow-DOM stylesheet for <libre-wallet>. Alby-Go-style tokens (the v4vmusic green accent, ink
 // on gradient) in a compact, mobile-first card: ≥44px touch targets, ≥16px inputs (iOS focus-zoom
 // rule), container-relative sizing only — the widget must never assume viewport ownership.
+//
+// THEMING: every colour is a --lw-* custom property on :host, and an embedding app can restyle the
+// whole card to its own palette just by setting them on the element (`libre-wallet { --lw-bg: … }`)
+// — custom properties inherit through the shadow boundary, and an outer page's declarations beat
+// :host. Keep it that way: a literal colour anywhere in here is unthemeable from outside.
 export const EMBED_CSS = `
 :host {
   all: initial;
@@ -8,6 +13,11 @@ export const EMBED_CSS = `
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --lw-accent: #22c45e;
   --lw-accent-2: #2bd76c;
+  /* Second stop of the mark's gradient. A token, not a literal, so an embedding app can theme the
+     card to its own palette — every other colour here is already overridable via :host custom
+     properties (an outer page's declarations beat :host), and one hardcoded hex left the mark
+     stubbornly Libre-green inside an otherwise fully restyled widget. */
+  --lw-accent-3: #17913f;
   --lw-ink: #04180b;
   --lw-bg: #ffffff;
   --lw-fg: #10241a;
@@ -37,7 +47,7 @@ export const EMBED_CSS = `
 .head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .mark {
   width: 22px; height: 22px; border-radius: 6px; flex: none;
-  background: linear-gradient(135deg, var(--lw-accent-2), #17913f);
+  background: linear-gradient(135deg, var(--lw-accent-2), var(--lw-accent-3));
   color: var(--lw-ink); font-size: 13px; font-weight: 800;
   display: flex; align-items: center; justify-content: center;
 }
@@ -71,12 +81,16 @@ input.field {
   animation: lw-spin 0.8s linear infinite;
 }
 @keyframes lw-spin { to { transform: rotate(360deg); } }
+/* A top-layer <dialog> (see element.ts requestApproval): it escapes the card and the host's
+   stacking context, so the approval is always reachable — the promise only settles on a click.
+   Centred by the dialog default; the dim is the backdrop's job now, not an inset overlay's. */
 .overlay {
-  position: absolute; inset: 0; border-radius: 14px;
-  background: color-mix(in srgb, var(--lw-bg) 92%, transparent);
-  display: flex; align-items: center; justify-content: center; padding: 14px;
+  border: 1px solid var(--lw-line); border-radius: 14px; padding: 14px;
+  background: var(--lw-bg); color: var(--lw-fg);
+  width: min(340px, calc(100vw - 32px));
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
 }
-.overlay[hidden] { display: none; }
+.overlay::backdrop { background: rgb(0 0 0 / 0.55); }
 .sheet { display: grid; gap: 10px; width: 100%; }
 .sheet h3 { font-size: 15px; }
 .check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--lw-muted); }

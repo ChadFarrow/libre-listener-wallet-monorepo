@@ -21,7 +21,7 @@ export class LibreWalletElement extends HTMLElement {
   private root: ShadowRoot;
   private bodyEl!: HTMLElement;
   private netEl!: HTMLElement;
-  private overlayEl!: HTMLElement;
+  private overlayEl!: HTMLDialogElement;
   private hooks?: ElementHooks;
   private lastState: RoamingViewState = { view: "checking" };
   private balanceText = "— sats";
@@ -40,7 +40,7 @@ export class LibreWalletElement extends HTMLElement {
         <div class="net" data-ref="net"></div>
       </div>
       <div class="body" data-ref="body"></div>
-      <div class="overlay" data-ref="overlay" hidden></div>
+      <dialog class="overlay" data-ref="overlay"></dialog>
     `;
     this.root.append(style, card);
     this.bodyEl = card.querySelector('[data-ref="body"]')!;
@@ -201,12 +201,22 @@ export class LibreWalletElement extends HTMLElement {
     this.bodyEl.append(btn, hint, a);
   }
 
-  /** Spend/enable approval modal. Resolves the provider's requestApproval. */
+  /**
+   * Spend/enable approval modal. Resolves the provider's requestApproval.
+   *
+   * MUST be a <dialog>.showModal(), never an in-card overlay: this promise only settles from a
+   * click below, so anything that makes the sheet unclickable hangs the host's payment forever
+   * (no reject, no timeout). Hosts embed this card in their own stacking context — boostmebitch
+   * docks it at z-30 and opens its boost modal at z-60 — and a descendant's z-index cannot escape
+   * an ancestor's stacking context, so no z-index we choose here can win. showModal() puts the
+   * sheet in the browser's top layer, which is above every stacking context by construction.
+   * (Caveat inherent to the top layer: a display:none ancestor still renders nothing.)
+   */
   requestApproval(req: ApprovalRequest): Promise<ApprovalDecision> {
     return new Promise((resolve) => {
       const o = this.overlayEl;
       o.textContent = "";
-      o.hidden = false;
+      o.showModal();
       const sheet = document.createElement("div");
       sheet.className = "sheet";
       const h = document.createElement("h3");
@@ -247,11 +257,18 @@ export class LibreWalletElement extends HTMLElement {
       sheet.append(h, p, input, check, err, actions);
       o.appendChild(sheet);
 
+      // Every exit settles the promise exactly once. showModal() adds a native dismissal the
+      // buttons don't know about — Esc — which closes the dialog and would otherwise strand the
+      // caller awaiting a decision that can never arrive.
+      let settled = false;
       const close = (decision: ApprovalDecision) => {
-        o.hidden = true;
+        if (settled) return;
+        settled = true;
+        if (o.open) o.close();
         o.textContent = "";
         resolve(decision);
       };
+      o.addEventListener("close", () => close({ granted: false }), { once: true });
       cancel.addEventListener("click", () => close({ granted: false }));
       ok.addEventListener("click", () => {
         if (cb.checked) return close({ granted: true, limitSats: null });

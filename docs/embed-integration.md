@@ -117,6 +117,35 @@ mountLibreWallet(target, {
   `window.webln` (BC's WebLN/Extension option detects it once connected). A native "Libre
   Wallet" connector in the BC modal is a planned upstream contribution.
 
+## Theming (match your app, not ours)
+
+Every colour in the card is a `--lw-*` custom property on `:host`. Custom properties inherit
+through the shadow boundary, and an outer page's declarations beat `:host`, so you restyle the
+whole widget from your own stylesheet — no build flag, no fork:
+
+```css
+libre-wallet {
+  --lw-bg: #0a0a08;      /* card background   */
+  --lw-fg: #fdfaf3;      /* primary text      */
+  --lw-line: #1f1d18;    /* borders           */
+  --lw-muted: #8a857a;   /* secondary text    */
+  --lw-accent: #fae500;  /* buttons, spinner  */
+  --lw-accent-2: #fae500;  /* mark gradient, stop 1 */
+  --lw-accent-3: #fae500;  /* mark gradient, stop 2 */
+  --lw-bad: #d64545;
+  --lw-warn: #b98a1c;
+}
+```
+
+Point them at your own theme variables and the widget follows your light/dark switch for free.
+Defaults are the Libre green, so doing nothing keeps the stock look.
+
+**The approval sheet is a top-layer `<dialog>`** — it is deliberately not confined to the card, so
+your own modals can never cover it. If it were, a payment prompt opened behind your checkout UI
+would be unclickable, and the `sendPayment`/`enable` promise it gates would never settle. Don't
+re-parent it, and don't put the widget inside a `display: none` container while a spend is in
+flight (the top layer renders nothing under a `display: none` ancestor).
+
 ## The roaming rule (what your users will see)
 
 The wallet lives in ONE place at a time. If it's active on another site, the widget shows

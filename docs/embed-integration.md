@@ -142,9 +142,29 @@ Defaults are the Libre green, so doing nothing keeps the stock look.
 
 **The approval sheet is a top-layer `<dialog>`** — it is deliberately not confined to the card, so
 your own modals can never cover it. If it were, a payment prompt opened behind your checkout UI
-would be unclickable, and the `sendPayment`/`enable` promise it gates would never settle. Don't
-re-parent it, and don't put the widget inside a `display: none` container while a spend is in
-flight (the top layer renders nothing under a `display: none` ancestor).
+would be unclickable, and the `sendPayment`/`enable` promise it gates would never settle (it has no
+reject and no timeout — it settles only when the user answers). Don't re-parent it.
+
+### Hiding the widget without breaking payments
+
+You'll want the card out of the way while the wallet is happy. **Clip it — don't `display: none` it:**
+
+```css
+/* the widget's container, when you want the card hidden */
+.libre-dock-hidden { width: 0; height: 0; overflow: hidden; }
+```
+
+The top layer escapes an ancestor's **clipping**, so the approval sheet still renders and stays
+clickable. It does not escape:
+
+| | |
+|---|---|
+| `display: none` | Removes the box tree → **the sheet renders nothing** → the next spend hangs forever. |
+| `visibility: hidden` | Inherits through the DOM into the dialog → same outcome. (Today `:host { all: initial }` resets it, so this fails *loudly* by leaving the card visible instead — don't rely on that.) |
+| `opacity: 0` | Card is invisible but still hit-tests — an invisible click-blocker over your page. |
+
+Rule of thumb: if a spend can be in flight, the widget must stay in the box tree. Clipping is the
+only hiding mechanism that satisfies that by construction.
 
 ## The roaming rule (what your users will see)
 

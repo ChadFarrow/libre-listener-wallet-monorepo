@@ -17,13 +17,14 @@ beforeAll(() => {
     this.open = true;
     // Esc is a native dismissal of a modal dialog and fires `cancel` then `close` — the buttons
     // never see it, so element.ts has to settle on `close`. Tests must be able to reach that path.
-    this.addEventListener(
-      "keydown",
-      (e: KeyboardEvent) => {
-        if (e.key === "Escape") this.close();
-      },
-      { once: true },
-    );
+    // Not `{ once: true }`: that spends the listener on the FIRST key of any kind, so a test that
+    // types into the sheet before pressing Escape would silently stop being a test of Escape.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      this.removeEventListener("keydown", onKey);
+      this.close();
+    };
+    this.addEventListener("keydown", onKey);
   };
 
   proto.show = function show(this: HTMLDialogElement) {

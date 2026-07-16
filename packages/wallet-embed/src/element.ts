@@ -257,28 +257,34 @@ export class LibreWalletElement extends HTMLElement {
       sheet.append(h, p, input, check, err, actions);
       o.appendChild(sheet);
 
-      // Every exit settles the promise exactly once. showModal() adds a native dismissal the
-      // buttons don't know about — Esc — which closes the dialog and would otherwise strand the
-      // caller awaiting a decision that can never arrive.
-      let settled = false;
-      const close = (decision: ApprovalDecision) => {
-        if (settled) return;
-        settled = true;
-        if (o.open) o.close();
-        o.textContent = "";
-        resolve(decision);
+      // Closing the dialog is the ONLY way this settles, so every exit routes through it — including
+      // Esc, a native dismissal showModal() adds that the buttons never see. Denial is the default,
+      // so an Esc (or any future close we don't write ourselves) can't strand the caller awaiting a
+      // decision that never comes. `close` fires once per dialog, so `{ once: true }` is the
+      // settle-exactly-once guarantee — no latch needed.
+      let decision: ApprovalDecision = { granted: false };
+      o.addEventListener(
+        "close",
+        () => {
+          o.textContent = "";
+          resolve(decision);
+        },
+        { once: true },
+      );
+      const settle = (d: ApprovalDecision) => {
+        decision = d;
+        o.close();
       };
-      o.addEventListener("close", () => close({ granted: false }), { once: true });
-      cancel.addEventListener("click", () => close({ granted: false }));
+      cancel.addEventListener("click", () => o.close());
       ok.addEventListener("click", () => {
-        if (cb.checked) return close({ granted: true, limitSats: null });
+        if (cb.checked) return settle({ granted: true, limitSats: null });
         const parsed = parseCapInput(input.value);
         if (!parsed.ok) {
           err.textContent = "Enter a whole number of sats, or tick “No limit”.";
           err.hidden = false;
           return;
         }
-        close({ granted: true, limitSats: parsed.sats });
+        settle({ granted: true, limitSats: parsed.sats });
       });
     });
   }

@@ -57,6 +57,11 @@ export const EMBED_CSS = `
 .msg { font-size: 13.5px; color: var(--lw-muted); line-height: 1.45; }
 .msg.bad { color: var(--lw-bad); }
 .msg.warn { color: var(--lw-warn); }
+/* font-family: inherit — form controls do NOT inherit fonts (the UA stylesheet gives them their
+   own), so without this the buttons and the input silently render in the browser's default face
+   while the rest of the card uses :host's. Invisible with the stock system-ui stack; glaring the
+   moment an embedding app sets a real font. Size/weight stay explicit below. */
+button.primary, button.secondary, input.field, .check { font-family: inherit; }
 button.primary, button.secondary {
   min-height: 44px; border-radius: 10px; font-size: 15px; font-weight: 700;
   width: 100%; cursor: pointer; border: none;

@@ -24,6 +24,11 @@ import {
 export interface LeaseStore {
   read(): Promise<RoamingLeaseRecord | null>;
   write(record: RoamingLeaseRecord): Promise<void>;
+  /** Best-effort SYNCHRONOUSLY-ISSUED write for the pagehide path — nothing may be awaited before
+   *  the request goes out, or the page dies first and it is never sent at all. Returns false when it
+   *  could not be issued; the caller must treat that as "the write did not happen". Optional: stores
+   *  without a keepalive-capable transport simply don't offer it. */
+  writeSyncKeepalive?(record: RoamingLeaseRecord): boolean;
 }
 
 /** One lease file per network — pinned in storage-contract.test.ts (a renamed file would let two
@@ -76,6 +81,8 @@ export class RoamingLease {
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private firstFailureAt: number | null = null;
   private fenced = false;
+  /** Our last written record. The pagehide path builds from this because it cannot await a read. */
+  private lastWritten: RoamingLeaseRecord | null = null;
 
   constructor(
     private readonly store: LeaseStore,
@@ -103,7 +110,10 @@ export class RoamingLease {
     return { record, state: leaseState(record, this.opts.ownerToken, this.now()) };
   }
 
-  private async writeOurRecord(previous: RoamingLeaseRecord | null): Promise<RoamingLeaseRecord> {
+  private async writeOurRecord(
+    previous: RoamingLeaseRecord | null,
+    opts: { clearPredecessor?: boolean } = {},
+  ): Promise<RoamingLeaseRecord> {
     const record = buildLeaseRecord({
       ownerToken: this.opts.ownerToken,
       origin: this.opts.origin,
@@ -112,9 +122,24 @@ export class RoamingLease {
       previous,
       heartbeatStateVersion: await this.opts.getStateVersion(),
       leaseMs: this.leaseMs,
+      clearPredecessor: opts.clearPredecessor,
     });
     await this.store.write(record);
+    this.lastWritten = record;
     return record;
+  }
+
+  /** Drop the carried unproven predecessor — ONLY on the user's explicit override (they declared the
+   *  other device gone and accepted the force-close). Best-effort: the override is already armed in
+   *  memory, so a failed write costs the next boot a re-halt, never safety. */
+  async clearPredecessor(): Promise<void> {
+    try {
+      const record = await this.store.read();
+      if (!record || record.owner !== this.opts.ownerToken) return;
+      await this.writeOurRecord(record, { clearPredecessor: true });
+    } catch {
+      /* best-effort — a re-halt on the next boot is the safe failure */
+    }
   }
 
   /**
@@ -221,23 +246,57 @@ export class RoamingLease {
     }
   }
 
-  /** Clean stop: mark the lease released (immediately claimable, and the successor knows the
-   *  final flush happened) — only if we still own it. Best-effort. */
-  async release(): Promise<void> {
+  /** Clean stop — only if we still own the lease. Marks it `released` (immediately claimable, and
+   *  the successor knows the final flush happened) ONLY when the backup provably holds everything we
+   *  have. `released` is the strongest proof a successor gets, so claiming it while our last flush
+   *  is behind local state would hand the next origin a stale backup to restore onto a live channel
+   *  — the #90 force-close, dressed as a clean handoff. When we can't prove it, stay honest: leave
+   *  the lease `live` at our TRUE final version so the successor halts and asks the user to reopen
+   *  this origin. Omitting the versions asserts nothing is pending (dispose() flushes first).
+   *  Best-effort. */
+  async release(opts: { localStateVersion?: number; flushedVersion?: number } = {}): Promise<void> {
     this.stopHeartbeat();
     try {
       const record = await this.store.read();
       if (!record || record.owner !== this.opts.ownerToken) return;
+      const local = opts.localStateVersion ?? (await this.opts.getStateVersion());
+      const clean = (opts.flushedVersion ?? local) >= local;
       await this.store.write({
         ...record,
         seq: record.seq + 1,
-        expiresAt: this.now(),
-        phase: "released",
-        heartbeatStateVersion: await this.opts.getStateVersion(),
+        expiresAt: clean ? this.now() : record.expiresAt,
+        phase: clean ? "released" : "live",
+        heartbeatStateVersion: local,
       });
     } catch {
       /* best-effort — an unreleased lease simply expires after leaseMs */
     }
+  }
+
+  /**
+   * The pagehide path: issue our final lease write SYNCHRONOUSLY, since a page dies long before any
+   * awaited work resolves (the browser finishes an in-flight keepalive request, but cannot start
+   * one for you). Same honesty rule as release(): `released` only when the backup provably holds
+   * everything we have, otherwise `live` at our true final version so the successor halts.
+   *
+   * Builds from our last written record rather than a fresh read — reading would be an await.
+   * Returns false when nothing could be issued (no record written this page-life, or the store has
+   * no keepalive transport): NOT a silent success, the close simply wasn't recorded and the
+   * successor will fall back to the proof gate, which halts.
+   */
+  releaseSyncKeepalive(opts: { localStateVersion: number; flushedVersion: number }): boolean {
+    this.stopHeartbeat();
+    const last = this.lastWritten;
+    if (!last || !this.store.writeSyncKeepalive) return false;
+    const clean = opts.flushedVersion >= opts.localStateVersion;
+    return this.store.writeSyncKeepalive({
+      ...last,
+      seq: last.seq + 1,
+      // Never extend a lease we're abandoning; never shorten one we're admitting state on.
+      expiresAt: clean ? this.now() : last.expiresAt,
+      phase: clean ? "released" : "live",
+      heartbeatStateVersion: opts.localStateVersion,
+    });
   }
 }
 
@@ -248,9 +307,13 @@ export function driveLeaseStore(
   io: {
     readFile: (name: string) => Promise<{ contents: string } | null>;
     writeFile: (name: string, contents: string) => Promise<void>;
+    /** Synchronously-issued keepalive overwrite for pagehide; false when it couldn't be issued.
+     *  Optional so existing callers (and tests) that only need async I/O still satisfy the type. */
+    writeFileSyncKeepalive?: (name: string, contents: string) => boolean;
   },
 ): LeaseStore {
   const name = leaseFilename(network);
+  const sync = io.writeFileSyncKeepalive;
   return {
     async read() {
       const f = await io.readFile(name);
@@ -259,5 +322,6 @@ export function driveLeaseStore(
     async write(record) {
       await io.writeFile(name, JSON.stringify(record));
     },
+    ...(sync ? { writeSyncKeepalive: (record: RoamingLeaseRecord) => sync(name, JSON.stringify(record)) } : {}),
   };
 }

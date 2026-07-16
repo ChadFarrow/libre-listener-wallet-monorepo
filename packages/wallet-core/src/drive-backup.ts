@@ -349,6 +349,17 @@ export async function downloadBackup(network: string): Promise<string | null> {
 // each grow their own REST plumbing. NOT used by the backup functions above (their behavior is
 // pinned by the storage contract and stays byte-for-byte as shipped).
 
+/** appDataFolder file ids resolved this page-life. Exists for ONE reason: the pagehide lease write
+ *  must be ISSUED with nothing awaited before it (a page dies long before an async id lookup
+ *  resolves — which is why the old `pagehide` "keepalive flush" never actually sent anything). Ids
+ *  are stable for a file's lifetime; a vanished file just re-resolves on the next async call. */
+const appDataFileIds = new Map<string, string>();
+
+/** Test seam: page-life caches must not leak between tests. */
+export function __resetAppDataFileIdCache(): void {
+  appDataFileIds.clear();
+}
+
 async function findAppDataFileId(name: string): Promise<{ id: string; modifiedTime: string } | null> {
   const q = encodeURIComponent(`name='${name}'`);
   const res = await driveFetch(
@@ -357,7 +368,36 @@ async function findAppDataFileId(name: string): Promise<{ id: string; modifiedTi
   );
   const data = await res.json();
   const f = (data.files || [])[0];
+  if (f) appDataFileIds.set(name, f.id);
+  else appDataFileIds.delete(name);
   return f ? { id: f.id, modifiedTime: f.modifiedTime } : null;
+}
+
+/**
+ * Synchronously ISSUE a keepalive overwrite of an appData file — the pagehide path, and the only
+ * write that can outlive the page (the browser finishes an in-flight keepalive request after the
+ * document dies; it cannot start one). Nothing may be awaited before the fetch call.
+ *
+ * Returns false when it could not be issued (no token, or the id was never resolved this page-life)
+ * — callers MUST treat that as "the write did not happen", never as success. Bodies are capped at
+ * 64KB by the keepalive spec, so this is for small coordination files only, never a backup envelope.
+ */
+export function writeAppDataFileSyncKeepalive(name: string, contents: string): boolean {
+  const id = appDataFileIds.get(name);
+  if (!id || !accessToken) return false;
+  try {
+    void fetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: contents,
+      keepalive: true,
+    }).catch(() => {
+      /* fire-and-forget: the page is going away, there is no one left to tell */
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Read a small JSON/text file from the app's private Drive folder. Null when absent. */

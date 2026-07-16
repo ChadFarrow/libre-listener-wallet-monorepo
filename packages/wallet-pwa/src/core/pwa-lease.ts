@@ -36,6 +36,9 @@ export interface PwaLeaseIo {
   downloadBackup: typeof downloadBackup;
   uploadBackup: typeof uploadBackup;
   storageGet: (network: string, key: string) => Promise<string | null>;
+  /** Decrypt-only backup verification. A seam so tests can state a backup's version without minting
+   *  real encrypted envelopes; production always uses the SDK's own verifier. */
+  verifyEnvelope: typeof verifyBackupEnvelope;
 }
 
 const realIo: PwaLeaseIo = {
@@ -44,6 +47,7 @@ const realIo: PwaLeaseIo = {
   downloadBackup,
   uploadBackup,
   storageGet: (network, key) => new IndexedDBStorageProvider(dbNameForNetwork(network)).getItem(key),
+  verifyEnvelope: verifyBackupEnvelope,
 };
 
 function randomToken(): string {
@@ -55,6 +59,22 @@ async function localStateVersion(network: string, io: PwaLeaseIo): Promise<numbe
   try {
     const raw = await io.storageGet(network, "state_version");
     return raw ? parseInt(raw, 10) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** The state_version the Drive backup actually holds (0 when absent/unreadable) — i.e. how far our
+ *  last flush got. Both callers need it: fence() to decide whether to upload, release() to decide
+ *  whether it may honestly claim `released`. Never throws; 0 is the conservative answer. */
+async function driveBackupVersion(network: string, io: PwaLeaseIo): Promise<number> {
+  try {
+    const seed = await io.storageGet(network, "ldk_seed");
+    if (!seed) return 0;
+    const remote = await io.downloadBackup(network);
+    if (!remote) return 0;
+    const v = await io.verifyEnvelope(remote, seed);
+    return v.ok && typeof v.stateVersion === "number" ? v.stateVersion : 0;
   } catch {
     return 0;
   }
@@ -114,15 +134,7 @@ export function createPwaLeaseKeeper(deps: PwaLeaseDeps): { onEvent: () => void 
     try {
       // Flush ONLY if local is ahead of Drive (never clobber the successor's restore + flush).
       const version = await localStateVersion(network, io);
-      const seed = await io.storageGet(network, "ldk_seed");
-      let backupVersion = 0;
-      if (seed) {
-        const remote = await io.downloadBackup(network);
-        if (remote) {
-          const v = await verifyBackupEnvelope(remote, seed);
-          backupVersion = v.ok && typeof v.stateVersion === "number" ? v.stateVersion : 0;
-        }
-      }
+      const backupVersion = await driveBackupVersion(network, io);
       if (version > backupVersion) {
         const envelope = await deps.controller.exportBackup();
         await io.uploadBackup(envelope, network);
@@ -176,10 +188,19 @@ export function createPwaLeaseKeeper(deps: PwaLeaseDeps): { onEvent: () => void 
     }
   };
 
+  // Stopping the node releases the lease — but `released` is the strongest proof a successor gets,
+  // so it must be earned, not assumed. The Drive auto-sync is debounced, so a stop can land with
+  // local state that never reached the cloud; claiming a clean handoff there would invite the next
+  // origin to restore a stale backup onto a live channel. Tell release() how far the flush really
+  // got and let it stay honestly `live` when we're ahead.
   const release = async (): Promise<void> => {
     const l = lease;
     lease = null;
-    if (l) await l.release();
+    if (!l) return;
+    await l.release({
+      localStateVersion: await localStateVersion(network, io),
+      flushedVersion: await driveBackupVersion(network, io),
+    });
   };
 
   return {

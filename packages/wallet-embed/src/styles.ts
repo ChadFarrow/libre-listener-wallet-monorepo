@@ -61,14 +61,24 @@ export const EMBED_CSS = `
    own), so without this the buttons and the input silently render in the browser's default face
    while the rest of the card uses :host's. Invisible with the stock system-ui stack; glaring the
    moment an embedding app sets a real font. Size/weight stay explicit below. */
-button.primary, button.secondary, input.field, .check { font-family: inherit; }
-button.primary, button.secondary {
+button.primary, button.secondary, button.danger, button.link-btn, input.field, .check { font-family: inherit; }
+button.primary, button.secondary, button.danger {
   min-height: 44px; border-radius: 10px; font-size: 15px; font-weight: 700;
   width: 100%; cursor: pointer; border: none;
 }
 button.primary { background: var(--lw-accent); color: var(--lw-ink); }
 button.primary:disabled { opacity: 0.55; cursor: default; }
 button.secondary { background: transparent; color: var(--lw-fg); border: 1px solid var(--lw-line); }
+/* Destructive, and deliberately NOT accent-green: this one force-closes a channel. It only ever
+   appears after the consequence has been spelled out (element.ts, the overridable halt). */
+button.danger { background: transparent; color: var(--lw-bad); border: 1px solid var(--lw-bad); }
+/* The reveal that precedes it — text, not a button-shaped thing, so it reads as "tell me more"
+   rather than as a second action competing with "Try again". */
+button.link-btn {
+  background: none; border: none; padding: 4px 0; width: 100%;
+  color: var(--lw-fg); opacity: 0.7; font-size: 13px; text-align: left;
+  text-decoration: underline; cursor: pointer;
+}
 a.link { color: var(--lw-accent); font-size: 13px; text-decoration: none; }
 input.field {
   min-height: 44px; font-size: 16px; /* <16px would trigger iOS focus-zoom */

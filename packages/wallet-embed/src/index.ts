@@ -163,6 +163,7 @@ export function mountLibreWallet(target: HTMLElement | string, opts: MountOption
     onSubmitSecret: (secret) => void embed.session.submitSecret(secret),
     onMoveHere: () => void embed.session.moveHere(),
     onRetry: () => void embed.session.boot(),
+    onForceRestore: () => void embed.session.forceRestoreAnyway(),
     onDisconnect: () => void embed.session.dispose(),
   });
 
@@ -176,11 +177,24 @@ export function mountLibreWallet(target: HTMLElement | string, opts: MountOption
     }
   }
 
-  // Emergency flush on page close/background: an issued keepalive upload survives page death;
-  // a truly lost flush is caught by the crash-gap check on the next origin.
-  const onPageHide = () => {
-    if (embed.session.current().view === "running") embed.emergencyFlush();
+  // Closing down cleanly is what makes roaming work: a successor may only take the wallet over if
+  // it can PROVE this origin's final state reached Drive, so an unrecorded close costs the user a
+  // halt on their next device. Two hooks, because there is no single reliable "we're closing" event:
+  //
+  //  - visibilitychange → hidden fires while the page is still ALIVE and can await real work. On
+  //    iOS it's what you get when the user switches apps or closes the browser, so this is the hook
+  //    that actually runs in practice — and the only one that can flush the backup.
+  //  - pagehide is the last resort, where nothing can be awaited: issue a synchronous keepalive
+  //    lease write and hope. (The old code called an async exportBackup() here and believed the
+  //    comment about keepalive surviving page death — but keepalive only protects a request already
+  //    in flight, and this one was never issued. It was a no-op for the whole life of the widget.)
+  const onHidden = () => {
+    if (document.visibilityState === "hidden") void embed.closeSoon();
   };
+  const onPageHide = () => {
+    embed.releaseSync();
+  };
+  document.addEventListener("visibilitychange", onHidden);
   window.addEventListener("pagehide", onPageHide);
 
   // Entry: connected (or just returned from the redirect) → boot straight away; configured but
@@ -224,6 +238,7 @@ export function mountLibreWallet(target: HTMLElement | string, opts: MountOption
     },
     async dispose() {
       window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onHidden);
       if (balanceTimer !== undefined) clearInterval(balanceTimer);
       await embed.session.dispose();
       element.remove();

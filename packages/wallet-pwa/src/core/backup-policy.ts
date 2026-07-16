@@ -16,20 +16,11 @@ export function shouldAutoDownload(opts: {
   return opts.toggleOn && !opts.driveConfigured && !opts.mobile;
 }
 
-// Whether a controller event should (re)schedule the debounced Google Drive backup. This is what
-// keeps backups — and therefore restores — hands-off: EVERY app path that dials a peer emits a
-// "state-changed" (controller.connectPeer + the restore/auto-start peer dial), so a newly-learned
-// peer address is pushed to Drive within the debounce, no manual "Back up now". The backup only
-// runs while the node is up (exportState needs it) and Drive has a live token; demo never touches
-// Drive. Pure so the hands-off guarantee is unit-tested, not just implied by the wiring.
-export function shouldDriveAutoSync(opts: {
-  event: string;
-  demo: boolean;
-  running: boolean;
-  driveConnected: boolean;
-}): boolean {
-  return opts.event === "state-changed" && !opts.demo && opts.running && opts.driveConnected;
-}
+// The Drive auto-sync predicate now lives in @libre/wallet-core, shared with the embeddable widget:
+// how far Drive lags local state is fund-safety, not a per-app preference, and the embed shipping
+// WITHOUT this policy is what let issue #90's stale backup exist. Re-exported here so this module
+// stays the one place the app asks "which backup channel runs?".
+export { shouldDriveAutoSync, DRIVE_SYNC_DEBOUNCE_MS } from "@libre/wallet-core";
 
 // A transient IndexedDB failure seen when the debounced auto-backup's export STRADDLES a node restart
 // (an iOS OAuth-redirect return, a forced-restore, an auto-start): the storage layer is being reopened

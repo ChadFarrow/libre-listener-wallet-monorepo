@@ -31,6 +31,13 @@ class FakeStore implements LeaseStore {
     this.record = { ...r };
     this.writes.push({ ...r });
   }
+  syncIssuable = true;
+  writeSyncKeepalive(r: RoamingLeaseRecord): boolean {
+    if (!this.syncIssuable) return false;
+    this.record = { ...r };
+    this.writes.push({ ...r });
+    return true;
+  }
 }
 
 const NOW = 1_700_000_000_000;
@@ -190,14 +197,66 @@ describe("RoamingLease handoff + release", () => {
     const store = new FakeStore();
     const lease = makeLease(store);
     await lease.acquire();
-    await lease.release();
+    await lease.release({ localStateVersion: 7, flushedVersion: 7 });
     expect(store.record?.phase).toBe("released");
     expect(store.record?.expiresAt).toBe(NOW);
 
     const store2 = new FakeStore();
     store2.record = foreignLive();
-    await makeLease(store2).release();
+    await makeLease(store2).release({ localStateVersion: 7, flushedVersion: 7 });
     expect(store2.record?.phase).toBe("live"); // untouched
+  });
+
+  // "released" is now the strongest proof a successor has. Claiming it while our last flush is
+  // behind our local state is a LIE that hands the next origin a stale backup to restore.
+  it("release refuses to claim `released` when the backup is behind our local state", async () => {
+    const store = new FakeStore();
+    const lease = makeLease(store);
+    await lease.acquire();
+    await lease.release({ localStateVersion: 51, flushedVersion: 42 }); // flush didn't land
+    expect(store.record?.phase).toBe("live"); // honest: we have unflushed state
+    expect(store.record?.heartbeatStateVersion).toBe(51); // and we say how far we really got
+  });
+});
+
+describe("RoamingLease.releaseSyncKeepalive (the pagehide path)", () => {
+  it("marks released ONLY when the backup provably holds everything we have", async () => {
+    const store = new FakeStore();
+    const lease = makeLease(store);
+    await lease.acquire();
+    expect(lease.releaseSyncKeepalive({ localStateVersion: 51, flushedVersion: 51 })).toBe(true);
+    expect(store.record?.phase).toBe("released");
+    expect(store.record?.expiresAt).toBe(NOW); // never extend a lease we're abandoning
+  });
+
+  it("stays live at our TRUE final version when a flush is still pending", async () => {
+    // The successor then has honest evidence of the gap instead of a stale backup to restore.
+    const store = new FakeStore();
+    const lease = makeLease(store);
+    await lease.acquire();
+    expect(lease.releaseSyncKeepalive({ localStateVersion: 51, flushedVersion: 42 })).toBe(true);
+    expect(store.record?.phase).toBe("live");
+    expect(store.record?.heartbeatStateVersion).toBe(51);
+  });
+
+  it("reports false when nothing could be issued — never a silent success", async () => {
+    const store = new FakeStore();
+    const lease = makeLease(store);
+    // Never wrote a record this page-life → no cached id to PATCH.
+    expect(lease.releaseSyncKeepalive({ localStateVersion: 1, flushedVersion: 1 })).toBe(false);
+    await lease.acquire();
+    store.syncIssuable = false; // e.g. token gone
+    expect(lease.releaseSyncKeepalive({ localStateVersion: 1, flushedVersion: 1 })).toBe(false);
+  });
+
+  it("carries the unproven predecessor through the final write", async () => {
+    // Dying mid-takeover must not launder away who we took the wallet from.
+    const store = new FakeStore();
+    store.record = foreignLive({ owner: "tok-a", origin: "https://a.example", heartbeatStateVersion: 20 });
+    const lease = makeLease(store, { getStateVersion: () => 0 });
+    await lease.acquire({ takeover: true });
+    lease.releaseSyncKeepalive({ localStateVersion: 0, flushedVersion: 0 });
+    expect(store.record?.unprovenPredecessor?.advertisedVersion).toBe(20);
   });
 });
 

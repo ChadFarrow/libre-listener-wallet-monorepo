@@ -24,10 +24,12 @@ import { localStorageKV } from "./kv-localstorage";
 import { createWeblnProvider, installWebln, type LibreWeblnProvider } from "./provider";
 import { controllerRpc } from "./rpc-adapter";
 import { createEmbedSession } from "./session-wiring";
+import { makeTransactionFeed, toTxViews, type TxView } from "./transactions";
 
 export { registerLibreWallet, ELEMENT_TAG } from "./element";
 export { createWeblnProvider, installWebln } from "./provider";
 export type { LibreWeblnProvider, ApprovalRequest, ApprovalDecision } from "./provider";
+export type { TxView } from "./transactions";
 export type { RoamingViewState } from "@libre/wallet-core";
 
 const DEFAULT_WALLET_APP_URL = "https://libre-wallet-pwa.pages.dev";
@@ -60,6 +62,18 @@ export interface MountHandle {
   /** Current roaming view (running / blocked / …) — the host can reflect connection state. */
   state(): RoamingViewState;
   onState(cb: (s: RoamingViewState) => void): () => void;
+  /**
+   * The wallet's unified payment log (every app paying through this wallet shares it), newest-first,
+   * as display views (no preimage). Read-only, moves no funds. Works even with the node stopped
+   * (reads persisted history), and reflects whatever roamed in from the Drive backup. Render it
+   * however the host wants — the embed draws no history UI itself.
+   */
+  getTransactions(): Promise<TxView[]>;
+  /**
+   * Fire `cb` whenever a payment newly SETTLES (not for pre-existing history — read that with
+   * getTransactions), so a host feed updates live without polling. Returns an unsubscribe fn.
+   */
+  onTransaction(cb: (tx: TxView) => void): () => void;
   dispose(): Promise<void>;
 }
 
@@ -91,6 +105,8 @@ export function mountLibreWallet(target: HTMLElement | string, opts: MountOption
   host.appendChild(element);
 
   const stateListeners = new Set<(s: RoamingViewState) => void>();
+  const txListeners = new Set<(tx: TxView) => void>();
+  const txFeed = makeTransactionFeed();
   let balanceTimer: ReturnType<typeof setInterval> | undefined;
 
   const refreshBalance = async () => {
@@ -99,6 +115,27 @@ export function mountLibreWallet(target: HTMLElement | string, opts: MountOption
       if (s.running && s.balance) element.setBalance(`${s.balance.spendableSat.toLocaleString()} sats`);
     } catch {
       /* balance readout is cosmetic */
+    }
+  };
+
+  // On every controller event (settlements persist state → an event fires), diff the log and hand
+  // any newly-settled payment to host subscribers. The feed baselines existing history on its first
+  // run, so pre-existing records never re-fire. Runs regardless of listener count so `seen` stays
+  // current and a late subscriber isn't flooded with backlog (it reads that via getTransactions).
+  const dispatchNewTransactions = async () => {
+    try {
+      const fresh = txFeed.ingest(await embed.controller.getPayments());
+      for (const tx of fresh) {
+        for (const cb of txListeners) {
+          try {
+            cb(tx);
+          } catch {
+            /* a throwing host subscriber must never break the others or a payment path */
+          }
+        }
+      }
+    } catch {
+      /* history is non-critical */
     }
   };
 
@@ -117,7 +154,10 @@ export function mountLibreWallet(target: HTMLElement | string, opts: MountOption
         balanceTimer = undefined;
       }
     },
-    onControllerEvent: () => void refreshBalance(),
+    onControllerEvent: () => {
+      void refreshBalance();
+      void dispatchNewTransactions();
+    },
   });
 
   const provider = createWeblnProvider({
@@ -235,6 +275,11 @@ export function mountLibreWallet(target: HTMLElement | string, opts: MountOption
     onState: (cb) => {
       stateListeners.add(cb);
       return () => stateListeners.delete(cb);
+    },
+    getTransactions: async () => toTxViews(await embed.controller.getPayments()),
+    onTransaction: (cb) => {
+      txListeners.add(cb);
+      return () => txListeners.delete(cb);
     },
     async dispose() {
       window.removeEventListener("pagehide", onPageHide);

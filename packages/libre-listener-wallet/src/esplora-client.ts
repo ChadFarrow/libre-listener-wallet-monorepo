@@ -221,6 +221,16 @@ export class EsploraSyncClient implements FilterInterface {
       case ConfirmationTarget.LDKConfirmationTarget_OutputSpendingFee:
         blockTarget = 6;
         break;
+      // The lowest feerate we tolerate from a channel counterparty. These must be
+      // LENIENT (a background/economy rate, clamped to the relay floor) — LDK
+      // validates a peer's proposed commitment feerate against these when it opens
+      // a channel to us, so pinning them to the 6-block market rate rejected honest
+      // opens ("Peer's feerate much too low") whenever the opener's estimate lagged
+      // ours by a hair. Use the 1008-block economy rate; the 253 floor below caps it.
+      case ConfirmationTarget.LDKConfirmationTarget_MinAllowedAnchorChannelRemoteFee:
+      case ConfirmationTarget.LDKConfirmationTarget_MinAllowedNonAnchorChannelRemoteFee:
+        blockTarget = 1008;
+        break;
       case ConfirmationTarget.LDKConfirmationTarget_ChannelCloseMinimum:
         blockTarget = 36;
         break;

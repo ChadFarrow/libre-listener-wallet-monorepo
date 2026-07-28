@@ -1120,6 +1120,24 @@ export class WalletController {
     return this.wallet!.getChannels();
   }
 
+  /**
+   * Force-close a channel (unilateral, irreversible). Recovery tool only — a cooperative
+   * close needs both sides online, so this exists for peers that are gone for good.
+   *
+   * Deliberately NOT reachable from a page: it is not a WebLN method, and lives behind
+   * Developer settings in the app. `expectedCounterparty` is the peer the caller displayed,
+   * so a stale row is refused rather than closing the wrong channel.
+   */
+  async forceCloseChannel(
+    channelId: string,
+    expectedCounterparty?: string,
+  ): Promise<{ ok: true; channelId: string; counterpartyNodeId: string } | { ok: false; error: string }> {
+    this.requireRunning();
+    const res = this.wallet!.forceCloseChannel(channelId, expectedCounterparty);
+    if (res.ok) this.emit("state-changed");
+    return res;
+  }
+
   // Buy inbound liquidity from a real mainnet LSP over the LSPS1 REST binding (Megalith / Olympus).
   async purchaseLSPS1Capacity(params: {
     amountSats: number;

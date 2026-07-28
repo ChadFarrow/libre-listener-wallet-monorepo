@@ -24,7 +24,7 @@ declare const self: any;
 // v8: the home "Starting your node…" boot loader (app JS/CSS/HTML only) — bump to deliver it to iOS.
 // v9: the Drive auto-backup restart-race guard + disabling the (non-functional on iOS) audio
 // keep-alive were app-JS only — bump to purge the stale bundle and deliver them to installed iOS PWAs.
-const SHELL_CACHE = "libre-shell-v9";
+const SHELL_CACHE = "libre-shell-v10";
 // Stable-named shell entries (relative to the SW scope, matching Vite's base:"./"). Hashed
 // main.js/style.css and the large WASM are cached lazily on first fetch instead of precached.
 const SHELL_PRECACHE = ["./", "./index.html", "./manifest.webmanifest"];

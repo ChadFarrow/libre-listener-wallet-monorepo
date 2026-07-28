@@ -503,6 +503,20 @@
             <button class="btn-ghost" id="diag-clear">Clear diagnostics</button>
             <p class="msg" id="diag-msg"></p>
           </details>
+          <details class="adv">
+            <summary>Force-close a channel (recovery)</summary>
+            <p class="center-note"><b>This cannot be undone.</b> Force-closing broadcasts this wallet's latest commitment and ends the channel. Use it only when the peer is gone for good — a normal close needs both sides online to sign. Your balance returns on-chain only after the channel's delay (usually about a day), and it needs a <b>recovery address</b> set, or there is nowhere to sweep it to.</p>
+            <div class="field-label">Channel</div>
+            <select class="field" id="fc-channel"></select>
+            <div class="gap-10"></div>
+            <button class="btn-ghost" id="fc-refresh">Refresh list</button>
+            <div class="gap-10"></div>
+            <div class="field-label">Type FORCE CLOSE to confirm</div>
+            <input class="field mono" id="fc-confirm" placeholder="FORCE CLOSE" autocapitalize="characters" />
+            <div class="gap-10"></div>
+            <button class="btn-ghost" id="fc-go">Force-close this channel</button>
+            <p class="msg" id="fc-msg"></p>
+          </details>
         </div>
       </section>
 

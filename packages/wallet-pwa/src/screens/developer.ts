@@ -183,9 +183,79 @@ export function initDeveloperScreen(ctx: AppContext): void {
     })();
   });
 
+  // ---- Force-close (recovery) ----
+  // Unilateral and irreversible, so it lives here rather than on the Channels screen. The
+  // typed confirmation is deliberate friction: a mis-tap must not be able to end a channel.
+  const FORCE_CLOSE_PHRASE = "FORCE CLOSE";
+
+  async function refreshForceCloseList(): Promise<void> {
+    const sel = $<HTMLSelectElement>("fc-channel");
+    sel.replaceChildren();
+    try {
+      const channels = await controller.getChannels();
+      if (channels.length === 0) {
+        sel.append(new Option("No channels", ""));
+        return;
+      }
+      for (const c of channels) {
+        const peer = `${c.counterpartyNodeId.slice(0, 10)}…${c.counterpartyNodeId.slice(-6)}`;
+        const state = c.isUsable ? "active" : c.isChannelReady ? "peer offline" : "pending";
+        const label = `${c.capacitySat.toLocaleString()} sats · ${peer} · ${state}`;
+        const opt = new Option(label, c.channelId);
+        // Carry the peer we DISPLAYED, so the SDK can refuse a stale row rather than
+        // close whatever now sits at this index.
+        opt.dataset.peer = c.counterpartyNodeId;
+        sel.append(opt);
+      }
+    } catch (e) {
+      sel.append(new Option("Start the node to list channels", ""));
+      setMsg("fc-msg", (e as Error).message, "err");
+    }
+  }
+
+  $("fc-refresh").addEventListener("click", () => {
+    void (async () => {
+      await refreshForceCloseList();
+      setMsg("fc-msg", "");
+    })();
+  });
+
+  $("fc-go").addEventListener("click", () => {
+    void (async () => {
+      const sel = $<HTMLSelectElement>("fc-channel");
+      const opt = sel.selectedOptions[0];
+      const channelId = sel.value;
+      if (!channelId) {
+        setMsg("fc-msg", "Pick a channel first.", "err");
+        return;
+      }
+      const typed = $<HTMLInputElement>("fc-confirm").value.trim().toUpperCase();
+      if (typed !== FORCE_CLOSE_PHRASE) {
+        setMsg("fc-msg", `Type ${FORCE_CLOSE_PHRASE} to confirm.`, "err");
+        return;
+      }
+      setMsg("fc-msg", "Force-closing…");
+      const res = await controller.forceCloseChannel(channelId, opt?.dataset.peer);
+      if (!res.ok) {
+        setMsg("fc-msg", res.error, "err");
+        return;
+      }
+      $<HTMLInputElement>("fc-confirm").value = "";
+      await refreshForceCloseList();
+      setMsg(
+        "fc-msg",
+        "Closing. The commitment is broadcast; funds return on-chain after the channel delay, then sweep to your recovery address.",
+        "ok",
+      );
+    })();
+  });
+
   registerScreen("screen-dev", {
     onShow: () => {
       void load();
+      void refreshForceCloseList();
+      $<HTMLInputElement>("fc-confirm").value = "";
+      setMsg("fc-msg", "");
       $<HTMLInputElement>("keepalive-toggle").checked = keepAliveEnabled();
       // If keep-alive is enabled + running but iOS hasn't let the audio start (no tap yet), tell
       // the user a single tap activates it — otherwise "enabled" reads as "working" when it isn't.

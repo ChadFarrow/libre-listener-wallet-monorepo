@@ -103,7 +103,13 @@ import {
   Result_RecipientOnionFieldsNoneZ_OK,
   Bolt11Invoice,
   Result_C3Tuple_ThirtyTwoBytesRecipientOnionFieldsRouteParametersZNoneZ_OK,
+  Result_NoneAPIErrorZ_Err,
+  APIError_APIMisuseError,
+  APIError_ChannelUnavailable,
+  APIError_FeeRateTooHigh,
+  APIError_MonitorUpdateInProgress,
 } from "lightningdevkit";
+import { resolveForceCloseTarget } from "./force-close";
 import { StorageCache, bytesToHex, hexToBytes, parseSeedHex } from "./storage-cache";
 import { NodeAnnouncer } from "./node-announcer";
 import { peersNeedingAnnouncement } from "./node-announcement";
@@ -294,6 +300,21 @@ export function sumBalance(channels: ChannelInfo[]): { spendableSat: number; rec
     spendableSat: usable.reduce((s, c) => s + c.outboundSendableSat, 0),
     receivableSat: usable.reduce((s, c) => s + c.inboundSat, 0),
   };
+}
+
+// Render an LDK Result_NoneAPIErrorZ failure into something a human can act on. Variants are
+// matched with `instanceof` (class references survive minification; `constructor.name` does not
+// — see the minify-safe event-dispatch rule).
+function describeApiError(res: { is_ok(): boolean }): string {
+  if (!(res instanceof Result_NoneAPIErrorZ_Err)) return "unknown LDK error";
+  const e = res.err;
+  if (e instanceof APIError_APIMisuseError) return `APIMisuseError: ${e.err}`;
+  if (e instanceof APIError_ChannelUnavailable) return `ChannelUnavailable: ${e.err}`;
+  if (e instanceof APIError_FeeRateTooHigh) return `FeeRateTooHigh: ${e.err} (${e.feerate})`;
+  if (e instanceof APIError_MonitorUpdateInProgress) {
+    return "MonitorUpdateInProgress — a persist is in flight, retry in a moment";
+  }
+  return "unrecognised APIError";
 }
 
 // The `minimum_depth` we set as a channel fundee: confirmations to wait before an inbound
@@ -1792,6 +1813,59 @@ export class LibreListenerWallet {
     return this.channelManager.list_channels().map(mapChannelDetails);
   }
 
+  /**
+   * Force-close a channel, broadcasting our latest commitment transaction.
+   *
+   * This is a UNILATERAL close and it cannot be undone. Use it only when a cooperative
+   * close is impossible — a cooperative close needs BOTH sides online to sign, so a peer
+   * that is gone for good (its node uninstalled, say) leaves this as the only way to get
+   * the funds back on-chain. Our balance is spendable only after the channel's
+   * `to_self_delay` (CSV) elapses; the counterparty's side is spendable by them at once.
+   *
+   * `expectedCounterparty` is the peer the caller believes it is closing against — pass
+   * what the UI displayed, so a stale row fails here instead of closing a channel the
+   * user wasn't looking at. Every check that can be made from live state is made before
+   * the channel manager is touched.
+   *
+   * Recovery of the resulting on-chain output still depends on `setSweepDestination`
+   * being set, exactly as for a counterparty-initiated close.
+   */
+  forceCloseChannel(
+    channelId: string,
+    expectedCounterparty?: string,
+    reason = "manual force close",
+  ): { ok: true; channelId: string; counterpartyNodeId: string } | { ok: false; error: string } {
+    if (!this.isRunning || !this.channelManager) {
+      return { ok: false, error: "wallet is not running" };
+    }
+
+    const target = resolveForceCloseTarget(this.getChannels(), channelId, expectedCounterparty);
+    if (!target.ok) {
+      this.logger?.warn(`[ForceClose] refused: ${target.error}`);
+      return target;
+    }
+
+    this.logger?.warn(
+      `[ForceClose] broadcasting latest commitment for ${target.channelId} (peer ${target.counterpartyNodeId}): ${reason}`,
+    );
+
+    const res = this.channelManager.force_close_broadcasting_latest_txn(
+      ChannelId.constructor_new(hexToBytes(target.channelId)),
+      hexToBytes(target.counterpartyNodeId),
+      reason,
+    );
+
+    if (!res.is_ok()) {
+      const error = describeApiError(res);
+      this.logger?.error(`[ForceClose] LDK rejected close of ${target.channelId}: ${error}`);
+      return { ok: false, error };
+    }
+
+    // The close itself is now committed; the on-chain sweep is driven by Event_SpendableOutputs.
+    this.notifyStateChanged();
+    return { ok: true, channelId: target.channelId, counterpartyNodeId: target.counterpartyNodeId };
+  }
+
   // Forward-only payment history, newest first. Backs the app's transaction-history UI
   // and NWC `list_transactions`. Lazily loads from storage if start() hasn't run yet.
   async getPayments(): Promise<PaymentRecord[]> {
@@ -2729,6 +2803,8 @@ export class LibreListenerWallet {
 }
 
 export { StorageCache, bytesToHex, hexToBytes } from "./storage-cache";
+export { resolveForceCloseTarget } from "./force-close";
+export type { ForceCloseCandidate, ForceCloseResolution } from "./force-close";
 export { EsploraSyncClient } from "./esplora-client";
 export type { WalletConfig, PaymentRecord } from "@libre/shared";
 export { PaymentLogger, boostNoteFromCustomRecords, TX_KEY_PREFIX } from "./payment-log";
